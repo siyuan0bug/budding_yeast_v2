@@ -36,12 +36,11 @@ def load_model_from_checkpoint(ckpt_path, device='cpu'):
     model.eval()
     return model, hp
 
-# 🌟 修改点 1：参数末尾增加 t_max，默认给 210 以防万一
+# 🌟 保持画图逻辑不变（遵照你不修改刻度的要求）
 def plot_variable_grid(pred, target, var_indices, title, save_path, rows, cols, t_max=210):
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
     axes = axes.flatten()
     
-    # 🌟 修改点 2：将 210 替换为 t_max 变量
     t = np.linspace(0, t_max, pred.shape[-1])
     
     for i, var_idx in enumerate(var_indices):
@@ -50,7 +49,6 @@ def plot_variable_grid(pred, target, var_indices, title, save_path, rows, cols, 
         ax.plot(t, pred[var_idx], 'r--', label='Pred', linewidth=1.5)
         ax.set_xlabel('Time (min)')
         ax.set_ylabel('Concentration')
-        # 🌟 修改点：替换原来的 ax.set_title
         var_name = VARIABLE_NAMES[var_idx] if var_idx < len(VARIABLE_NAMES) else f"Var {var_idx}"
         ax.set_title(f'{var_idx}: {var_name}', fontweight='bold', fontsize=10)
         ax.grid(True, alpha=0.3)
@@ -70,7 +68,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--save_dir', type=str, default='./eval_result')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--seed', type=int, default=42) # 🌟 新增：接收从 shell 传过来的 seed
+    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -85,15 +83,14 @@ def main():
     mean_y, std_y = dm.mean_y.to(args.device), dm.std_y.to(args.device)
 
     all_preds_denorm, all_targets_denorm = [], []
-    other_indices = [i for i in range(39) if i not in CORE_9_INDICES]
 
     with torch.no_grad():
         for local_idx, batch in enumerate(dm.test_dataset_real):
             global_idx = dm._test_idx_real[local_idx]
             m_name = dm._mutant_names[global_idx]
             p_label = dm.pattern_labels[global_idx]
-            m_dir = os.path.join(args.save_dir, m_name)
-            os.makedirs(m_dir, exist_ok=True)
+            
+            # 🌟 删除了创建子文件夹 m_dir 的代码
 
             x, p, y = [b.unsqueeze(0).to(args.device) for b in batch]
             pred_denorm = (model.forward_ic_time(x, p) * std_y + mean_y).cpu()
@@ -103,31 +100,20 @@ def main():
             all_targets_denorm.append(target_denorm)
 
             metrics = calculate_metrics(pred_denorm, target_denorm)
-            with open(os.path.join(m_dir, 'mutant_metrics.json'), 'w') as f:
-                json.dump({"all_39_vars": metrics, "core_9_vars": calculate_metrics(pred_denorm[:, CORE_9_INDICES, :], target_denorm[:, CORE_9_INDICES, :])}, f, indent=2)
+            # 🌟 删除了生成独立 mutant_metrics.json 的代码
 
-            # 🌟 统一构建包含 Seed 和全量指标的规范基础标题
             m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
             title_base = f"[{p_label}] {m_name} (Seed: {args.seed})\n{m_str}"
             
             p_np, t_np = pred_denorm[0].numpy(), target_denorm[0].numpy()
 
-            # 依次生成要求的 4 张高清图表
-            # 🌟 修改点 3：在每个函数调用最后加上 t_max=dm.t_max
-            plot_variable_grid(p_np, t_np, CORE_9_INDICES, f"{title_base}\nCore 9 Variables", 
-                               os.path.join(m_dir, 'plot_core_9_vars.png'), 3, 3, t_max=dm.t_max)
-                               
-            plot_variable_grid(p_np, t_np, other_indices[:15], f"{title_base}\nOther Vars (1/2)", 
-                               os.path.join(m_dir, 'plot_other_15_vars_part1.png'), 3, 5, t_max=dm.t_max)
-                               
-            if len(other_indices[15:]) > 0:
-                plot_variable_grid(p_np, t_np, other_indices[15:], f"{title_base}\nOther Vars (2/2)", 
-                                   os.path.join(m_dir, 'plot_other_15_vars_part2.png'), 3, 5, t_max=dm.t_max)
-            
-            # 全景物理量纲大图
+            # 🌟 删除了局部变量网格图，只保留 39 变量全景图
+            # 🌟 直接保存在 args.save_dir 下，文件名为突变体的真实名字
+            save_plot_path = os.path.join(args.save_dir, f"{m_name}.png")
             plot_variable_grid(p_np, t_np, range(39), f"{title_base}\nAll 39 Variables", 
-                               os.path.join(m_dir, 'plot_all_39_vars.png'), 5, 8, t_max=dm.t_max)
+                               save_plot_path, 5, 8, t_max=dm.t_max)
 
+    # 🌟 依然在主目录生成唯一的 global_metrics_denorm.json
     all_preds = torch.cat(all_preds_denorm, dim=0)
     all_targets = torch.cat(all_targets_denorm, dim=0)
     with open(os.path.join(args.save_dir, 'global_metrics_denorm.json'), 'w') as f:
