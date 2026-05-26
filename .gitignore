@@ -1,0 +1,19 @@
+# --- 忽略所有大型数据集 ---
+*.npz
+*.npy
+*.csv
+
+# --- 忽略生成的图表文件夹和图片 ---
+*_plots/
+*.png
+
+# --- 忽略可能存在的其他目录（比如你提到的 otherdata） ---
+# 如果你不想管理 otherdata 目录下的内容，就取消下面这行的注释
+otherdata/
+*result/
+swanlog/
+wandb/
+
+# --- 忽略 Python 缓存 ---
+__pycache__/
+*.pyc
