@@ -77,7 +77,12 @@ class DilatedSobolevLoss(nn.Module):
         B, V, T_minus_1 = is_jump_exact.shape
         is_jump_flat = is_jump_exact.reshape(B * V, 1, T_minus_1)
         padding = self.dilation_window // 2
-        is_jump_dilated = F.conv1d(is_jump_flat, self.kernel, padding=padding)
+
+        # 🌟 关键修改：强制将 kernel 转移到输入所在的设备
+        device = pred_norm.device
+        kernel = self.kernel.to(device)
+
+        is_jump_dilated = F.conv1d(is_jump_flat, kernel, padding=padding)
         is_jump_dilated = (is_jump_dilated > 0).float().reshape(B, V, T_minus_1)
 
         is_smooth = 1.0 - is_jump_dilated
