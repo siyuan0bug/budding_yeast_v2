@@ -13,6 +13,7 @@ otherdata/
 *result/
 swanlog/
 wandb/
+eval_result_old/
 
 # --- 忽略 Python 缓存 ---
 __pycache__/

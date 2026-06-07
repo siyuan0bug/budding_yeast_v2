@@ -1,6 +1,7 @@
 import os
 import argparse
 import json
+import csv
 import torch
 import numpy as np
 import matplotlib
@@ -83,6 +84,7 @@ def main():
     mean_y, std_y = dm.mean_y.to(args.device), dm.std_y.to(args.device)
 
     all_preds_denorm, all_targets_denorm = [], []
+    csv_rows = []
 
     with torch.no_grad():
         for local_idx, batch in enumerate(dm.test_dataset_real):
@@ -100,7 +102,15 @@ def main():
             all_targets_denorm.append(target_denorm)
 
             metrics = calculate_metrics(pred_denorm, target_denorm)
-            # 🌟 删除了生成独立 mutant_metrics.json 的代码
+            # 🌟 新增：收集每个 mutant 的指标到 CSV 行
+            csv_rows.append({
+                'Mutant': m_name,
+                'Pattern': p_label,
+                'MAE': metrics['MAE'],
+                'MSE': metrics['MSE'],
+                'Relative_L2': metrics['Relative L2'],
+                'Correlation': metrics['Correlation']
+            })
 
             m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
             title_base = f"[{p_label}] {m_name} (Seed: {args.seed})\n{m_str}"
@@ -118,6 +128,16 @@ def main():
     all_targets = torch.cat(all_targets_denorm, dim=0)
     with open(os.path.join(args.save_dir, 'global_metrics_denorm.json'), 'w') as f:
         json.dump({"all_39_vars": calculate_metrics(all_preds, all_targets), "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :])}, f, indent=2)
+
+    # 🌟 新增：输出每个 mutant 的评估指标 CSV 表格
+    csv_path = os.path.join(args.save_dir, 'per_mutant_metrics.csv')
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        fieldnames = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in csv_rows:
+            writer.writerow(row)
+    print(f"📝 Per-mutant metrics CSV saved to: {csv_path}")
 
 if __name__ == '__main__':
     main()
