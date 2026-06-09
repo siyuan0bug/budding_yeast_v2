@@ -81,21 +81,90 @@ class YeastDataModule(pl.LightningDataModule):
             real_indices = lhs_indices[-10:]
             lhs_indices = lhs_indices[:-10]
 
+        # ======== 两级分层划分：先按突变体家族，再按 Pattern ========
         np.random.seed(self.seed)
-        lhs_shuffled = lhs_indices.copy()
-        np.random.shuffle(lhs_shuffled)
-        n_lhs = len(lhs_shuffled)
-        n_train_lhs = int(n_lhs * 0.9)
-        train_idx_lhs = lhs_shuffled[:n_train_lhs]
-        val_idx_lhs = lhs_shuffled[n_train_lhs:]
+
+        # 第一级：按突变体家族分组
+        family_groups = {}
+        for idx in lhs_indices:
+            name = str(mutant_names[idx])
+            family = name.split('_LHS_')[0] if '_LHS_' in name else name
+            family_groups.setdefault(family, []).append(idx)
+
+        train_idx_lhs = []
+        val_idx_lhs = []
+
+        for family, family_indices in family_groups.items():
+            # 第二级：在该家族内按 Pattern 分组
+            pattern_subgroups = {}
+            for idx in family_indices:
+                pattern = str(pattern_labels[idx]).split(':')[0]  # "Pattern_A", "Pattern_B", "Pattern_C"
+                pattern_subgroups.setdefault(pattern, []).append(idx)
+
+            n_family = len(family_indices)
+            n_val_target = max(1, int(n_family * 0.1))  # 该家族应分给验证集的样本数
+
+            # 每个 Pattern 子组内部先洗牌
+            for pat, pat_indices in pattern_subgroups.items():
+                np.random.shuffle(pat_indices)
+
+            # 按各 Pattern 子组的样本量比例分配验证集名额
+            val_from_family = []
+            train_from_family = []
+
+            # 按 Pattern 子组大小降序排列，优先保证大组的划分精度
+            sorted_patterns = sorted(pattern_subgroups.items(), key=lambda x: len(x[1]), reverse=True)
+
+            # 计算每个 Pattern 子组应分给验证集的数量（按比例）
+            val_quota_per_pattern = {}
+            remaining_val_quota = n_val_target
+            remaining_total = n_family
+
+            for pat, pat_indices in sorted_patterns:
+                n_pat = len(pat_indices)
+                # 按该子组在家族中的占比分配验证名额
+                quota = round(n_pat / remaining_total * remaining_val_quota) if remaining_total > 0 else 0
+                # 边界保护：子组只有1个样本时不强制抽验证集（除非整个家族只有1个样本）
+                if n_pat == 1 and n_family > 1:
+                    quota = 0
+                quota = min(quota, n_pat, remaining_val_quota)
+                val_quota_per_pattern[pat] = quota
+                remaining_val_quota -= quota
+                remaining_total -= n_pat
+
+            # 若因取整导致还有剩余名额，从最大的子组中补齐
+            if remaining_val_quota > 0:
+                for pat, pat_indices in sorted_patterns:
+                    if remaining_val_quota <= 0:
+                        break
+                    available = len(pat_indices) - val_quota_per_pattern[pat]
+                    extra = min(available, remaining_val_quota)
+                    val_quota_per_pattern[pat] += extra
+                    remaining_val_quota -= extra
+
+            # 执行划分
+            for pat, pat_indices in sorted_patterns:
+                n_val = val_quota_per_pattern.get(pat, 0)
+                val_from_family.extend(pat_indices[:n_val])
+                train_from_family.extend(pat_indices[n_val:])
+
+            train_idx_lhs.extend(train_from_family)
+            val_idx_lhs.extend(val_from_family)
+
+        np.random.shuffle(train_idx_lhs)
+        np.random.shuffle(val_idx_lhs)
+
+        n_families = len(family_groups)
+        print(f"📊 [两级分层划分] 家族数: {n_families} | 训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)}")
 
         test_idx_real = real_indices
 
-        self.mean_y = Y[train_idx_lhs].mean(dim=(0, 2), keepdim=True)
-        self.std_y = Y[train_idx_lhs].std(dim=(0, 2), keepdim=True) + 1e-6
+        # 归一化统计量使用全部 LHS 数据，避免稀有 Pattern 缺席导致的偏差
+        self.mean_y = Y[lhs_indices].mean(dim=(0, 2), keepdim=True)
+        self.std_y = Y[lhs_indices].std(dim=(0, 2), keepdim=True) + 1e-6
 
-        self.p_mean = Params[train_idx_lhs].mean(dim=0, keepdim=True)
-        self.p_std = Params[train_idx_lhs].std(dim=0, keepdim=True) + 1e-6
+        self.p_mean = Params[lhs_indices].mean(dim=0, keepdim=True)
+        self.p_std = Params[lhs_indices].std(dim=0, keepdim=True) + 1e-6
 
         Y_norm = (Y - self.mean_y) / self.std_y
         Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
