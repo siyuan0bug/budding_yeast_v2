@@ -1,8 +1,9 @@
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from torch.optim.lr_scheduler import LambdaLR
 
-from torch.optim.lr_scheduler import CosineAnnealingLR
+import math
 
 from .components.pure_fno import PureFNO_ICLR2021
 from .components.cross_fno import NIPSYeastFNO
@@ -44,6 +45,7 @@ class YeastLitModule(pl.LightningModule):
         lr=2e-4,
         weight_decay=5e-2,
         max_epochs=120,
+        warmup_epochs=10,
         wavelet='haar',
         d_lambda=32,
         ode_method='dopri5',
@@ -136,7 +138,21 @@ class YeastLitModule(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = CosineAnnealingLR(optimizer, T_max=self.max_epochs, eta_min=1e-5)
+
+        warmup_epochs = self.hparams.get('warmup_epochs', 10)
+        max_epochs = self.max_epochs
+        eta_min = 1e-6
+
+        def lr_lambda(epoch):
+            if epoch < warmup_epochs:
+                # 线性 warmup: 0 → 1
+                return epoch / max(warmup_epochs, 1)
+            # Cosine annealing: 1 → eta_min/lr
+            progress = (epoch - warmup_epochs) / max(max_epochs - warmup_epochs, 1)
+            return eta_min / self.lr + 0.5 * (1.0 - eta_min / self.lr) * (1.0 + math.cos(math.pi * progress))
+
+        scheduler = LambdaLR(optimizer, lr_lambda)
+
         return {
             'optimizer': optimizer,
             'lr_scheduler': {

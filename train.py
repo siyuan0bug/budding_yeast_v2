@@ -113,6 +113,7 @@ def main():
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
+    parser.add_argument('--warmup_epochs', type=int, default=10, help='Cosine+Warmup 的线性预热 epoch 数')
     parser.add_argument('--seed', type=int, default=42)
     
     # Ode 参数
@@ -133,6 +134,7 @@ def main():
                           choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; rgs=Real-Guided局部密集采样)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
+    parser.add_argument('--al_num_add', type=int, default=5000, help="每轮 AL 新增样本数")
     parser.add_argument('--al_perturbation', type=float, default=0.1, help="RGS专用: 连续参数局部扰动幅度 (0.1=±10%%)")
     parser.add_argument('--al_mae_threshold', type=float, default=0.1, help="RGS专用: MAE大于此阈值的Real Mutant优先密集采样")
 
@@ -152,6 +154,8 @@ def main():
         loss_type=args.loss_type,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        max_epochs=args.max_epochs,
+        warmup_epochs=args.warmup_epochs,
         d_lambda=args.d_lambda,
         ode_method=args.ode_method,
         ode_rtol=args.ode_rtol,
@@ -191,6 +195,7 @@ def main():
         al_cb = ActiveLearningCallback(
               trigger_every_n_epochs=args.al_trigger_epoch,
               strategy=args.al_strategy,
+              num_add=args.al_num_add,
               perturbation=args.al_perturbation,
               mae_threshold=args.al_mae_threshold,
           )
