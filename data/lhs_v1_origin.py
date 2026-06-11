@@ -594,6 +594,160 @@ def generate_lhs_tasks(num_lhs_samples):
     return lhs_tasks_dict
 
 # ==========================================
+# 4.5 【RGS专用】Real-Guided 局部密集采样引擎
+# ==========================================
+def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.1):
+    """
+    RGS (Real-Guided Sampling) 局部密集采样：
+    逻辑与 generate_lhs_tasks 完全一致（原汁原味），
+    唯一区别：连续参数的采样范围从 [0, max_val*1.5] 缩窄为
+    以该突变体自身突变参数值为中心的 center * (1 ± perturbation)。
+
+    只采样 mutant 发生突变的参数，未发生突变的参数不采样（继承原值）。
+
+    Args:
+        target_mutants: dict, {mutant_name: num_samples} 指定每个突变体要生成的样本数
+                       若为 None, 则对所有非 WT 突变体均匀采样
+        num_per_mutant: int, 当 target_mutants 为 None 时每个突变体的默认采样数
+        perturbation: float, 连续参数的相对扰动幅度 (0.1 = ±10%)
+    """
+    # ── 与 generate_lhs_tasks 完全一致的前置逻辑 ──
+    single_pools, cdh1_pairs, bub2_pairs = build_discrete_pools(mutant_rules)
+
+    defaults = get_default_params()
+    defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992,
+                     'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
+
+    pure_wt_mutants = ['1_WT_Glc', '2.1_WT_Gal', '2.2_WT_Raff']
+
+    # 确定采样目标
+    if target_mutants is not None:
+        sampling_plan = target_mutants  # {name: num_samples}
+    else:
+        sampling_plan = {name: num_per_mutant for name in mutant_rules
+                        if name not in pure_wt_mutants}
+
+    lhs_tasks_dict = {}
+
+    for m_name, n_samples in sampling_plan.items():
+        if m_name not in mutant_rules:
+            continue
+        if m_name in pure_wt_mutants:
+            continue
+
+        original_rules = mutant_rules[m_name]
+        mutated_params = list(original_rules.keys())
+        if not mutated_params:
+            continue
+
+        # ── 与 generate_lhs_tasks 完全一致的参数分类 ──
+        strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
+        continuous_mutated = [p for p in mutated_params if p not in DISCRETE_STRICT_PARAMS]
+        has_bub2 = any(p in ['BUB2_active', 'init_BUB2'] for p in strict_mutated)
+
+        # ── 与 generate_lhs_tasks 完全一致的智能截断逻辑 ──
+        if not continuous_mutated and not has_bub2:
+            max_comb = 1
+            if 'init_CDH1T' in strict_mutated or 'init_CDH1' in strict_mutated:
+                max_comb *= len(cdh1_pairs)
+            for p in strict_mutated:
+                if p not in ['init_CDH1T', 'init_CDH1', 'init_BUB2', 'BUB2_active'] and p in single_pools:
+                    max_comb *= len(single_pools[p])
+            actual_samples = min(n_samples, max(1, max_comb - 1))
+        else:
+            actual_samples = n_samples
+
+        if actual_samples <= 0:
+            continue
+
+        # 扩大候选池，补偿去重损失
+        candidate_count = actual_samples * 10
+
+        # ── ★ 唯一区别：连续参数的采样范围 ──
+        # generate_lhs_tasks: l_bound=0, u_bound=max_val*1.5 (全局范围)
+        # generate_local_lhs_tasks: l_bound=center*(1-perturbation), u_bound=center*(1+perturbation) (局部范围)
+        continuous_samples = {}
+        if continuous_mutated:
+            sampler = qmc.LatinHypercube(d=len(continuous_mutated),
+                                         seed=int(time.time() * 1000) % 2**32)
+            lhs_matrix = sampler.random(n=candidate_count)
+
+            for i, p_name in enumerate(continuous_mutated):
+                center_val = original_rules[p_name]
+                # 局部扰动：center * (1 ± perturbation)，下限不低于 0
+                l_bound = max(0.0, center_val * (1.0 - perturbation))
+                u_bound = center_val * (1.0 + perturbation)
+                if u_bound <= l_bound:
+                    u_bound = l_bound + 1e-6
+                continuous_samples[p_name] = l_bound + lhs_matrix[:, i] * (u_bound - l_bound)
+
+        # ── 与 generate_lhs_tasks 完全一致的 BUB2 缩放 ──
+        if has_bub2:
+            bub2_coeffs = qmc.LatinHypercube(d=1).random(n=candidate_count).flatten() * 1.5
+            np.random.shuffle(bub2_coeffs)
+
+        # ── 与 generate_lhs_tasks 完全一致的组装与去重逻辑 ──
+        valid_samples_collected = 0
+        seen_configs = set()
+
+        for k in range(candidate_count):
+            if valid_samples_collected >= actual_samples:
+                break
+
+            sample_dict = {}
+
+            # 1. 填装连续参数
+            for p_name in continuous_mutated:
+                sample_dict[p_name] = continuous_samples[p_name][k]
+
+            # 2. 填装严格离散与成对参数（与 generate_lhs_tasks 完全一致）
+            sampled_cdh1, sampled_bub2 = False, False
+            for dp in strict_mutated:
+                if dp in ['init_CDH1T', 'init_CDH1']:
+                    if not sampled_cdh1:
+                        pair = cdh1_pairs[np.random.choice(len(cdh1_pairs))]
+                        sample_dict['init_CDH1T'] = pair[0]
+                        sample_dict['init_CDH1'] = pair[1]
+                        sampled_cdh1 = True
+                elif dp in ['init_BUB2', 'BUB2_active']:
+                    if not sampled_bub2:
+                        pair = bub2_pairs[np.random.choice(len(bub2_pairs))]
+                        coeff = bub2_coeffs[k]
+                        sample_dict['init_BUB2'] = pair[0] * coeff
+                        sample_dict['BUB2_active'] = pair[1] * coeff
+                        sampled_bub2 = True
+                else:
+                    sample_dict[dp] = np.random.choice(single_pools[dp])
+
+            # 3. 未被突变的参数继承原值
+            for p, val in original_rules.items():
+                if p not in sample_dict:
+                    sample_dict[p] = val
+
+            # ── 与 generate_lhs_tasks 完全一致的等价碰撞拦截器 ──
+            is_identical = True
+            for p_name in mutated_params:
+                if not np.isclose(sample_dict[p_name], original_rules[p_name], rtol=1e-5, atol=1e-8):
+                    is_identical = False
+                    break
+            if is_identical:
+                continue
+
+            # 纯离散去重
+            if not continuous_mutated and not has_bub2:
+                config_tuple = tuple(sample_dict.get(p) for p in sorted(mutated_params))
+                if config_tuple in seen_configs:
+                    continue
+                seen_configs.add(config_tuple)
+
+            lhs_tasks_dict[f"{m_name}_RGS_{valid_samples_collected:03d}"] = sample_dict
+            valid_samples_collected += 1
+
+    print(f"📊 [RGS局部采样] 扰动幅度={perturbation*100:.0f}% | 目标突变体={len(sampling_plan)} | 生成样本={len(lhs_tasks_dict)}")
+    return lhs_tasks_dict
+
+
+# ==========================================
 # 5. 主程序：大一统数据整合与保存
 # ==========================================
 if __name__ == '__main__':

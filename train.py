@@ -25,83 +25,73 @@ VARIABLE_NAMES = [
 ]
 
 class SimToRealVisualizerCallback(Callback):
-    def __init__(self, plot_every_n_epochs=10, seed=42):
+    def __init__(self, plot_every_n_epochs=5, seed=42):
         super().__init__()
         self.plot_every_n_epochs = plot_every_n_epochs
         self.seed = seed
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        current_epoch = trainer.current_epoch
-        if current_epoch % self.plot_every_n_epochs != 0 and current_epoch != trainer.max_epochs - 1:
+        if (trainer.current_epoch + 1) % self.plot_every_n_epochs != 0:
             return
 
         dm = trainer.datamodule
-        fixed_samples = dm.fixed_samples_for_plot
-
-        if not fixed_samples:
+        if dm is None or dm.fixed_samples_for_plot is None:
             return
 
+        device = pl_module.device
         pl_module.eval()
-        fig, axes = plt.subplots(6, 4, figsize=(24, 24))
-        axes = axes.flatten()
-        plot_idx = 0
+
+        mean_y = dm.mean_y.to(device)
+        std_y = dm.std_y.to(device)
+        log_dict = {'epoch': trainer.current_epoch + 1}
 
         with torch.no_grad():
-            for key, (x, p, y, m_name, p_label) in fixed_samples.items():
-                x = x.to(pl_module.device)
-                p = p.to(pl_module.device)
-                y = y.to(pl_module.device)  # 🌟 加上这一行，把真实的 y 也送到显卡上
-                
-                mean_y = dm.mean_y.to(pl_module.device)
-                std_y = dm.std_y.to(pl_module.device)
+            for key, (x, p, y, name, pat_label) in dm.fixed_samples_for_plot.items():
+                x, p, y = x.to(device), p.to(device), y.to(device)
+                pred = pl_module.forward_ic_time(x, p)
 
-                pred_norm = pl_module.forward_ic_time(x, p)
-                
-                # 反归一化
-                pred = (pred_norm * std_y + mean_y).cpu()
-                target = (y * std_y + mean_y).cpu()
-                
-                # 指标计算使用原始张量 (1, 39, 500)
-                metrics = calculate_metrics(pred, target)
-                
-                # 绘图转换为 numpy，并提取第一个样本
-                p_np = pred[0].numpy()
-                t_np = target[0].numpy()
-                
-                t = np.linspace(0, 210, 500)
-                
-                m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4f} | RelL2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
-                title = f"{m_name} ({p_label}) [S:{self.seed}]\n{m_str}"
-                
-                ax = axes[plot_idx]
-                ax.set_title(title, fontsize=9, fontweight='bold')
-                
-                lines_truth, lines_pred = [], []
-                for i, v_idx in enumerate(CORE_9_INDICES):
-                    line_t, = ax.plot(t, t_np[v_idx], '-', linewidth=1.5, label=f'{CORE_9_NAMES[i]} (T)')
-                    line_p, = ax.plot(t, p_np[v_idx], '--', linewidth=1.5, label=f'{CORE_9_NAMES[i]} (P)')
-                    lines_truth.append(line_t)
-                    lines_pred.append(line_p)
-                    
-                ax.set_xlabel('Time (min)')
-                ax.set_ylabel('Concentration')
-                ax.grid(True, alpha=0.3)
-                plot_idx += 1
-                
-                if plot_idx >= len(axes): break
+                pred_denorm = pred * std_y + mean_y
+                target_denorm = y * std_y + mean_y
 
-        for i in range(plot_idx, len(axes)):
-            axes[i].set_visible(False)
-            
-        handles = [l for pair in zip(lines_truth, lines_pred) for l in pair]
-        labels = [h.get_label() for h in handles]
-        fig.legend(handles, labels, loc='lower center', ncol=9, bbox_to_anchor=(0.5, 0.0), fontsize=10)
-            
-        plt.tight_layout(rect=[0, 0.05, 1, 1])
-        
-        # 记录到 Wandb
-        trainer.logger.experiment.log({"Diagnostics_Real": wandb.Image(fig)}, step=trainer.global_step)
-        plt.close(fig)
+                metrics = calculate_metrics(pred_denorm.cpu(), target_denorm.cpu())
+                m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
+
+                fig, axes = plt.subplots(5, 8, figsize=(28, 16))
+                axes = axes.flatten()
+
+                for var_idx in range(39):
+                    ax = axes[var_idx]
+                    pred_np = pred_denorm[0, var_idx, :].cpu().numpy()
+                    target_np = target_denorm[0, var_idx, :].cpu().numpy()
+
+                    T_len = len(pred_np)
+                    t_max = getattr(dm, 't_max', 210)
+                    t = np.linspace(0, t_max, T_len)
+
+                    ax.plot(t, target_np, 'b-', label='Ground Truth', linewidth=2)
+                    ax.plot(t, pred_np, 'r--', label='Prediction', linewidth=2)
+
+                    var_name = VARIABLE_NAMES[var_idx] if var_idx < len(VARIABLE_NAMES) else f"Var {var_idx}"
+                    ax.set_title(f'{var_idx}: {var_name}', fontweight='bold', fontsize=10)
+                    ax.set_xlabel('Time (min)')
+                    if var_idx == 0: ax.legend(fontsize=8)
+                    ax.grid(True, alpha=0.3)
+
+                for i in range(39, len(axes)):
+                    axes[i].set_visible(False)
+
+                title_str = f"[{pat_label}] {name} (Seed: {self.seed} | Epoch {trainer.current_epoch + 1})\n{m_str}"
+                plt.suptitle(title_str, fontsize=22, fontweight='bold')
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+                group_name = "Diagnostics_LHS" if "LHS" in key else "Diagnostics_Real"
+                if trainer.logger and hasattr(trainer.logger, 'experiment'):
+                    log_dict[f'{group_name}/{key}'] = wandb.Image(fig)
+
+                plt.close(fig)
+
+        if trainer.logger and hasattr(trainer.logger, 'experiment'):
+            trainer.logger.experiment.log(log_dict)
         pl_module.train()
 
 def main():
@@ -139,10 +129,12 @@ def main():
     parser.add_argument('--name', type=str, default=None)
     
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
-    parser.add_argument('--al_strategy', type=str, default='none', 
-                        choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs'],
-                        help="主动学习采样策略 (默认 none 代表锁定数据集)")
+    parser.add_argument('--al_strategy', type=str, default='none',
+                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs'],
+                          help="主动学习采样策略 (默认 none 代表锁定数据集; rgs=Real-Guided局部密集采样)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
+    parser.add_argument('--al_perturbation', type=float, default=0.1, help="RGS专用: 连续参数局部扰动幅度 (0.1=±10%%)")
+    parser.add_argument('--al_mae_threshold', type=float, default=0.1, help="RGS专用: MAE大于此阈值的Real Mutant优先密集采样")
 
     args = parser.parse_args()
 
@@ -196,7 +188,12 @@ def main():
     if args.al_strategy != 'none':
         from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
         print(f"🚀 [Active Learning] 已挂载主动学习引擎，当前策略: {args.al_strategy.upper()}")
-        al_cb = ActiveLearningCallback(trigger_every_n_epochs=args.al_trigger_epoch, strategy=args.al_strategy)
+        al_cb = ActiveLearningCallback(
+              trigger_every_n_epochs=args.al_trigger_epoch,
+              strategy=args.al_strategy,
+              perturbation=args.al_perturbation,
+              mae_threshold=args.al_mae_threshold,
+          )
         callbacks.append(al_cb)
     else:
         print("🌱 [Baseline Mode] 未启用主动学习，数据集在全生命周期锁定。")

@@ -65,7 +65,7 @@ def main():
     parser.add_argument('--ckpt', type=str, required=True)
     parser.add_argument('--data_dir', type=str, default='./data')
     parser.add_argument('--dataset_name', type=str, required=True)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--save_dir', type=str, default='./eval_result')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
