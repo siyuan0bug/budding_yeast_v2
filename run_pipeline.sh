@@ -37,8 +37,8 @@ EXPERIMENTS=(
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD
     
     # 实验 1: RGS 主动学习
-    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 32 300 rgs 3e-4 10 5000 0.1 0.1"
-    "cross_fno mse_only true /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 rgs 6e-4 10 5000 0.1 0.1"
+    "hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 32 300 rgs 3e-4 10 5000 0.1 0.1"
+    #"cross_fno mse_only true /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 16 96 200 rgs 9e-4 10 5000 0.1 0.1"
     # 实验 2: Baseline (无主动学习)
     #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 32 300 none 3e-4 10 0 0 0"
 

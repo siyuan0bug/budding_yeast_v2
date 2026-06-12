@@ -336,8 +336,11 @@ class ActiveLearningCallback(pl.Callback):
 
     def _select_by_real_mae(self, pl_module, dm, device, valid_results, valid_names, current_epoch):
         """
-        用真实 MAE (模型预测 vs ODE 真值，反归一化后) 选取最难的 num_add 个样本。
-        MAE 越大 = 模型预测越差 = 最需要学习 → 优先入库。
+        用真实 MAE (模型预测 vs ODE 真值，反归一化后) 选取样本。
+        策略：以 Real Mutant 的 MAE 为锚点，选取"跳一跳够得着"的样本。
+        - MAE 上限 = max(Real Mutant 最大 MAE × 5, 10.0)：排除异常样本
+        - MAE 下限 = Real Mutant 中位数 MAE × 0.5：排除太容易的样本
+        - 在区间内按 MAE 降序选取
         """
         mean_y = dm.mean_y.cpu()  # (1, 39, 1)
         std_y = dm.std_y.cpu()    # (1, 39, 1)
@@ -364,14 +367,52 @@ class ActiveLearningCallback(pl.Callback):
         candidate_maes = np.array(candidate_maes)
         num_to_select = min(self.num_add, len(valid_results))
         
-        # 选取 MAE 最大的 num_to_select 个 (模型最不会的)
-        idx_sel = np.argsort(candidate_maes)[-num_to_select:]
+        # 以 Real Mutant 的 MAE 为锚点设定区间
+        real_maes = np.array(list(self._real_mutant_scores.values())) if self._real_mutant_scores else np.array([1.0])
+        real_max = np.max(real_maes)
+        real_median = np.median(real_maes)
+        
+        mae_upper = max(real_max * 5.0, 10.0)    # 超过 Real 最差 5 倍 → 异常
+        mae_lower = real_median * 0.5              # 低于 Real 中位数一半 → 太容易
+        
+        # 在 [mae_lower, mae_upper] 区间内选取 MAE 最大的
+        mask = (candidate_maes >= mae_lower) & (candidate_maes <= mae_upper)
+        valid_indices = np.where(mask)[0]
+        
+        if len(valid_indices) < num_to_select:
+            # 区间内不够，逐步放宽上限
+            for multiplier in [10.0, 20.0, 50.0]:
+                mae_upper_relaxed = max(real_max * multiplier, 50.0)
+                mask = (candidate_maes >= mae_lower) & (candidate_maes <= mae_upper_relaxed)
+                valid_indices = np.where(mask)[0]
+                if len(valid_indices) >= num_to_select:
+                    print(f"[RGS] MAE 上限放宽至 {mae_upper_relaxed:.1f} (Real max × {multiplier:.0f})")
+                    break
+        
+        if len(valid_indices) == 0:
+            # 最终降级: 取候选中位数附近
+            mae_median = np.median(candidate_maes)
+            mask = candidate_maes <= mae_median * 2
+            valid_indices = np.where(mask)[0]
+        
+        if len(valid_indices) == 0:
+            valid_indices = np.arange(len(valid_results))
+        
+        # 在有效区间内按 MAE 降序排列，选取前 num_to_select 个
+        sorted_within = valid_indices[np.argsort(candidate_maes[valid_indices])[::-1]]
+        idx_sel = sorted_within[:num_to_select]
+        
+        n_excluded_low = int(np.sum(candidate_maes < mae_lower))
+        n_excluded_high = int(np.sum(candidate_maes > mae_upper))
         
         selected_results = [valid_results[i] for i in idx_sel]
         selected_names = [valid_names[i] for i in idx_sel]
         
-        print(f"[RGS] 真实 MAE 选取完成: 选取 {num_to_select}/{len(valid_results)} 个 "
-              f"(MAE 范围: {candidate_maes[idx_sel].min():.4f} ~ {candidate_maes[idx_sel].max():.4f})")
+        print(f"[RGS] 真实 MAE 选取: Real锚点 median={real_median:.2f}, max={real_max:.2f} | "
+              f"区间=[{mae_lower:.2f}, {mae_upper:.2f}] | "
+              f"排除太易={n_excluded_low}, 排除太难={n_excluded_high} | "
+              f"选取 {len(idx_sel)}/{len(valid_results)} 个 "
+              f"(MAE: {candidate_maes[idx_sel].min():.4f} ~ {candidate_maes[idx_sel].max():.4f})")
         
         return selected_results, selected_names
 
