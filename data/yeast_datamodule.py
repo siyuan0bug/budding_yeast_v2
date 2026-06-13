@@ -1,9 +1,8 @@
-import os
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
-import re # 记得在文件顶部导入 re
+import re
 from .dataset_utils import load_yeast_dataset_universal
 
 
@@ -93,6 +92,7 @@ class YeastDataModule(pl.LightningDataModule):
 
         train_idx_lhs = []
         val_idx_lhs = []
+        test_idx_lhs = []
 
         for family, family_indices in family_groups.items():
             # 第二级：在该家族内按 Pattern 分组
@@ -102,60 +102,78 @@ class YeastDataModule(pl.LightningDataModule):
                 pattern_subgroups.setdefault(pattern, []).append(idx)
 
             n_family = len(family_indices)
-            n_val_target = max(1, int(n_family * 0.1))  # 该家族应分给验证集的样本数
+            n_val_target = max(1, int(n_family * 0.10))  # 该家族应分给验证集的样本数 (10%)
+            n_test_target = max(1, int(n_family * 0.10))  # 该家族应分给测试集的样本数 (10%)
 
             # 每个 Pattern 子组内部先洗牌
             for pat, pat_indices in pattern_subgroups.items():
                 np.random.shuffle(pat_indices)
 
-            # 按各 Pattern 子组的样本量比例分配验证集名额
+            # 按各 Pattern 子组的样本量比例分配验证集和测试集名额
             val_from_family = []
+            test_from_family = []
             train_from_family = []
 
             # 按 Pattern 子组大小降序排列，优先保证大组的划分精度
             sorted_patterns = sorted(pattern_subgroups.items(), key=lambda x: len(x[1]), reverse=True)
 
-            # 计算每个 Pattern 子组应分给验证集的数量（按比例）
+            # 计算每个 Pattern 子组应分给验证集和测试集的数量（按比例）
             val_quota_per_pattern = {}
+            test_quota_per_pattern = {}
             remaining_val_quota = n_val_target
+            remaining_test_quota = n_test_target
             remaining_total = n_family
 
             for pat, pat_indices in sorted_patterns:
                 n_pat = len(pat_indices)
-                # 按该子组在家族中的占比分配验证名额
-                quota = round(n_pat / remaining_total * remaining_val_quota) if remaining_total > 0 else 0
-                # 边界保护：子组只有1个样本时不强制抽验证集（除非整个家族只有1个样本）
-                if n_pat == 1 and n_family > 1:
-                    quota = 0
-                quota = min(quota, n_pat, remaining_val_quota)
-                val_quota_per_pattern[pat] = quota
-                remaining_val_quota -= quota
+                # 按该子组在家族中的占比分配验证集名额
+                val_quota = round(n_pat / remaining_total * remaining_val_quota) if remaining_total > 0 else 0
+                test_quota = round(n_pat / remaining_total * remaining_test_quota) if remaining_total > 0 else 0
+                # 边界保护：子组只有1-2个样本时不强制抽验证/测试集
+                if n_pat <= 2 and n_family > 2:
+                    val_quota = 0
+                    test_quota = 0
+                elif n_pat <= 4 and n_family > 4:
+                    test_quota = 0
+                val_quota = min(val_quota, n_pat, remaining_val_quota)
+                test_quota = min(test_quota, n_pat - val_quota, remaining_test_quota)
+                val_quota_per_pattern[pat] = val_quota
+                test_quota_per_pattern[pat] = test_quota
+                remaining_val_quota -= val_quota
+                remaining_test_quota -= test_quota
                 remaining_total -= n_pat
 
             # 若因取整导致还有剩余名额，从最大的子组中补齐
-            if remaining_val_quota > 0:
-                for pat, pat_indices in sorted_patterns:
-                    if remaining_val_quota <= 0:
-                        break
-                    available = len(pat_indices) - val_quota_per_pattern[pat]
-                    extra = min(available, remaining_val_quota)
-                    val_quota_per_pattern[pat] += extra
-                    remaining_val_quota -= extra
+            for quota_dict, remaining_quota in [(val_quota_per_pattern, remaining_val_quota),
+                                                 (test_quota_per_pattern, remaining_test_quota)]:
+                if remaining_quota > 0:
+                    for pat, pat_indices in sorted_patterns:
+                        if remaining_quota <= 0:
+                            break
+                        used = val_quota_per_pattern.get(pat, 0) + test_quota_per_pattern.get(pat, 0)
+                        available = len(pat_indices) - used
+                        extra = min(available, remaining_quota)
+                        quota_dict[pat] = quota_dict.get(pat, 0) + extra
+                        remaining_quota -= extra
 
-            # 执行划分
+            # 执行划分：前 n_val 给验证集，接下来 n_test 给测试集，剩余给训练集
             for pat, pat_indices in sorted_patterns:
                 n_val = val_quota_per_pattern.get(pat, 0)
+                n_test = test_quota_per_pattern.get(pat, 0)
                 val_from_family.extend(pat_indices[:n_val])
-                train_from_family.extend(pat_indices[n_val:])
+                test_from_family.extend(pat_indices[n_val:n_val + n_test])
+                train_from_family.extend(pat_indices[n_val + n_test:])
 
             train_idx_lhs.extend(train_from_family)
             val_idx_lhs.extend(val_from_family)
+            test_idx_lhs.extend(test_from_family)
 
         np.random.shuffle(train_idx_lhs)
         np.random.shuffle(val_idx_lhs)
+        np.random.shuffle(test_idx_lhs)
 
         n_families = len(family_groups)
-        print(f"📊 [两级分层划分] 家族数: {n_families} | 训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)}")
+        print(f"📊 [两级分层划分] 家族数: {n_families} | 训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)} | LHS测试集: {len(test_idx_lhs)}")
 
         test_idx_real = real_indices
 
@@ -178,50 +196,51 @@ class YeastDataModule(pl.LightningDataModule):
 
         self.train_dataset_lhs = TensorDataset(X[train_idx_lhs], Params_norm[train_idx_lhs], Y_norm[train_idx_lhs])
         self.val_dataset_lhs = TensorDataset(X[val_idx_lhs], Params_norm[val_idx_lhs], Y_norm[val_idx_lhs])
+        self.test_dataset_lhs = TensorDataset(X[test_idx_lhs], Params_norm[test_idx_lhs], Y_norm[test_idx_lhs])
         self.test_dataset_real = TensorDataset(X[test_idx_real], Params_norm[test_idx_real], Y_norm[test_idx_real])
-
-        fixed_lhs_idx_1 = train_idx_lhs[0]
-        fixed_lhs_idx_2 = train_idx_lhs[1] if len(train_idx_lhs) > 1 else train_idx_lhs[0]
-
-        wt_idx = None
-        ko_idx = None
-
-        for i, name in enumerate(mutant_names):
-            if name == '000_WT_Healthy' or name == '1_WT_Glc':
-                wt_idx = i
-            elif name == '3_cln1_cln2_KO':
-                ko_idx = i
-
-        if wt_idx is None:
-            wt_idx = test_idx_real[0] if len(test_idx_real) > 0 else train_idx_lhs[0]
-        if ko_idx is None:
-            ko_idx = test_idx_real[min(1, len(test_idx_real) - 1)] if len(test_idx_real) > 0 else val_idx_lhs[0]
 
         # ======== 4. 基于 Pattern Label 的分层画图样本选取 ========
         self.fixed_samples_for_plot = {}
         patterns = ['Pattern_A', 'Pattern_B', 'Pattern_C']
         
-        def find_sample_by_pattern(indices, pattern_kw, fallback_indices):
-            for idx in indices:
-                if pattern_kw in str(pattern_labels[idx]):
-                    return idx
-            return fallback_indices[0] if len(fallback_indices) > 0 else 0
+        def find_samples_by_pattern(indices, pattern_kw, n_samples):
+            """从 indices 中按 pattern_kw 选出 n_samples 个样本的索引列表"""
+            matched = [idx for idx in indices if pattern_kw in str(pattern_labels[idx])]
+            if len(matched) == 0:
+                matched = indices[:n_samples] if len(indices) >= n_samples else indices
+            return matched[:n_samples]
 
-        # A. 训练集 (LHS) 抽取 3 种形态
+        # A. LHS 训练集: 每个 Pattern 选 2 个
         for p in patterns:
-            idx = find_sample_by_pattern(train_idx_lhs, p, train_idx_lhs)
-            self.fixed_samples_for_plot[f'LHS_{p}'] = (
-                X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
-                Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
-            )
+            for i, idx in enumerate(find_samples_by_pattern(train_idx_lhs, p, 2)):
+                self.fixed_samples_for_plot[f'LHS_train/{p}_{i}'] = (
+                    X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
+                    Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
+                )
 
-        # B. 盲测集 (Real) 抽取 3 种形态
+        # B. LHS 验证集: 每个 Pattern 选 2 个
         for p in patterns:
-            idx = find_sample_by_pattern(test_idx_real, p, test_idx_real)
-            self.fixed_samples_for_plot[f'Real_{p}'] = (
-                X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
-                Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
-            )
+            for i, idx in enumerate(find_samples_by_pattern(val_idx_lhs, p, 2)):
+                self.fixed_samples_for_plot[f'LHS_val/{p}_{i}'] = (
+                    X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
+                    Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
+                )
+
+        # C. LHS 测试集: 每个 Pattern 选 2 个
+        for p in patterns:
+            for i, idx in enumerate(find_samples_by_pattern(test_idx_lhs, p, 2)):
+                self.fixed_samples_for_plot[f'LHS_test/{p}_{i}'] = (
+                    X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
+                    Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
+                )
+
+        # D. Real Mutants: 每个 Pattern 选 10 个
+        for p in patterns:
+            for i, idx in enumerate(find_samples_by_pattern(test_idx_real, p, 10)):
+                self.fixed_samples_for_plot[f'real_mutants/{p}_{i}'] = (
+                    X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
+                    Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
+                )
 
         self._raw_data = raw_data
         self._param_conds = param_conds
@@ -229,6 +248,7 @@ class YeastDataModule(pl.LightningDataModule):
         self._Y = Y
         self._train_idx_lhs = train_idx_lhs
         self._val_idx_lhs = val_idx_lhs
+        self._test_idx_lhs = test_idx_lhs
         self._test_idx_real = test_idx_real
 
     def train_dataloader(self):
@@ -238,6 +258,8 @@ class YeastDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return [
             DataLoader(self.val_dataset_lhs, batch_size=self.val_batch_size,
+                       shuffle=False, num_workers=self.num_workers, pin_memory=True),
+            DataLoader(self.test_dataset_lhs, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
             DataLoader(self.test_dataset_real, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
@@ -249,4 +271,4 @@ class YeastDataModule(pl.LightningDataModule):
 
     @property
     def test_indices(self):
-        return self._test_idx_real, self._val_idx_lhs
+        return self._test_idx_lhs, self._test_idx_real

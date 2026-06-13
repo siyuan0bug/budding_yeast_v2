@@ -15,7 +15,6 @@ from .components.hp_fno import hpYeastFNO
 from .components.neural_ode import NeuralODEModel
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
-from budding_yeast_v2.utils.metrics import calculate_metrics
 
 
 MODEL_REGISTRY = {
@@ -132,6 +131,8 @@ class YeastLitModule(pl.LightningModule):
         if dataloader_idx == 0:
             self.log('val_loss_lhs', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
         elif dataloader_idx == 1:
+            self.log('test_loss_lhs', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
+        elif dataloader_idx == 2:
             self.log('test_loss_real', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
 
         return mse_val

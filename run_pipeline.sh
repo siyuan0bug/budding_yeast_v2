@@ -2,7 +2,7 @@
 # 自动 cd 到脚本所在目录，无论终端 cwd 在哪都能正确运行
 cd "$(dirname "$0")" || exit
 
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=1
 export NCCL_P2P_DISABLE=1
 export PYTHONPATH=$(pwd)/..:$PYTHONPATH
 #export WANDB_API_KEY="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"  #v1版本
@@ -37,7 +37,8 @@ EXPERIMENTS=(
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD
     
     # 实验 1: RGS 主动学习
-    "hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 32 300 rgs 3e-4 10 5000 0.1 0.1"
+    "hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 rgs 6e-4 10 5000 0.1 0.1"
+    "hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 none 6e-4 10 0 0.1 0.1"
     #"cross_fno mse_only true /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 16 96 200 rgs 9e-4 10 5000 0.1 0.1"
     # 实验 2: Baseline (无主动学习)
     #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 32 300 none 3e-4 10 0 0 0"

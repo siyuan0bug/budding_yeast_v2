@@ -14,7 +14,6 @@ from budding_yeast_v2.utils.metrics import calculate_metrics
 
 CORE_9_INDICES = [0, 1, 2, 3, 4, 20, 22, 33, 35]
 
-# 🌟 新增：从 lhs_v1.py 提取的 39 个变量严格对应名称
 VARIABLE_NAMES = [
     "MASS", "CLN2", "CLB2", "CLB5", "SIC1", "CDC6", "C2", "C5", "F2", "F5",
     "SIC1P", "C2P", "C5P", "CDC6P", "F2P", "F5P", "SWI5T", "SWI5", "IEP", "CDC20T",
@@ -37,13 +36,10 @@ def load_model_from_checkpoint(ckpt_path, device='cpu'):
     model.eval()
     return model, hp
 
-# 🌟 保持画图逻辑不变（遵照你不修改刻度的要求）
 def plot_variable_grid(pred, target, var_indices, title, save_path, rows, cols, t_max=210):
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
     axes = axes.flatten()
-    
     t = np.linspace(0, t_max, pred.shape[-1])
-    
     for i, var_idx in enumerate(var_indices):
         ax = axes[i]
         ax.plot(t, target[var_idx], 'b-', label='Truth', linewidth=1.5)
@@ -60,6 +56,63 @@ def plot_variable_grid(pred, target, var_indices, title, save_path, rows, cols, 
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
+def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, save_dir, 
+                     sub_dir, max_plots=None):
+    """通用评估函数，评估一个 dataset 并生成图片和 CSV 行。"""
+    plot_dir = os.path.join(save_dir, sub_dir)
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    all_preds_denorm, all_targets_denorm = [], []
+    csv_rows = []
+    plot_count = 0
+
+    with torch.no_grad():
+        for local_idx, batch in enumerate(dataset):
+            global_idx = indices[local_idx]
+            m_name = dm._mutant_names[global_idx]
+            p_label = dm.pattern_labels[global_idx]
+
+            x, p, y = [b.unsqueeze(0).to(device) for b in batch]
+            pred_denorm = (model.forward_ic_time(x, p) * std_y + mean_y).cpu()
+            target_denorm = (y * std_y + mean_y).cpu()
+
+            all_preds_denorm.append(pred_denorm)
+            all_targets_denorm.append(target_denorm)
+
+            metrics = calculate_metrics(pred_denorm, target_denorm)
+            csv_rows.append({
+                'Mutant': m_name,
+                'Pattern': p_label,
+                'MAE': metrics['MAE'],
+                'MSE': metrics['MSE'],
+                'Relative_L2': metrics['Relative L2'],
+                'Correlation': metrics['Correlation']
+            })
+
+            # 生成图片（受 max_plots 限制）
+            if max_plots is None or plot_count < max_plots:
+                m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
+                title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
+                p_np, t_np = pred_denorm[0].numpy(), target_denorm[0].numpy()
+                save_plot_path = os.path.join(plot_dir, f"{m_name}.png")
+                plot_variable_grid(p_np, t_np, range(39), f"{title_base}\nAll 39 Variables",
+                                   save_plot_path, 5, 8, t_max=dm.t_max)
+                plot_count += 1
+
+    # 汇总指标
+    if all_preds_denorm:
+        all_preds = torch.cat(all_preds_denorm, dim=0)
+        all_targets = torch.cat(all_targets_denorm, dim=0)
+        summary = {
+            "all_39_vars": calculate_metrics(all_preds, all_targets),
+            "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
+            "count": len(all_preds_denorm)
+        }
+    else:
+        summary = {"all_39_vars": {}, "core_9_vars": {}, "count": 0}
+
+    return summary, csv_rows, all_preds_denorm, all_targets_denorm
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt', type=str, required=True)
@@ -70,6 +123,7 @@ def main():
     parser.add_argument('--save_dir', type=str, default='./eval_result')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--lhs_test_plots', type=int, default=100, help='LHS 测试集最多画多少张图')
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -83,61 +137,61 @@ def main():
     dm.setup('test')
     mean_y, std_y = dm.mean_y.to(args.device), dm.std_y.to(args.device)
 
-    all_preds_denorm, all_targets_denorm = [], []
-    csv_rows = []
+    # ======== 1. 评估 Real Mutants ========
+    real_summary, real_csv, real_preds, real_targets = evaluate_dataset(
+        model, dm, dm.test_dataset_real, dm._test_idx_real,
+        args.device, mean_y, std_y, args.seed, args.save_dir,
+        sub_dir='real_mutants', max_plots=None  # 全部画图
+    )
 
-    with torch.no_grad():
-        for local_idx, batch in enumerate(dm.test_dataset_real):
-            global_idx = dm._test_idx_real[local_idx]
-            m_name = dm._mutant_names[global_idx]
-            p_label = dm.pattern_labels[global_idx]
-            
-            # 🌟 删除了创建子文件夹 m_dir 的代码
+    # ======== 2. 评估 LHS 测试集 ========
+    lhs_summary, lhs_csv, lhs_preds, lhs_targets = evaluate_dataset(
+        model, dm, dm.test_dataset_lhs, dm._test_idx_lhs,
+        args.device, mean_y, std_y, args.seed, args.save_dir,
+        sub_dir='lhs_test', max_plots=args.lhs_test_plots
+    )
 
-            x, p, y = [b.unsqueeze(0).to(args.device) for b in batch]
-            pred_denorm = (model.forward_ic_time(x, p) * std_y + mean_y).cpu()
-            target_denorm = (y * std_y + mean_y).cpu()
+    # ======== 3. 汇总 JSON ========
+    all_preds_list = real_preds + lhs_preds
+    all_targets_list = real_targets + lhs_targets
 
-            all_preds_denorm.append(pred_denorm)
-            all_targets_denorm.append(target_denorm)
+    if all_preds_list:
+        all_preds = torch.cat(all_preds_list, dim=0)
+        all_targets = torch.cat(all_targets_list, dim=0)
+        all_test_summary = {
+            "all_39_vars": calculate_metrics(all_preds, all_targets),
+            "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
+            "count": len(all_preds_list)
+        }
+    else:
+        all_test_summary = {"all_39_vars": {}, "core_9_vars": {}, "count": 0}
 
-            metrics = calculate_metrics(pred_denorm, target_denorm)
-            # 🌟 新增：收集每个 mutant 的指标到 CSV 行
-            csv_rows.append({
-                'Mutant': m_name,
-                'Pattern': p_label,
-                'MAE': metrics['MAE'],
-                'MSE': metrics['MSE'],
-                'Relative_L2': metrics['Relative L2'],
-                'Correlation': metrics['Correlation']
-            })
+    global_metrics = {
+        "all_test": all_test_summary,
+        "real_mutants": real_summary,
+        "lhs_test": lhs_summary,
+    }
 
-            m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
-            title_base = f"[{p_label}] {m_name} (Seed: {args.seed})\n{m_str}"
-            
-            p_np, t_np = pred_denorm[0].numpy(), target_denorm[0].numpy()
+    json_path = os.path.join(args.save_dir, 'global_metrics_denorm.json')
+    with open(json_path, 'w') as f:
+        json.dump(global_metrics, f, indent=2)
+    print(f"📊 Global metrics JSON saved to: {json_path}")
+    print(f"   all_test:     n={all_test_summary['count']}, MAE={all_test_summary['all_39_vars']['MAE']:.4f}, Corr={all_test_summary['all_39_vars']['Correlation']:.4f}")
+    print(f"   real_mutants: n={real_summary['count']}, MAE={real_summary['all_39_vars']['MAE']:.4f}, Corr={real_summary['all_39_vars']['Correlation']:.4f}")
+    print(f"   lhs_test:     n={lhs_summary['count']}, MAE={lhs_summary['all_39_vars']['MAE']:.4f}, Corr={lhs_summary['all_39_vars']['Correlation']:.4f}")
 
-            # 🌟 删除了局部变量网格图，只保留 39 变量全景图
-            # 🌟 直接保存在 args.save_dir 下，文件名为突变体的真实名字
-            save_plot_path = os.path.join(args.save_dir, f"{m_name}.png")
-            plot_variable_grid(p_np, t_np, range(39), f"{title_base}\nAll 39 Variables", 
-                               save_plot_path, 5, 8, t_max=dm.t_max)
+    # ======== 4. 输出 CSV ========
+    def write_csv(rows, path):
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        print(f"📝 CSV saved to: {path}")
 
-    # 🌟 依然在主目录生成唯一的 global_metrics_denorm.json
-    all_preds = torch.cat(all_preds_denorm, dim=0)
-    all_targets = torch.cat(all_targets_denorm, dim=0)
-    with open(os.path.join(args.save_dir, 'global_metrics_denorm.json'), 'w') as f:
-        json.dump({"all_39_vars": calculate_metrics(all_preds, all_targets), "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :])}, f, indent=2)
-
-    # 🌟 新增：输出每个 mutant 的评估指标 CSV 表格
-    csv_path = os.path.join(args.save_dir, 'per_mutant_metrics.csv')
-    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in csv_rows:
-            writer.writerow(row)
-    print(f"📝 Per-mutant metrics CSV saved to: {csv_path}")
+    write_csv(real_csv, os.path.join(args.save_dir, 'per_mutant_metrics.csv'))
+    write_csv(lhs_csv, os.path.join(args.save_dir, 'per_lhs_test_metrics.csv'))
 
 if __name__ == '__main__':
     main()

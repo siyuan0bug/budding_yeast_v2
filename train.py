@@ -9,14 +9,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import wandb
-import swanlab  # 🌟 新增导入
 
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.utils.metrics import calculate_metrics
 
-CORE_9_INDICES = [0, 1, 2, 3, 4, 20, 22, 33, 35]
-CORE_9_NAMES = ['MASS (0)', 'CLN2 (1)', 'CLB2 (2)', 'CLB5 (3)', 'SIC1 (4)', 'CDC20 (20)', 'CDH1 (22)', 'ORI (33)', 'SPN (35)']
 VARIABLE_NAMES = [
     "MASS", "CLN2", "CLB2", "CLB5", "SIC1", "CDC6", "C2", "C5", "F2", "F5",
     "SIC1P", "C2P", "C5P", "CDC6P", "F2P", "F5P", "SWI5T", "SWI5", "IEP", "CDC20T",
@@ -25,7 +22,7 @@ VARIABLE_NAMES = [
 ]
 
 class SimToRealVisualizerCallback(Callback):
-    def __init__(self, plot_every_n_epochs=5, seed=42):
+    def __init__(self, plot_every_n_epochs=10, seed=42):
         super().__init__()
         self.plot_every_n_epochs = plot_every_n_epochs
         self.seed = seed
@@ -84,9 +81,13 @@ class SimToRealVisualizerCallback(Callback):
                 plt.suptitle(title_str, fontsize=22, fontweight='bold')
                 plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-                group_name = "Diagnostics_LHS" if "LHS" in key else "Diagnostics_Real"
+                # key 格式: "LHS_train/Pattern_A_0", "LHS_val/Pattern_B_1", "real_mutants/Pattern_C_5"
+                # group = key 的第一段, 样本名 = key 的第二段
+                parts = key.split('/', 1)
+                group_name = parts[0]  # LHS_train, LHS_val, LHS_test, real_mutants
+                sample_name = parts[1] if len(parts) > 1 else key
                 if trainer.logger and hasattr(trainer.logger, 'experiment'):
-                    log_dict[f'{group_name}/{key}'] = wandb.Image(fig)
+                    log_dict[f'{group_name}/{sample_name}'] = wandb.Image(fig)
 
                 plt.close(fig)
 
