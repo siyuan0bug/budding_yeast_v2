@@ -125,6 +125,8 @@ def main():
     
     # 训练配置
     parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--val_batch_size', type=int, default=256,
+                        help='验证/测试的 batch size（不影响训练，设大加速评估，默认 256）')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--devices', type=int, default=1)
     parser.add_argument('--project', type=str, default='budding_yeast_v2_active')
@@ -167,7 +169,7 @@ def main():
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
         adj_matrix_path=args.adj_matrix_path if args.adj_matrix_path else 'mydata/yeast_signed_adjacency_matrix.npy',
         batch_size_lhs=args.batch_size,
-        val_batch_size=args.batch_size,
+        val_batch_size=args.val_batch_size,
         num_workers=args.num_workers,
         use_adj_matrix=(args.adj_matrix_path is not None),
     )

@@ -1,3 +1,4 @@
+import math
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
@@ -80,10 +81,15 @@ class YeastDataModule(pl.LightningDataModule):
             real_indices = lhs_indices[-10:]
             lhs_indices = lhs_indices[:-10]
 
-        # ======== 两级分层划分：先按突变体家族，再按 Pattern ========
+        # ================================================================
+        #  双级分层 + 孤本保护 数据划分机制
+        #  步骤 2: 第一级 — 按母体家族（Family）分组
+        #  步骤 3: 第二级 — 按动态表型（Pattern）子组分组
+        #  步骤 4: 比例抽样 + 孤本保护（每个 Pattern 子组内独立计算）
+        # ================================================================
         np.random.seed(self.seed)
 
-        # 第一级：按突变体家族分组
+        # 第一级：按突变体家族分组（提取 _LHS_ 前的前缀）
         family_groups = {}
         for idx in lhs_indices:
             name = str(mutant_names[idx])
@@ -95,87 +101,57 @@ class YeastDataModule(pl.LightningDataModule):
         test_idx_lhs = []
 
         for family, family_indices in family_groups.items():
-            # 第二级：在该家族内按 Pattern 分组
+            # 第二级：在该家族内按 Pattern 子组分组
             pattern_subgroups = {}
             for idx in family_indices:
-                pattern = str(pattern_labels[idx]).split(':')[0]  # "Pattern_A", "Pattern_B", "Pattern_C"
+                pattern = str(pattern_labels[idx]).split(':')[0]  # "Pattern_A/B/C"
                 pattern_subgroups.setdefault(pattern, []).append(idx)
 
-            n_family = len(family_indices)
-            n_val_target = max(1, int(n_family * 0.10))  # 该家族应分给验证集的样本数 (10%)
-            n_test_target = max(1, int(n_family * 0.10))  # 该家族应分给测试集的样本数 (10%)
-
-            # 每个 Pattern 子组内部先洗牌
+            # 每个 Pattern 子组内部洗牌后，独立计算抽样名额
             for pat, pat_indices in pattern_subgroups.items():
                 np.random.shuffle(pat_indices)
-
-            # 按各 Pattern 子组的样本量比例分配验证集和测试集名额
-            val_from_family = []
-            test_from_family = []
-            train_from_family = []
-
-            # 按 Pattern 子组大小降序排列，优先保证大组的划分精度
-            sorted_patterns = sorted(pattern_subgroups.items(), key=lambda x: len(x[1]), reverse=True)
-
-            # 计算每个 Pattern 子组应分给验证集和测试集的数量（按比例）
-            val_quota_per_pattern = {}
-            test_quota_per_pattern = {}
-            remaining_val_quota = n_val_target
-            remaining_test_quota = n_test_target
-            remaining_total = n_family
-
-            for pat, pat_indices in sorted_patterns:
                 n_pat = len(pat_indices)
-                # 按该子组在家族中的占比分配验证集名额
-                val_quota = round(n_pat / remaining_total * remaining_val_quota) if remaining_total > 0 else 0
-                test_quota = round(n_pat / remaining_total * remaining_test_quota) if remaining_total > 0 else 0
-                # 边界保护：子组只有1-2个样本时不强制抽验证/测试集
-                if n_pat <= 2 and n_family > 2:
+
+                # --- 默认分配：各 10% ---
+                val_quota = math.ceil(n_pat * 0.10)
+                test_quota = math.ceil(n_pat * 0.10)
+
+                # --- ⚠️ 孤本保护机制 ---
+                if n_pat <= 2:
+                    # 样本极少，全部保送训练集，防止流形丢失
                     val_quota = 0
                     test_quota = 0
-                elif n_pat <= 4 and n_family > 4:
+                elif n_pat <= 4:
+                    # 只保留验证集，不抽测试集
                     test_quota = 0
-                val_quota = min(val_quota, n_pat, remaining_val_quota)
-                test_quota = min(test_quota, n_pat - val_quota, remaining_test_quota)
-                val_quota_per_pattern[pat] = val_quota
-                test_quota_per_pattern[pat] = test_quota
-                remaining_val_quota -= val_quota
-                remaining_test_quota -= test_quota
-                remaining_total -= n_pat
 
-            # 若因取整导致还有剩余名额，从最大的子组中补齐
-            for quota_dict, remaining_quota in [(val_quota_per_pattern, remaining_val_quota),
-                                                 (test_quota_per_pattern, remaining_test_quota)]:
-                if remaining_quota > 0:
-                    for pat, pat_indices in sorted_patterns:
-                        if remaining_quota <= 0:
-                            break
-                        used = val_quota_per_pattern.get(pat, 0) + test_quota_per_pattern.get(pat, 0)
-                        available = len(pat_indices) - used
-                        extra = min(available, remaining_quota)
-                        quota_dict[pat] = quota_dict.get(pat, 0) + extra
-                        remaining_quota -= extra
+                # --- 安全钳：防止 val + test 超过子组总量 ---
+                if val_quota + test_quota > n_pat:
+                    test_quota = max(0, n_pat - val_quota)
 
-            # 执行划分：前 n_val 给验证集，接下来 n_test 给测试集，剩余给训练集
-            for pat, pat_indices in sorted_patterns:
-                n_val = val_quota_per_pattern.get(pat, 0)
-                n_test = test_quota_per_pattern.get(pat, 0)
-                val_from_family.extend(pat_indices[:n_val])
-                test_from_family.extend(pat_indices[n_val:n_val + n_test])
-                train_from_family.extend(pat_indices[n_val + n_test:])
+                # --- 执行切分：前 val_quota → 验证集，接着 test_quota → 测试集，剩余 → 训练集 ---
+                val_from_pat = pat_indices[:val_quota]
+                test_from_pat = pat_indices[val_quota:val_quota + test_quota]
+                train_from_pat = pat_indices[val_quota + test_quota:]
 
-            train_idx_lhs.extend(train_from_family)
-            val_idx_lhs.extend(val_from_family)
-            test_idx_lhs.extend(test_from_family)
+                val_idx_lhs.extend(val_from_pat)
+                test_idx_lhs.extend(test_from_pat)
+                train_idx_lhs.extend(train_from_pat)
 
+                print(f"   [Family={family}] {pat}: total={n_pat:>5d}  "
+                      f"→ train={len(train_from_pat):>5d}  val={len(val_from_pat):>3d}  test={len(test_from_pat):>3d}")
+
+        # 最终整体洗牌
         np.random.shuffle(train_idx_lhs)
         np.random.shuffle(val_idx_lhs)
         np.random.shuffle(test_idx_lhs)
 
-        n_families = len(family_groups)
-        print(f"📊 [两级分层划分] 家族数: {n_families} | 训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)} | LHS测试集: {len(test_idx_lhs)}")
-
         test_idx_real = real_indices
+
+        n_families = len(family_groups)
+        print(f"📊 [两级分层+孤本保护] 家族数: {n_families} | "
+              f"训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)} | "
+              f"LHS测试集: {len(test_idx_lhs)} | 真实测试集: {len(test_idx_real)}")
 
         # 归一化统计量使用全部 LHS 数据，避免稀有 Pattern 缺席导致的偏差
         self.mean_y = Y[lhs_indices].mean(dim=(0, 2), keepdim=True)
