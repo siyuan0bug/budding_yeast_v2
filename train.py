@@ -86,12 +86,12 @@ class SimToRealVisualizerCallback(Callback):
                 parts = key.split('/', 1)
                 group_name = parts[0]  # LHS_train, LHS_val, LHS_test, real_mutants
                 sample_name = parts[1] if len(parts) > 1 else key
-                if trainer.logger and hasattr(trainer.logger, 'experiment'):
+                if isinstance(trainer.logger, WandbLogger):
                     log_dict[f'{group_name}/{sample_name}'] = wandb.Image(fig)
 
                 plt.close(fig)
 
-        if trainer.logger and hasattr(trainer.logger, 'experiment'):
+        if isinstance(trainer.logger, WandbLogger) and log_dict:
             trainer.logger.experiment.log(log_dict)
         pl_module.train()
 
@@ -122,6 +122,22 @@ def main():
     parser.add_argument('--ode_method', type=str, default='dopri5')
     parser.add_argument('--ode_rtol', type=float, default=1e-3)
     parser.add_argument('--ode_atol', type=float, default=1e-4)
+
+    # PINN 残差损失参数 (loss_type='pinn_residual' 时生效)
+    parser.add_argument('--lambda_phys', type=float, default=0.1,
+                        help='PINN: ODE 残差损失权重')
+    parser.add_argument('--lambda_jump', type=float, default=1.0,
+                        help='PINN: Event 跳跃条件损失权重')
+    parser.add_argument('--event_window', type=int, default=4,
+                        help='PINN: Event 掩码窗口半径（时间步）')
+    parser.add_argument('--event_tol', type=float, default=0.08,
+                        help='PINN: 事件触发条件容差')
+    parser.add_argument('--jump_ratio', type=float, default=0.3,
+                        help='PINN: 跳变检测阈值（占变量值域比例）')
+    parser.add_argument('--residual_subsample', type=int, default=1,
+                        help='PINN: 残差计算时间步子采样率（1=全部，2=隔步，降低计算量）')
+    parser.add_argument('--event_weight', type=float, default=0.1,
+                        help='PINN: event 区间残差权重（软掩码，0=完全屏蔽，1=不屏蔽）')
     
     # 训练配置
     parser.add_argument('--num_workers', type=int, default=4)
@@ -131,15 +147,32 @@ def main():
     parser.add_argument('--devices', type=int, default=1)
     parser.add_argument('--project', type=str, default='budding_yeast_v2_active')
     parser.add_argument('--name', type=str, default=None)
+    parser.add_argument('--no_wandb', action='store_true', default=False,
+                        help='禁用 W&B 上传，仅本地日志')
     
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
     parser.add_argument('--al_strategy', type=str, default='none',
-                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs'],
-                          help="主动学习采样策略 (默认 none 代表锁定数据集; rgs=Real-Guided局部密集采样)")
+                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs', 'pial'],
+                          help="主动学习采样策略 (默认 none 代表锁定数据集; "
+                               "us/is/random=标准池化AL; rgs=Real-Guided局部密集采样; "
+                               "pial=Physics-Informed AL (ODE残差+轨迹多样性)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
     parser.add_argument('--al_num_add', type=int, default=5000, help="每轮 AL 新增样本数")
     parser.add_argument('--al_perturbation', type=float, default=0.1, help="RGS专用: 连续参数局部扰动幅度 (0.1=±10%%)")
     parser.add_argument('--al_mae_threshold', type=float, default=0.1, help="RGS专用: MAE大于此阈值的Real Mutant优先密集采样")
+    # 标准池化 AL 专属参数
+    parser.add_argument('--al_initial_train_size', type=int, default=5000,
+                        help="标准AL初始训练集大小 (仅us/is/random策略生效, 默认5000)")
+    parser.add_argument('--al_initial_selection', type=str, default='kmeans',
+                        choices=['kmeans', 'random'],
+                        help="标准AL初始训练集选择方法 (kmeans=聚类多样性, random=随机)")
+    parser.add_argument('--al_diversity_weight', type=float, default=0.5,
+                        help="Importance Sampling中多样性权重 (0~1, 默认0.5)")
+    parser.add_argument('--al_pool_subset_size', type=int, default=10000,
+                        help="每轮AL从池中采样的子集大小 (平衡效率, 默认10000)")
+    parser.add_argument('--al_uncertainty_metric', type=str, default='variance',
+                        choices=['variance', 'entropy'],
+                        help="不确定性度量方法 (variance=预测方差, entropy=预测熵)")
 
     args = parser.parse_args()
 
@@ -163,6 +196,13 @@ def main():
         ode_method=args.ode_method,
         ode_rtol=args.ode_rtol,
         ode_atol=args.ode_atol,
+        lambda_phys=args.lambda_phys,
+        lambda_jump=args.lambda_jump,
+        event_window=args.event_window,
+        event_tol=args.event_tol,
+        jump_ratio=args.jump_ratio,
+        residual_subsample=args.residual_subsample,
+        event_weight=args.event_weight,
     )
 
     datamodule = YeastDataModule(
@@ -175,8 +215,14 @@ def main():
     )
 
     run_name = args.name or f"{args.model}_{args.loss_type}_seed{args.seed}"
-    logger = WandbLogger(project=args.project, name=run_name)
-    logger.log_hyperparams(vars(args))
+    if args.no_wandb:
+        os.environ["WANDB_MODE"] = "offline"
+        logger = WandbLogger(project=args.project, name=run_name)
+        logger.log_hyperparams(vars(args))
+        print("W&B 离线模式 (--no_wandb): 日志保存在本地 wandb/ 目录，恢复上传请运行: wandb sync wandb/offline-run-*")
+    else:
+        logger = WandbLogger(project=args.project, name=run_name)
+        logger.log_hyperparams(vars(args))
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=os.path.join(args.save_dir, run_name),
@@ -201,6 +247,13 @@ def main():
               num_add=args.al_num_add,
               perturbation=args.al_perturbation,
               mae_threshold=args.al_mae_threshold,
+              # 标准池化 AL 参数
+              initial_train_size=args.al_initial_train_size,
+              initial_selection=args.al_initial_selection,
+              diversity_weight=args.al_diversity_weight,
+              pool_subset_size=args.al_pool_subset_size,
+              uncertainty_metric=args.al_uncertainty_metric,
+              random_seed=args.seed,
           )
         callbacks.append(al_cb)
     else:

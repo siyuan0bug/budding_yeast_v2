@@ -8,6 +8,14 @@ export PYTHONPATH=$(pwd)/..:$PYTHONPATH
 #export WANDB_API_KEY="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"  #v1版本
 export WANDB_API_KEY="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"  #active版本
 
+# ==========================================
+# 全局开关：设为 1 启用 W&B 离线模式（日志保存在本地 wandb/ 目录，不联网）
+#           设为 0 恢复在线上传
+# 离线日志恢复上传: wandb sync wandb/offline-run-<id>
+# 批量上传所有离线日志: wandb sync --sync-all
+# ==========================================
+NO_WANDB=1
+
 SEEDS=(42) #42,1024,3407          
 
 # ==========================================
@@ -16,7 +24,7 @@ SEEDS=(42) #42,1024,3407
 #
 # 说明:
 #   MODEL         : 模型名 (hyper_fno, cross_fno, pure_fno, ...)
-#   LOSS_TYPE     : 损失函数 (mse_only, physics_informed)
+#   LOSS_TYPE     : 损失函数 (mse_only, physics_informed,pinn_residual)
 #   USE_ADJ       : 是否用邻接矩阵 (true/false)
 #   DATASET_PATH  : 数据集 npz 绝对路径
 #   DATASET_TAG   : 数据集标签 (用于命名)
@@ -24,7 +32,10 @@ SEEDS=(42) #42,1024,3407
 #   WIDTH         : 隐藏层宽度
 #   BATCH_SIZE    : 批大小
 #   EPOCHS        : 最大训练轮数
-#   AL_STRATEGY   : 主动学习策略 (none/random/us/is/wrs/vessal/hggs/rgs)
+#   AL_STRATEGY   : 主动学习策略 (none/random/us/is/wrs/vessal/hggs/rgs/pial)
+#                   none=不用AL; random/us/is/wrs/vessal/hggs=标准池化AL; rgs=查询合成AL
+#                   pial=Physics-Informed AL (ODE残差+轨迹多样性, 导师要求)
+#                   所有策略统一使用K-Means初始训练集选择(默认5000样本)
 #   LR            : 初始学习率
 #   WARMUP        : Cosine+Warmup 预热轮数
 #   AL_NUM_ADD    : 每轮 AL 新增样本数 (AL无关时填0)
@@ -37,8 +48,18 @@ EXPERIMENTS=(
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD
     
     # 实验 1: RGS 主动学习
-    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 rgs 6e-4 10 5000 0.1 0.1"
-    "hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 none 6e-4 10 0 0.1 0.1"
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 rgs 6e-4 10 2000 0.1 0.1"
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 us 6e-4 10 2000 0 0"
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 is 6e-4 10 2000 0 0."
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 wrs 6e-4 10 2000 0 0."
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 vessal 6e-4 10 2000 0 0."
+    "hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheatpro_origin_210min_500steps_dual_labels.npz pro 32 32 64 200 none 6e-4 10 0 0 0"
+    # 实验: Physics-Informed AL (ODE残差+轨迹多样性, 导师要求)
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 pial 6e-4 10 2000 0 0."
+    #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 64 200 hggs 6e-4 10 2000 0 0"
+    
+
+
     #"cross_fno mse_only true /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 16 96 200 rgs 9e-4 10 5000 0.1 0.1"
     # 实验 2: Baseline (无主动学习)
     #"hyper_fno mse_only false /home/users/zsy/mydata/budding_yeast/lhs_cheat_origin_210min_500steps_dual_labels.npz 210m_500s 32 32 32 300 none 3e-4 10 0 0 0"
@@ -77,7 +98,17 @@ for SEED in "${SEEDS[@]}"; do
         EVAL_OUT_DIR="./eval_result/${RUN_NAME}"
 
         # 步骤 A: 训练
+        # 根据 LOSS_TYPE 构建 PINN 专属参数
+        PINN_PARAMS=""
+        if [ "$LOSS_TYPE" = "pinn_residual" ]; then
+            PINN_PARAMS="--lambda_phys 0.1 --lambda_jump 1.0 --residual_subsample 10 --event_weight 0.1"
+        fi
+
         echo "▶️ [阶段 1/2] 训练阶段"
+        WANDB_FLAG=""
+        if [ "$NO_WANDB" = "1" ]; then
+            WANDB_FLAG="--no_wandb"
+        fi
         python train.py \
             --model $MODEL \
             --wavelet haar \
@@ -95,7 +126,9 @@ for SEED in "${SEEDS[@]}"; do
             --val_batch_size 512 \
             --devices 1 \
             $AL_PARAMS \
-            $ADJ_PARAM
+            $ADJ_PARAM \
+            $PINN_PARAMS \
+            $WANDB_FLAG
 
         # 步骤 B: 寻找 Checkpoint
         CKPT_DIR="./train_result/${RUN_NAME}"

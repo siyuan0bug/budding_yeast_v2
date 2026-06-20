@@ -50,6 +50,14 @@ class YeastLitModule(pl.LightningModule):
         ode_method='dopri5',
         ode_rtol=1e-3,
         ode_atol=1e-4,
+        # PINN 残差损失相关超参数
+        lambda_phys=0.1,
+        lambda_jump=1.0,
+        event_window=4,
+        event_tol=0.08,
+        jump_ratio=0.3,
+        residual_subsample=1,
+        event_weight=0.1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -83,6 +91,20 @@ class YeastLitModule(pl.LightningModule):
             self.criterion = loss_class()
         elif loss_type == 'mse_smooth':
             self.criterion = loss_class()
+        elif loss_type == 'pinn_residual':
+            # 创建占位实例以在 ModelSummary 中显示损失类型
+            # 真实参数在 on_train_start 中用 datamodule 统计量重建
+            dummy_mean = torch.zeros(1, num_vars, 1)
+            dummy_std = torch.ones(1, num_vars, 1)
+            dummy_p_mean = torch.zeros(1, param_dim)
+            dummy_p_std = torch.ones(1, param_dim)
+            self.criterion = loss_class(
+                dummy_mean, dummy_std, dummy_p_mean, dummy_p_std,
+                t_max=210.0, lambda_phys=lambda_phys, lambda_jump=lambda_jump,
+                event_window=event_window, event_tol=event_tol,
+                jump_ratio=jump_ratio, residual_subsample=residual_subsample,
+                event_weight=event_weight,
+            )
         else:
             self.criterion = None
 
@@ -94,13 +116,32 @@ class YeastLitModule(pl.LightningModule):
     def on_train_start(self):
         if self.trainer.datamodule is not None:
             dm = self.trainer.datamodule
-            if self.criterion is None:
-                loss_type = self.hparams.loss_type
-                loss_class = LOSS_REGISTRY[loss_type]
+            loss_type = self.hparams.loss_type
+            loss_class = LOSS_REGISTRY[loss_type]
+            if loss_type == 'pinn_residual':
+                # 用 datamodule 真实统计量重建（替换 __init__ 中的占位实例）
                 self.criterion = loss_class(
                     dm.mean_y.to(self.device),
                     dm.std_y.to(self.device),
+                    dm.p_mean.to(self.device),
+                    dm.p_std.to(self.device),
+                    t_max=float(dm.t_max),
+                    lambda_phys=self.hparams.lambda_phys,
+                    lambda_jump=self.hparams.lambda_jump,
+                    event_window=self.hparams.event_window,
+                    event_tol=self.hparams.event_tol,
+                    jump_ratio=self.hparams.jump_ratio,
+                    residual_subsample=self.hparams.residual_subsample,
+                    event_weight=self.hparams.event_weight,
                 )
+            elif self.criterion is None:
+                if loss_type in ('mse_only', 'mse_smooth'):
+                    self.criterion = loss_class()
+                else:
+                    self.criterion = loss_class(
+                        dm.mean_y.to(self.device),
+                        dm.std_y.to(self.device),
+                    )
 
     def forward_ic_time(self, x, p):
         if self.hparams.model_name == 'ultimate_fno':
@@ -117,7 +158,15 @@ class YeastLitModule(pl.LightningModule):
 
         out_full = self.forward_ic_time(x, p)
 
-        loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
+        if self.hparams.loss_type == 'pinn_residual':
+            # PINN 残差损失需要归一化参数向量 p
+            loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
+            # 记录分量损失
+            if hasattr(self.criterion, '_last_loss_components'):
+                for k, v in self.criterion._last_loss_components.items():
+                    self.log(f'train_{k}', v, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        else:
+            loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
 
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
