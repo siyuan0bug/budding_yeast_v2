@@ -138,6 +138,13 @@ def main():
                         help='PINN: 残差计算时间步子采样率（1=全部，2=隔步，降低计算量）')
     parser.add_argument('--event_weight', type=float, default=0.1,
                         help='PINN: event 区间残差权重（软掩码，0=完全屏蔽，1=不屏蔽）')
+    parser.add_argument('--lambda_penalty', type=float, default=1.0,
+                        help='PINN v2: 负值惩罚权重（v1=10.0, v2=1.0）')
+
+    # 自回归滚动选项
+    parser.add_argument('--rollout_type', type=str, default='one_time',
+                        choices=['one_time', 'autoregressive'],
+                        help='预测方式: one_time=一次性预测(默认), autoregressive=自回归滚动')
     
     # 训练配置
     parser.add_argument('--num_workers', type=int, default=4)
@@ -157,12 +164,12 @@ def main():
                                "us/is/random=标准池化AL; rgs=Real-Guided局部密集采样; "
                                "pial=Physics-Informed AL (ODE残差+轨迹多样性)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
-    parser.add_argument('--al_num_add', type=int, default=5000, help="每轮 AL 新增样本数")
-    parser.add_argument('--al_perturbation', type=float, default=0.1, help="RGS专用: 连续参数局部扰动幅度 (0.1=±10%%)")
+    parser.add_argument('--al_num_add', type=int, default=500, help="每轮 AL 新增样本数 (减小以避免引入噪声)")
+    parser.add_argument('--al_perturbation', type=float, default=0.05, help="RGS专用: 连续参数局部扰动幅度 (0.05=±5%%, 减小以提升参数合理性)")
     parser.add_argument('--al_mae_threshold', type=float, default=0.1, help="RGS专用: MAE大于此阈值的Real Mutant优先密集采样")
     # 标准池化 AL 专属参数
-    parser.add_argument('--al_initial_train_size', type=int, default=5000,
-                        help="标准AL初始训练集大小 (仅us/is/random策略生效, 默认5000)")
+    parser.add_argument('--al_initial_train_size', type=int, default=2000,
+                        help="标准AL初始训练集大小 (仅us/is/random策略生效, 默认2000, 减小以让AL有更大发挥空间)")
     parser.add_argument('--al_initial_selection', type=str, default='kmeans',
                         choices=['kmeans', 'random'],
                         help="标准AL初始训练集选择方法 (kmeans=聚类多样性, random=随机)")
@@ -198,11 +205,13 @@ def main():
         ode_atol=args.ode_atol,
         lambda_phys=args.lambda_phys,
         lambda_jump=args.lambda_jump,
+        lambda_penalty=args.lambda_penalty,
         event_window=args.event_window,
         event_tol=args.event_tol,
         jump_ratio=args.jump_ratio,
         residual_subsample=args.residual_subsample,
         event_weight=args.event_weight,
+        rollout_type=args.rollout_type,
     )
 
     datamodule = YeastDataModule(

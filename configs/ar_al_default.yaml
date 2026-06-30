@@ -1,0 +1,68 @@
+# ==============================================================
+# AR+AL 默认配置文件
+# 参考 AL4PDE (2dcfd.yaml + 2d_ns_rand.yaml) 适配出芽酵母数据集
+# ==============================================================
+
+# --- 模型参数 ---
+# name 可选: hyper_fno / unet1d / fno1d
+#   hyper_fno: modes/width/n_layers/d_lambda 生效
+#   unet1d:    hidden_channels(=width)/ch_mults/n_blocks 生效
+#   fno1d:     modes/width 生效
+model:
+  name: hyper_fno
+  num_vars: 39
+  param_dim: 141
+  modes: 32
+  width: 32
+  n_layers: 4
+  d_lambda: 32
+  predict_delta: true         # 残差预测模式 (参考 AL4PDE arena_wrapper)
+  difference_weight: 0.3      # 残差缩放系数: next = state + weight * delta
+
+# --- AR 训练参数 ---
+training:
+  num_train_steps: 2          # AR 展开步数 (训练时切片长度 = K+1 = 3)
+  training_type: teacher_forcing_schedule  # autoregressive / teacher_forcing_schedule / full_teacher_forcing
+  noise: 0.0                  # 噪声强度 (先关闭, 调通后按 AL4PDE 逐步加回 0.001~0.1)
+  noise_mode: channel_std_rel # 按通道标准差比例加噪 (参考 AL4PDE)
+  batch_size: 64              # 训练 batch size
+  lr: 2.0e-4                  # 初始学习率 (对齐 Lightning 路径, AL4PDE arena 用 3e-3 但其模型不同)
+  weight_decay: 1.0e-4
+  num_epochs: 500             # 每轮 AL 的训练 epoch 数
+  warmup_epochs: 10           # Cosine+Warmup 预热轮数
+  val_period: 20              # 每隔多少 epoch 验证一次
+  vis_period: 100             # 每隔多少 epoch 画图一次
+  max_grad_norm: 1.0          # 梯度裁剪阈值 (al4pde 自适应通常 1-10, 50 过松导致梯度爆炸)
+
+# --- 主动学习参数 ---
+active_learning:
+  num_al_iter: 5              # AL 大循环次数
+  acquisition: lcmd           # 采样策略: random / lcmd / max_dist / bait / kmeans++
+  pool_size: 10000            # Pool-based 策略的池大小 (random 策略忽略)
+  data_schedule: exponential  # 数据调度: exponential / linear
+  first_batch_num: 8          # 首轮 batch 数 (指数调度: 8 * 2^iter)
+  sim_batch_size: 16          # 每 batch ODE 模拟样本数
+  # 特征选择参数 (acquisition: lcmd/max_dist/bait/kmeans++ 时生效)
+  num_rollout_steps: 20       # 特征提取 rollout 步数 (非完整499步, 20步足够区分轨迹形态)
+  pred_batch_size: 1024       # pool 推理 batch size (pool约120万, 调大省时)
+  sel_with_train: true        # 距离度量纳入训练集参考 (al4pde LCMD 默认)
+  sketch_dim: 512             # 随机投影降维维度 (加速距离计算)
+
+# --- 数据参数 ---
+data:
+  num_vars: 39
+  param_dim: 141
+  t_steps: 500                # 时间步总数
+  t_max: 210.0                # 物理总时长 (min)
+  reduced_resolution_t: 1     # 时间降采样率 (1 = 不降采样)
+
+# --- Wandb ---
+wandb:
+  project: budding_yeast_v2_ar_al
+  group: ar_al
+  name: null                  # null = 自动命名
+
+# --- 其他 ---
+seed: 42
+save_dir: ./train_result_ar
+eval_dir: ./eval_result_ar

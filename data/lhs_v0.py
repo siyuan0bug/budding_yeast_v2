@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 # ==========================================
 SIM_TF = int(os.environ.get("SIM_TF", 210))       
 SIM_STEPS = int(os.environ.get("SIM_STEPS", 500)) 
-NUM_LHS_SAMPLES = 50000  # 全局盲抽样本数
+NUM_LHS_SAMPLES = 80000  # 全局盲抽样本数
 SIM_TIMEOUT = 5.0 
 
 DATASET_NAME = f"lhs_blind_{SIM_TF}min_{SIM_STEPS}steps_dual_labels.npz"
@@ -475,8 +475,11 @@ def build_discrete_pools(mutants_dict):
     return single_pools, list(cdh1_pairs), list(bub2_pairs)
 
 
+# ==========================================
+# 4. 【核心重构】生物锁死 + 先验概率盲抽引擎 (终极防撞平滑版)
+# ==========================================
 def generate_lhs_tasks(num_lhs_samples):
-    """融合了 v1 离散物理保护与 v0 概率稀疏掩码的全新全局盲抽引擎"""
+    """融合了限制突变数量、克隆拦截、内部去重以及高斯微扰涂抹的终极 V0 盲抽引擎"""
     defaults = get_default_params()
     defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False, 'ESP1T': 1.0})
     
@@ -486,7 +489,29 @@ def generate_lhs_tasks(num_lhs_samples):
     target_params = sorted(list(defaults.keys()))
     dim = len(target_params)
     
-    # 1. 扫描整个突变体字典，统计频次和连续变量的历史极值
+    # ---------------------------------------------------------
+    # 🌟 修复 3 & 1 准备：计算最大突变数，建立真实指纹库
+    # ---------------------------------------------------------
+    max_real_mut_count = 1
+    real_fingerprints = [] 
+    
+    for rules in mutant_rules.values():
+        if not rules: 
+            continue
+        # 统计当前真实突变体的突变参数数量 (排除掉纯逻辑标志)
+        mut_count = len([k for k in rules.keys() if k != 'is_mutant_104'])
+        if mut_count > max_real_mut_count:
+            max_real_mut_count = mut_count
+            
+        # 建立 39 维完整参数指纹，供后续 np.isclose 精确比对
+        fp = {k: rules.get(k, defaults.get(k, 0.0)) for k in target_params}
+        real_fingerprints.append(fp)
+
+    print(f"🛡️ 开启限制：LHS 盲抽样本单体最大突变参数个数将被死锁在 -> {max_real_mut_count} 个")
+
+    # ---------------------------------------------------------
+    # 统计频次，推导概率与极值边界
+    # ---------------------------------------------------------
     mutation_counts = {key: 0 for key in target_params}
     historical_c_values = {key: [] for key in target_params}
     
@@ -500,13 +525,12 @@ def generate_lhs_tasks(num_lhs_samples):
     p_mutate = {}
     c_bounds = {}
     
-    # 2. 🌟 采纳用户的天才建议：计算概率分布，未突变过的参数设为 0
     for key in target_params:
         count = mutation_counts[key]
         if count == 0:
-            p_mutate[key] = 0.0  # 绝对的生物学背景锁定！
+            p_mutate[key] = 0.0  # 绝对的生物学底层常数锁定！
         else:
-            p_mutate[key] = 0.2 + 0.6 * (count / max_count)
+            p_mutate[key] = 0.35 + 0.5 * (count / max_count)
             
         # 预先推导连续变量的动态极值边界
         if key not in DISCRETE_STRICT_PARAMS and count > 0:
@@ -517,27 +541,61 @@ def generate_lhs_tasks(num_lhs_samples):
             if u_bound <= l_bound:
                 u_bound = l_bound + 0.01
             c_bounds[key] = (l_bound, u_bound)
-            
-    # 3. 准备 LHS 矩阵和概率掩码阵列
+
+    # ---------------------------------------------------------
+    # 开始高维稀疏抽样与装配
+    # ---------------------------------------------------------
     sampler = qmc.LatinHypercube(d=dim, seed=2026)
-    sample_unit = sampler.random(n=num_lhs_samples)
-    mask_unit = np.random.rand(num_lhs_samples, dim)
-    
     lhs_tasks_dict = {}
+    seen_lhs_configs = set() # 🌟 修复 2 准备：LHS 内部去重器
     
-    for i in range(num_lhs_samples):
+    valid_samples = 0
+    attempt_count = 0
+    max_attempts = num_lhs_samples * 20 # 设定尝试上限，防止纯离散池耗尽导致无限死循环
+    
+    while valid_samples < num_lhs_samples and attempt_count < max_attempts:
+        # 取模循环使用 LHS 矩阵
+        sample_unit = sampler.random(n=1)[0]
+        mask_unit = np.random.rand(dim)
+        attempt_count += 1
+        
+        # ---------------------------------------------------------
+        # 🌟 修复 3 执行：严格压制基因崩溃 (限制突变数量上限)
+        # ---------------------------------------------------------
+        triggered_params = [key for j, key in enumerate(target_params) if mask_unit[j] <= p_mutate.get(key, 0.0)]
+        
+        # 如果摇中的突变参数超过了真实 Mutant 的历史极限，随机剔除多余的！
+        if len(triggered_params) > max_real_mut_count:
+            np.random.shuffle(triggered_params)
+            triggered_params = triggered_params[:max_real_mut_count]
+        triggered_set = set(triggered_params)
+        
+        # 如果一个突变都没摇中 (纯野生型)，直接丢弃重抽
+        if not triggered_set:
+            continue
+
         overrides = {}
         sampled_cdh1, sampled_bub2 = False, False
         
         for j, key in enumerate(target_params):
-            # 🌟 概率稀疏掩码：如果不幸没有摇中突变概率，直接跳过（保持默认 WT）
-            if mask_unit[i, j] > p_mutate[key]:
-                continue
-                
-            # 摇中突变概率，开始进入 v1.1 级别的硬核物理保护分发！
+            
+            # ==========================================
+            # 🌟 缺陷 4 终极修复：高斯微扰涂抹 (Gaussian Micro-Smearing)
+            # ==========================================
+            if key not in triggered_set:
+                if key in DISCRETE_STRICT_PARAMS:
+                    # 离散参数 (如 mdt, CDH1敲除状态) 必须保持绝对精确，不可加噪声
+                    overrides[key] = defaults[key] 
+                else:
+                    # 连续参数原本不发生大突变时，赋予它一个 ±2% 的微小高斯本底噪声！
+                    # 彻底消除数据分布中的 Dirac Delta 尖峰，让深度学习模型平滑拟合
+                    std_dev = abs(defaults[key]) * 0.02
+                    noise_val = np.random.normal(loc=defaults[key], scale=std_dev)
+                    overrides[key] = float(max(0.0, noise_val)) # 浓度不能越过 0 边界
+                continue 
+
+            # 以下为摇中大突变概率的正常执行逻辑
             if key in DISCRETE_STRICT_PARAMS:
-                
-                # 成对锁死盲抽逻辑 (Pair-Locked Blind Masking)
                 if key in ['init_CDH1T', 'init_CDH1']:
                     if not sampled_cdh1:
                         pair = cdh1_pairs[np.random.choice(len(cdh1_pairs))]
@@ -545,7 +603,6 @@ def generate_lhs_tasks(num_lhs_samples):
                             overrides['init_CDH1T'] = pair[0]
                             overrides['init_CDH1'] = pair[1]
                         sampled_cdh1 = True
-                        
                 elif key in ['init_BUB2', 'BUB2_active']:
                     if not sampled_bub2:
                         pair = bub2_pairs[np.random.choice(len(bub2_pairs))]
@@ -553,28 +610,56 @@ def generate_lhs_tasks(num_lhs_samples):
                             overrides['init_BUB2'] = pair[0]
                             overrides['BUB2_active'] = pair[1]
                         sampled_bub2 = True
-                        
-                # 严格单体图鉴盲抽 (含 Bool 保护)
                 else:
                     val = np.random.choice(single_pools[key])
-                    # 处理 numpy bool 写入 JSON/Dict 的小毛病
                     if key == 'is_mutant_104': val = bool(val) 
-                    
                     if not np.isclose(val, defaults[key], rtol=1e-5, atol=1e-7):
                         overrides[key] = val
             else:
-                # 连续参数空间的高维探索
+                # 连续参数的高维 LHS 大幅度探索
                 l_bound, u_bound = c_bounds[key]
-                val = l_bound + sample_unit[i, j] * (u_bound - l_bound)
+                val = l_bound + sample_unit[j] * (u_bound - l_bound)
                 overrides[key] = float(val)
 
-        lhs_tasks_dict[f"LHS_Sample_{i:05d}"] = overrides
+        # ---------------------------------------------------------
+        # 🌟 修复 2 执行：拦截 LHS 内部自我重复 (Self-Collision)
+        # ---------------------------------------------------------
+        # 构建精确到小数点后 5 位的全局指纹 Tuple
+        config_tuple = tuple((k, round(overrides.get(k, defaults[k]), 5)) for k in target_params)
+        if config_tuple in seen_lhs_configs:
+            continue # 发生内部碰撞，舍弃！
+            
+        # ---------------------------------------------------------
+        # 🌟 修复 1 执行：拦截与真实 Mutant 一模一样的克隆体
+        # ---------------------------------------------------------
+        is_clone = False
+        for real_fp in real_fingerprints:
+            identical = True
+            for k in target_params:
+                current_val = overrides.get(k, defaults[k])
+                if not np.isclose(current_val, real_fp[k], rtol=1e-5, atol=1e-8):
+                    identical = False
+                    break 
+            if identical:
+                is_clone = True
+                break
+                
+        if is_clone:
+            continue # 发现本体克隆，无情舍弃！
+
+        # 全部考核通过，正式装入字典！
+        seen_lhs_configs.add(config_tuple)
+        lhs_tasks_dict[f"LHS_Sample_{valid_samples:05d}"] = overrides
+        valid_samples += 1
         
+        if valid_samples % 5000 == 0:
+             print(f"  └─ 盲抽进度: 已生成 {valid_samples} 个高维稀疏样本 (抛弃死锁/重复尝试 {attempt_count - valid_samples} 次)")
+
     print("\n" + "="*50)
-    print("📊 [重构版探索者引擎] 概率稀疏与生物图鉴锁定完成")
-    print(f"🔹 纳入采样参数: {dim} 个")
-    print(f"🔹 未知常数背景已冻结 (Mutation Prob = 0.0)")
-    print(f"🔹 离散与成对质量守恒已受历史图鉴保护")
+    print("📊 [终极版探索者引擎] 概率稀疏、生物图鉴与高斯涂抹完成")
+    print(f"🔹 限制上限: 单体最大突变参数 {max_real_mut_count} 个")
+    print(f"🔹 冲突拦截: 内部防撞与真实克隆体拦截已全面生效")
+    print(f"🔹 分布平滑: 非大突变的连续参数已施加 ±2% 细胞本底高斯微扰")
     print("="*50 + "\n")
     
     return lhs_tasks_dict

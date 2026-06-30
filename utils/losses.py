@@ -112,38 +112,41 @@ class DilatedSobolevLoss(nn.Module):
 
 class PINNResidualLoss(nn.Module):
     """
-    PINN 残差损失：ODE 物理约束 + Event 跳跃条件。
+    PINN 残差损失 v2：ODE 物理约束 + Event 跳跃条件。
+
+    v2 修复（v1 全面差于 mse_only，RelL2 0.234 vs 0.128）：
+    1. Event 掩码用**真值**检测（v1 用预测，早期掩码错误导致梯度爆炸）
+    2. 负值惩罚权重降低（v1 默认 10.0，压制 MSE 主任务）
+    3. 跳跃条件用**真值方向**约束（v1 假设 event 类型，约束失效）
+    4. Curriculum learning：早期纯 MSE，后期逐步加入物理约束
 
     损失组成：
-        L_total = L_data(MSE) + λ_phys · L_residual(ODE残差) + λ_jump · L_jump(跳跃条件)
-                  + λ_pen · L_neg(负值惩罚)
+        L_total = L_data(MSE) + λ_pen · L_neg + λ_phys · L_residual + λ_jump · L_jump
 
     核心思想（PINN）：
         模型预测 û(t) 代入 ODE 方程 du/dt = f(u,p) 后，残差 r(t)=dû/dt-f(û,p) 应接近 0。
-        在 event 突变点用掩码屏蔽残差，改用跳跃条件约束。
-
-    Event 处理（掩码 + 跳跃条件）：
-        - 连续区间：L_residual = mean(|| dû/dt - f(û,p) ||²)  (应用时间掩码)
-        - Event 点：L_jump = mean(|| û(t⁺) - T_event(û(t⁻)) ||²)  (跳跃条件)
+        在 event 突变点用**真值掩码**屏蔽残差，改用真值方向的跳跃条件约束。
     """
 
     def __init__(self, mean_y, std_y, p_mean, p_std, t_max=210.0,
-                 lambda_phys=0.1, lambda_jump=1.0, lambda_penalty=10.0,
+                 lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
-                 residual_subsample=1, event_weight=0.1):
+                 residual_subsample=1, event_weight=0.1,
+                 warmup_epochs=30):
         """
         Args:
             mean_y, std_y: (1, 39, 1) 状态变量归一化统计量
             p_mean, p_std: (1, 141) 参数归一化统计量
             t_max: 物理时间上限（分钟），用于计算 dt
-            lambda_phys: ODE 残差损失权重
-            lambda_jump: 跳跃条件损失权重
-            lambda_penalty: 负值惩罚权重
+            lambda_phys: ODE 残差损失权重（v2 默认 0.01，弱正则）
+            lambda_jump: 跳跃条件损失权重（v2 默认 0.001，弱正则）
+            lambda_penalty: 负值惩罚权重（v2 默认 1.0，v1 为 10.0）
             event_window: event 掩码窗口半径
             event_tol: 事件触发条件容差
             jump_ratio: 跳变检测阈值
-            residual_subsample: 残差计算的时间步子采样率（降低计算量，1=全部）
-            event_weight: event 区间的残差权重（软掩码，0=完全屏蔽，1=不屏蔽）
+            residual_subsample: 残差计算的时间步子采样率
+            event_weight: event 区间的残差权重（软掩码）
+            warmup_epochs: 物理约束 warmup 轮数（前 N 轮纯 MSE）
         """
         super().__init__()
         self.register_buffer('mean_y', mean_y.reshape(1, -1, 1))
@@ -161,8 +164,14 @@ class PINNResidualLoss(nn.Module):
         self.jump_ratio = jump_ratio
         self.residual_subsample = residual_subsample
         self.event_weight = event_weight
+        self.warmup_epochs = warmup_epochs
+        self._current_epoch = 0
 
         self.mse = nn.MSELoss(reduction='none')
+
+    def set_epoch(self, epoch):
+        """设置当前 epoch，用于 curriculum learning"""
+        self._current_epoch = epoch
 
     def _denormalize_y(self, y_norm):
         """反归一化状态变量到真实空间"""
@@ -172,48 +181,54 @@ class PINNResidualLoss(nn.Module):
         """反归一化参数到真实空间，并构建参数字典"""
         p_real = p_norm * self.p_std + self.p_mean  # (B, 141)
         extra = {'is_mutant_104': torch.zeros(p_real.shape[0], device=p_real.device)}
-        # Vi20_active, BUB2_active, init_BUB2 需要从参数向量中取（它们在 PARAM_KEYS 中）
         p_dict = params_tensor_to_dict(p_real, extra)
         return p_dict
 
+    def _get_physics_weight(self):
+        """
+        Curriculum learning: 物理约束权重调度。
+        前 warmup_epochs 轮纯 MSE，之后线性增长到目标权重。
+        """
+        if self._current_epoch < self.warmup_epochs:
+            return 0.0, 0.0
+        progress = min(1.0, (self._current_epoch - self.warmup_epochs) / 30.0)
+        return self.lambda_phys * progress, self.lambda_jump * progress
+
     def _compute_ode_residual_loss(self, pred_real, p_dict, mask):
         """
-        计算 ODE 残差损失（带 event 软掩码）。
+        计算 ODE 残差损失（带 event 软掩码，归一化到与 MSE 可比量级）。
 
-        策略：在连续区间使用完整权重，在 event 区间使用降低的权重（event_weight）。
-        向量化实现：将 (B, T, 39) reshape 为 (B*T, 39) 一次调用 eqns_torch，消除 for 循环。
+        策略：
+        1. 在真实空间计算残差 r = dû/dt - f(û, p)
+        2. 将残差归一化到归一化空间：r_norm = r / std_y
+        3. 连续区间权重=1.0，event 区间权重=event_weight
 
         Args:
             pred_real: (B, 39, T) 真实空间预测轨迹
             p_dict: 参数字典
-            mask: (B, T) 事件掩码，True=连续区间
+            mask: (B, T) 事件掩码（基于真值检测），True=连续区间
 
         Returns:
-            loss_residual: 标量，软掩码后的 ODE 残差损失
+            loss_residual: 标量，归一化后的软掩码 ODE 残差损失
         """
         B, V, T = pred_real.shape
         dt = self.t_max / (T - 1)
 
-        # 中心差分计算 dû/dt
+        # 中心差分计算 dû/dt（真实空间）
         du_dt = torch.zeros_like(pred_real)
         du_dt[:, :, 1:-1] = (pred_real[:, :, 2:] - pred_real[:, :, :-2]) / (2 * dt)
         du_dt[:, :, 0] = (pred_real[:, :, 1] - pred_real[:, :, 0]) / dt
         du_dt[:, :, -1] = (pred_real[:, :, -1] - pred_real[:, :, -2]) / dt
 
-        # 向量化计算 f(u, p)：将 (B, 39, T) -> (B, T, 39) -> (B*T, 39)
-        # eqns_torch 已对 batch 维向量化，只需 reshape 一次调用
+        # 向量化计算 f(u, p)
         f_u = torch.zeros_like(pred_real)
         t_indices = list(range(0, T, self.residual_subsample))
         t_grid = torch.linspace(0, self.t_max, T, device=pred_real.device)
 
-        # 收集所有需要计算的时间步，批量调用 eqns_torch
-        # pred_real: (B, 39, T) -> 选取 t_indices -> (B, 39, len(t_indices))
-        # -> transpose -> (B, len(t_indices), 39) -> reshape -> (B*len(t_indices), 39)
         n_t = len(t_indices)
         y_all = pred_real[:, :, t_indices]  # (B, 39, n_t)
         y_all = y_all.transpose(1, 2).reshape(B * n_t, V)  # (B*n_t, 39)
 
-        # 参数字典扩展：每个 (B,) -> (B*n_t,)
         p_dict_expanded = {}
         for k, v in p_dict.items():
             if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == B:
@@ -221,87 +236,66 @@ class PINNResidualLoss(nn.Module):
             else:
                 p_dict_expanded[k] = v
 
-        # 时间扩展
         t_all = t_grid[t_indices].unsqueeze(0).expand(B, n_t).reshape(B * n_t)
-
-        # 一次调用计算所有时间步的 ODE 右端项
         f_all = eqns_torch(y_all, p_dict_expanded, t_all)  # (B*n_t, 39)
-
-        # 填回 f_u: (B*n_t, 39) -> (B, n_t, 39) -> (B, 39, n_t)
         f_u[:, :, t_indices] = f_all.reshape(B, n_t, V).transpose(1, 2)
 
-        # 残差
+        # 残差（真实空间）归一化到归一化空间
         residual = du_dt - f_u  # (B, 39, T)
-        residual_sq = residual ** 2  # (B, 39, T)
+        residual_norm = residual / self.std_y  # (B, 39, T)
+        residual_sq = residual_norm ** 2
 
         # 软掩码：连续区间权重=1.0，event 区间权重=event_weight
         weight = torch.ones_like(mask, dtype=pred_real.dtype, device=pred_real.device)
         weight[~mask] = self.event_weight
         weight = weight.unsqueeze(1).expand_as(residual_sq)  # (B, 39, T)
 
-        # 子采样：只在计算了 f_u 的时间步上计算残差
+        # 子采样掩码
         subsample_mask = torch.zeros(T, dtype=torch.bool, device=pred_real.device)
         subsample_mask[t_indices] = True
         weight = weight * subsample_mask.unsqueeze(0).unsqueeze(0).float()
 
-        # 加权平均
         loss_residual = (residual_sq * weight).sum() / (weight.sum() + 1e-8)
-
         return loss_residual
 
-    def _compute_jump_loss(self, pred_real, p_dict, mask):
+    def _compute_jump_loss(self, pred_real, target_real, mask):
         """
-        计算跳跃条件损失：约束 event 区间内的状态变化方向。
+        计算跳跃条件损失 v2：用**真值方向**约束预测。
 
-        策略：在 event 区间（mask=False）内的所有相邻点对上，约束关键变量的
-        变化方向符合 event 重置规则。由于无法精确判断 event 类型，对所有 event
-        规则的方向约束取最小值（即至少有一种规则被满足）。
-
-        具体约束（基于 event 重置规则的物理意义）：
-        - event1 (分裂): BUD/SPN 应下降 → relu(d_bud), relu(d_spn) 应为 0
-        - event2 (S期退出): ORI 应下降 → relu(d_ori) 应为 0
-        - event3 (DNA复制): Vi20/BUB2 应上升 → relu(-d_vi20), relu(-d_bub2) 应为 0
-        - event4 (纺锤体通过): Vi20 应下降, lte1 应上升 → relu(d_vi20), relu(-d_lte1) 应为 0
+        v2 改进（v1 假设 event 类型取最小违反量，约束失效）：
+        - 在 event 区间，用真值的变化方向约束预测的变化方向
+        - 如果真值下降，预测不应上升；如果真值上升，预测不应下降
+        - 损失 = relu(预测变化 × (-真值变化方向))²
 
         Args:
             pred_real: (B, 39, T) 真实空间预测轨迹
-            p_dict: 参数字典（值为 (B,) 张量）
-            mask: (B, T) 事件掩码，True=连续区间，False=event 区间
+            target_real: (B, 39, T) 真实空间真值轨迹
+            mask: (B, T) 事件掩码（基于真值检测），True=连续区间
 
         Returns:
             loss_jump: 标量，方向约束损失
         """
         B, V, T = pred_real.shape
 
-        # 计算所有相邻点对的变化
-        d = pred_real[:, :, 1:] - pred_real[:, :, :-1]  # (B, 39, T-1)
+        # 计算相邻点变化（归一化空间）
+        d_pred = (pred_real[:, :, 1:] - pred_real[:, :, :-1]) / self.std_y  # (B, 39, T-1)
+        d_target = (target_real[:, :, 1:] - target_real[:, :, :-1]) / self.std_y  # (B, 39, T-1)
 
-        d_bud = d[:, 34]   # (B, T-1)
-        d_spn = d[:, 35]
-        d_ori = d[:, 33]
-        d_vi20 = d[:, 36]
-        d_lte1 = d[:, 37]
-        d_bub2 = d[:, 38]
+        # 真值方向符号：+1 上升, -1 下降, 0 平稳
+        target_dir = torch.sign(d_target)  # (B, 39, T-1)
 
-        # 各 event 的方向违反量
-        viol_e1 = torch.relu(d_bud) + torch.relu(d_spn)  # BUD/SPN 不应上升
-        viol_e2 = torch.relu(d_ori)  # ORI 不应上升
-        viol_e3 = torch.relu(-d_vi20) + torch.relu(-d_bub2)  # Vi20/BUB2 不应下降
-        viol_e4 = torch.relu(d_vi20) + torch.relu(-d_lte1)  # Vi20 不应上升, lte1 不应下降
+        # 方向违反：预测变化与真值方向相反
+        # 如果真值下降 (dir=-1)，预测不应上升 → viol = relu(d_pred)
+        # 如果真值上升 (dir=+1)，预测不应下降 → viol = relu(-d_pred)
+        viol = torch.relu(-target_dir * d_pred)  # (B, 39, T-1)
+        viol_sq = viol ** 2
 
-        # 取最小违反量（最可能匹配的 event 类型）
-        all_viols = torch.stack([viol_e1, viol_e2, viol_e3, viol_e4], dim=-1)  # (B, T-1, 4)
-        min_viol = all_viols.min(dim=-1)[0]  # (B, T-1)
-        min_viol_sq = min_viol ** 2  # (B, T-1)
-
-        # 在 event 区间内应用约束（mask=False 的区间）
-        # mask 是 (B, T)，需要对应到 (B, T-1) 的相邻点对
-        # 一个相邻点对 (t, t+1) 属于 event 区间，如果 mask[t] 或 mask[t+1] 为 False
+        # 在 event 区间内应用约束
         event_mask = (~mask[:, :-1]) | (~mask[:, 1:])  # (B, T-1)
+        weight = event_mask.unsqueeze(1).expand_as(viol_sq).float()  # (B, 39, T-1)
 
-        if event_mask.any():
-            masked_viol = min_viol_sq[event_mask]
-            loss_jump = masked_viol.mean()
+        if weight.sum() > 0:
+            loss_jump = (viol_sq * weight).sum() / (weight.sum() + 1e-8)
         else:
             loss_jump = torch.tensor(0.0, device=pred_real.device)
 
@@ -310,7 +304,7 @@ class PINNResidualLoss(nn.Module):
     def forward(self, pred_norm, target_norm, p_norm, batch_weights,
                 lambda_penalty=None, lambda_smooth=None):
         """
-        PINN 损失前向传播。
+        PINN 损失 v2 前向传播。
 
         Args:
             pred_norm: (B, 39, T) 归一化预测轨迹
@@ -325,40 +319,48 @@ class PINNResidualLoss(nn.Module):
         """
         lam_pen = lambda_penalty if lambda_penalty is not None else self.lambda_penalty
 
-        # 1. 数据损失 (MSE)
+        # 1. 数据损失 (MSE) —— 始终是主任务
         loss_mse = self.mse(pred_norm, target_norm).mean(dim=(1, 2))  # (B,)
 
-        # 2. 负值惩罚
+        # 2. 负值惩罚（v2 权重降低到 1.0）
         negative_penalty = (torch.relu(self.bound_norm - pred_norm) ** 2).mean(dim=(1, 2))  # (B,)
 
-        # 3. 反归一化到真实空间
-        pred_real = self._denormalize_y(pred_norm)
-        p_dict = self._denormalize_p(p_norm)
+        # 基础损失 = MSE + 负值惩罚
+        base_loss = (loss_mse + lam_pen * negative_penalty) * batch_weights
+        total_loss = base_loss.mean()
 
-        # 4. 检测 event 掩码
-        with torch.no_grad():
-            mask = detect_event_mask_torch(
-                pred_real, event_window=self.event_window,
-                event_tol=self.event_tol, jump_ratio=self.jump_ratio
-            )
+        # 3. Curriculum learning: warmup 期纯 MSE，之后逐步加入物理约束
+        lam_phys_eff, lam_jump_eff = self._get_physics_weight()
 
-        # 5. ODE 残差损失（连续区间）
-        loss_residual = self._compute_ode_residual_loss(pred_real, p_dict, mask)
+        if lam_phys_eff > 0 or lam_jump_eff > 0:
+            # 反归一化到真实空间
+            pred_real = self._denormalize_y(pred_norm)
+            target_real = self._denormalize_y(target_norm)
+            p_dict = self._denormalize_p(p_norm)
 
-        # 6. 跳跃条件损失（event 点）
-        loss_jump = self._compute_jump_loss(pred_real, p_dict, mask)
+            # 4. Event 掩码用**真值**检测（v1 用预测，早期掩码错误）
+            with torch.no_grad():
+                mask = detect_event_mask_torch(
+                    target_real, event_window=self.event_window,
+                    event_tol=self.event_tol, jump_ratio=self.jump_ratio
+                )
 
-        # 7. 总损失
-        total_loss = (loss_mse + lam_pen * negative_penalty) * batch_weights
-        total_loss = total_loss.mean()
-        total_loss = total_loss + self.lambda_phys * loss_residual + self.lambda_jump * loss_jump
+            # 5. ODE 残差损失（连续区间）
+            if lam_phys_eff > 0:
+                loss_residual = self._compute_ode_residual_loss(pred_real, p_dict, mask)
+                total_loss = total_loss + lam_phys_eff * loss_residual
 
-        # 记录分量（供 lit_module 日志）
+            # 6. 跳跃条件损失（event 点，用真值方向约束）
+            if lam_jump_eff > 0:
+                loss_jump = self._compute_jump_loss(pred_real, target_real, mask)
+                total_loss = total_loss + lam_jump_eff * loss_jump
+
+        # 记录分量
         self._last_loss_components = {
             'mse': loss_mse.mean().detach(),
-            'residual': loss_residual.detach(),
-            'jump': loss_jump.detach(),
             'neg_pen': negative_penalty.mean().detach(),
+            'phys_weight': torch.tensor(lam_phys_eff),
+            'jump_weight': torch.tensor(lam_jump_eff),
         }
 
         return total_loss

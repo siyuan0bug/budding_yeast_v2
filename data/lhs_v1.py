@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore") # 忽略 ODE 求解中常见的除零或精度
 # ==========================================
 SIM_TF = int(os.environ.get("SIM_TF", 210))       # 模拟总时长 (min)
 SIM_STEPS = int(os.environ.get("SIM_STEPS", 500)) # 采样总步数
-NUM_LHS_SAMPLES = 500  # LHS 采样数量
+NUM_LHS_SAMPLES = 10000  # LHS 采样数量
 SIM_TIMEOUT = 5.0 # 单个细胞求解超时阈值 (秒)
 
 DATASET_NAME = f"lhs_cheat_{SIM_TF}min_{SIM_STEPS}steps_dual_labels.npz"

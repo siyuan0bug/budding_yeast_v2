@@ -13,6 +13,9 @@ from .components.lno_cross import NIPSYeastLNO
 from .components.hyper_fno import HyperFNO
 from .components.hp_fno import hpYeastFNO
 from .components.neural_ode import NeuralODEModel
+from .components.patchtst import PatchTST
+from .components.unet1d_adapter import Unet1DAdapter
+from .components.fno1d_adapter import FNO1DAdapter
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 
@@ -26,6 +29,9 @@ MODEL_REGISTRY = {
     'hyper_fno': HyperFNO,
     'hp_fno': hpYeastFNO,
     'neural_ode': NeuralODEModel,
+    'patchtst': PatchTST,
+    'unet1d': Unet1DAdapter,
+    'fno1d': FNO1DAdapter,
 }
 
 
@@ -53,11 +59,14 @@ class YeastLitModule(pl.LightningModule):
         # PINN 残差损失相关超参数
         lambda_phys=0.1,
         lambda_jump=1.0,
+        lambda_penalty=1.0,
         event_window=4,
         event_tol=0.08,
         jump_ratio=0.3,
         residual_subsample=1,
         event_weight=0.1,
+        # 自回归滚动选项
+        rollout_type='one_time',  # 'one_time' (默认, 一次性预测) 或 'autoregressive' (自回归滚动)
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -85,6 +94,17 @@ class YeastLitModule(pl.LightningModule):
         elif model_name == 'neural_ode':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, hidden_dim=width,
                                     method=ode_method, rtol=ode_rtol, atol=ode_atol)
+        elif model_name == 'patchtst':
+            # PatchTST (ICLR 2023): 通道独立 + Patching + Transformer, 适合自回归滚动
+            # modes 参数在此用作兼容接口（未使用），width 用作 d_model
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
+                                    width=width, n_blocks=n_blocks)
+        elif model_name == 'unet1d':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    hidden_channels=width, n_blocks=n_blocks)
+        elif model_name == 'fno1d':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    modes=modes, width=width)
 
         loss_class = LOSS_REGISTRY[loss_type]
         if loss_type == 'mse_only':
@@ -128,6 +148,7 @@ class YeastLitModule(pl.LightningModule):
                     t_max=float(dm.t_max),
                     lambda_phys=self.hparams.lambda_phys,
                     lambda_jump=self.hparams.lambda_jump,
+                    lambda_penalty=self.hparams.lambda_penalty,
                     event_window=self.hparams.event_window,
                     event_tol=self.hparams.event_tol,
                     jump_ratio=self.hparams.jump_ratio,
@@ -144,10 +165,68 @@ class YeastLitModule(pl.LightningModule):
                     )
 
     def forward_ic_time(self, x, p):
+        """
+        前向传播，根据 rollout_type 选择一次性预测或自回归滚动。
+
+        Args:
+            x: (B, V, 2, T) 输入张量，dim 2 = [IC, t_grid]
+            p: (B, param_dim) 参数向量
+
+        Returns:
+            (B, V, T) 预测轨迹
+        """
         if self.hparams.model_name == 'ultimate_fno':
+            # ultimate_fno 有特殊的双输入接口，不支持自回归滚动
             return self.model(x[:, :, 0, :], x[:, 0:1, 1, :], p)
+
+        if self.hparams.rollout_type == 'autoregressive':
+            return self._autoregressive_rollout(x, p)
         else:
+            # 默认: 一次性预测（保留原有逻辑）
             return self.model(x, p)
+
+    def _autoregressive_rollout(self, x, p):
+        """
+        自回归滚动预测：将当前步输出反馈为下一步输入，逐步生成完整轨迹。
+
+        核心思想：算子 G 不断把当前步输出当成下一步输入，一步步迭代。
+        为兼容频域算子对序列长度的要求，每次前向传播都使用全尺寸 (B, V, 2, T) 输入，
+        仅提取输出中索引 1（下一步）的结果。
+
+        Args:
+            x: (B, V, 2, T) 输入张量，x[:, :, 0, :] = IC, x[:, :, 1, :] = t_grid
+            p: (B, param_dim) 参数向量
+
+        Returns:
+            trajectory: (B, V, T) 自回归生成的完整轨迹
+        """
+        B, V, _, T = x.shape
+
+        # 初始化轨迹张量，存放最终结果
+        trajectory = torch.zeros(B, V, T, device=x.device, dtype=x.dtype)
+
+        # 第 0 步：使用输入中的初始条件
+        trajectory[:, :, 0] = x[:, :, 0, 0]  # (B, V)
+
+        # 保留原始 t_grid 通道（不修改）
+        t_grid = x[:, :, 1, :]  # (B, V, T)
+
+        # 逐步滚动：从第 0 步预测第 1 步，第 1 步预测第 2 步，...
+        for k in range(T - 1):
+            # 克隆全尺寸临时张量，保持频域算子所需的序列长度
+            temp_input = x.clone()
+            # 将当前步状态广播铺满 IC 通道
+            current_state = trajectory[:, :, k].unsqueeze(-1)  # (B, V, 1)
+            temp_input[:, :, 0, :] = current_state.expand(-1, -1, T)  # (B, V, T)
+            # t_grid 通道保持不变（已在 clone 中保留）
+
+            # 前向传播，得到全尺寸预测
+            out = self.model(temp_input, p)  # (B, V, T)
+
+            # 仅提取下一步（索引 1）的结果，存入轨迹的 k+1 位置
+            trajectory[:, :, k + 1] = out[:, :, 1]
+
+        return trajectory
 
     def training_step(self, batch, batch_idx):
         x, p, y = batch
@@ -159,8 +238,12 @@ class YeastLitModule(pl.LightningModule):
         out_full = self.forward_ic_time(x, p)
 
         if self.hparams.loss_type == 'pinn_residual':
-            # PINN 残差损失需要归一化参数向量 p
+            # Curriculum learning 由 loss 类内部管理（set_epoch + _get_physics_weight）
+            # v2: warmup_epochs=30（前30轮纯MSE），之后30轮线性增长到目标权重
+            self.criterion.set_epoch(self.current_epoch)
+
             loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
+
             # 记录分量损失
             if hasattr(self.criterion, '_last_loss_components'):
                 for k, v in self.criterion._last_loss_components.items():

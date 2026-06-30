@@ -682,24 +682,27 @@ class ActiveLearningCallback(pl.Callback):
         return np.concatenate(diversity_scores)
 
     # ==================================================================
-    # Physics-Informed Active Learning (PIAL)
-    # 导师要求：用 ODE 残差（非预测误差）+ 轨迹多样性指导 AL
+    # Physics-Informed Active Learning (PIAL) v2
+    # 重写: MC Dropout 不确定性主导 + PCA 轨迹多样性 + ODE 残差辅助
     # ==================================================================
     def _query_physics_informed(self, pl_module, device, pool_indices, dm,
                                  num_to_select, current_epoch):
         """
-        Physics-Informed Active Learning 查询策略。
+        Physics-Informed Active Learning v2 查询策略。
 
-        综合两个信号选取样本：
-        1. **ODE 残差得分** (physics residual)：模型预测轨迹 û(t) 代入 ODE 系统
-           du/dt = f(u, p) 后的残差 r(t) = dû/dt - f(û, p)。
-           残差大 → 模型预测违反物理定律 → 该样本信息量大。
-           **关键：不需要真实标签**，只用模型预测 + 物理方程。
-        2. **轨迹多样性得分** (trajectory diversity)：样本预测轨迹与当前训练集
-           轨迹的最小欧氏距离。在轨迹空间（行为空间）而非参数空间度量多样性。
+        三信号融合选取样本：
+        1. **MC Dropout 不确定性** (主导, α=0.6→0.5)：对参数 p 加微小高斯噪声
+           前向 K 次，计算预测方差。方差大 → 模型对该样本不确定 → 信息量大。
+           **关键：不需要真实标签，不需要 ODE 方程，对所有模型通用。**
+        2. **PCA 轨迹多样性** (次之, β=0.3→0.4)：将轨迹 (39,T) 用 PCA 降到
+           20 维，在低维空间计算到训练集的最小欧氏距离。避免维度灾难。
+        3. **ODE 残差** (辅助, γ=0.1)：模型预测代入 ODE 的残差，仅作弱辅助信号。
 
-        综合 score = α · normalize(residual) + β · normalize(diversity)
-        默认 α=0.6, β=0.4（残差为主，多样性为辅）。
+        综合 score = α · normalize(uncertainty) + β · normalize(diversity)
+                     + γ · normalize(residual)
+
+        动态权重：早期重不确定性（快速降误差），后期重多样性（避免过拟合），
+                  残差始终作弱辅助。
 
         Args:
             pl_module: Lightning 模块
@@ -712,60 +715,123 @@ class ActiveLearningCallback(pl.Callback):
         Returns:
             selected_idx: 选中样本在子集中的局部索引
         """
-        print(f"\n[PIAL] ===== Physics-Informed Active Learning =====")
-        print(f"[PIAL] 池子集大小: {len(pool_indices)} | 选取: {num_to_select}")
+        print(f"\n[PIAL-v2] ===== Physics-Informed Active Learning (v2) =====")
+        print(f"[PIAL-v2] 池子集大小: {len(pool_indices)} | 选取: {num_to_select}")
 
-        # ---- Step 1: 获取模型预测轨迹 (反归一化到真实值空间) ----
-        # ODE eqns 在真实值空间定义，必须反归一化
-        pred_trajectories = self._predict_pool_trajectories(pl_module, device, pool_indices, dm)
-        # pred_trajectories: (N, 39, T) numpy 真实值空间
+        # ---- Step 1: MC Dropout 不确定性 (主导信号) ----
+        uncertainty_scores = self._compute_mc_dropout_uncertainty(
+            pl_module, device, pool_indices, dm)
 
-        # ---- Step 2: 计算 ODE 残差得分 ----
+        # ---- Step 2: PCA 轨迹多样性 (次信号) ----
+        pred_trajectories = self._predict_pool_trajectories(
+            pl_module, device, pool_indices, dm)
+        diversity_scores = self._compute_trajectory_diversity_pca(
+            pred_trajectories, dm)
+
+        # ---- Step 3: ODE 残差 (辅助信号) ----
         residual_scores = self._compute_ode_residual(
             pred_trajectories, pool_indices, dm)
-        # residual_scores: (N,) 每个样本的平均残差范数
-
-        # ---- Step 3: 计算轨迹多样性得分 ----
-        diversity_scores = self._compute_trajectory_diversity(
-            pred_trajectories, dm)
-        # diversity_scores: (N,) 每个样本到训练集的最小轨迹距离
 
         # ---- Step 4: 归一化并综合 ----
         def normalize(arr):
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
             lo, hi = np.min(arr), np.max(arr)
             if hi - lo < 1e-12:
                 return np.zeros_like(arr)
             return (arr - lo) / (hi - lo)
 
-        residual_norm = normalize(residual_scores)
+        uncertainty_norm = normalize(uncertainty_scores)
         diversity_norm = normalize(diversity_scores)
+        residual_norm = normalize(residual_scores)
 
-        # 动态权重：训练早期更重多样性（探索），后期更重残差（利用）
-        # progress ∈ [0, 1]
+        # 动态权重：早期重不确定性，后期重多样性，残差始终辅助
         max_epochs = getattr(pl_module, 'max_epochs', 200)
         progress = min(1.0, current_epoch / max(1, max_epochs))
-        alpha = 0.4 + 0.3 * progress   # 残差权重: 0.4 → 0.7
-        beta = 1.0 - alpha              # 多样性权重: 0.6 → 0.3
+        alpha = 0.6 - 0.1 * progress   # 不确定性: 0.6 → 0.5 (主导)
+        beta = 0.3 + 0.1 * progress    # 多样性: 0.3 → 0.4 (次之)
+        gamma = 0.1                     # 残差: 0.1 (辅助, 始终低权重)
 
-        combined_scores = alpha * residual_norm + beta * diversity_norm
+        combined_scores = (alpha * uncertainty_norm
+                         + beta * diversity_norm
+                         + gamma * residual_norm)
 
-        print(f"[PIAL] 残差得分: min={residual_scores.min():.4f} "
-              f"median={np.median(residual_scores):.4f} "
-              f"max={residual_scores.max():.4f}")
-        print(f"[PIAL] 多样性得分: min={diversity_scores.min():.4f} "
+        print(f"[PIAL-v2] 不确定性: min={uncertainty_scores.min():.4f} "
+              f"median={np.median(uncertainty_scores):.4f} "
+              f"max={uncertainty_scores.max():.4f}")
+        print(f"[PIAL-v2] 多样性(PCA): min={diversity_scores.min():.4f} "
               f"median={np.median(diversity_scores):.4f} "
               f"max={diversity_scores.max():.4f}")
-        print(f"[PIAL] 动态权重: α(残差)={alpha:.3f} β(多样性)={beta:.3f} "
-              f"(epoch={current_epoch}, progress={progress:.2f})")
+        print(f"[PIAL-v2] 残差(辅助): min={residual_scores.min():.4f} "
+              f"median={np.median(residual_scores):.4f} "
+              f"max={residual_scores.max():.4f}")
+        print(f"[PIAL-v2] 权重: α(不确定)={alpha:.3f} β(多样)={beta:.3f} "
+              f"γ(残差)={gamma:.3f} (epoch={current_epoch}, progress={progress:.2f})")
 
         # ---- Step 5: 选取 top-K ----
         num_to_select = min(num_to_select, len(combined_scores))
         selected_idx = np.argsort(combined_scores)[-num_to_select:]
 
-        print(f"[PIAL] 选中 top-{num_to_select} (综合得分阈值: "
+        print(f"[PIAL-v2] 选中 top-{num_to_select} (综合得分阈值: "
               f"{combined_scores[selected_idx].min():.4f})")
 
         return selected_idx
+
+    def _compute_mc_dropout_uncertainty(self, pl_module, device, pool_indices, dm,
+                                         n_mc_samples=10, noise_std=0.02):
+        """
+        MC Dropout 不确定性估计（输入扰动法，对所有模型通用）。
+
+        原理：对同一样本的参数 p 加微小高斯噪声，前向 K 次，计算预测方差。
+        方差大 → 模型对该参数区域敏感 → 不确定性高 → 信息量大。
+
+        与传统 MC Dropout 的区别：
+        - 传统 MC Dropout 需要模型有 Dropout 层且推理时保持开启
+        - 输入扰动法对所有模型通用，等效于贝叶斯神经网络的后验近似
+
+        Args:
+            pl_module: Lightning 模块
+            device: 计算设备
+            pool_indices: 池中样本索引
+            dm: 数据模块
+            n_mc_samples: MC 采样次数 (默认 10)
+            noise_std: 参数扰动标准差 (默认 0.02, 归一化空间)
+
+        Returns:
+            uncertainty_scores: (N,) 每个样本的预测方差均值
+        """
+        pl_module.eval()
+        batch_size = 500
+        all_uncertainties = []
+
+        # 获取参数归一化统计量，确保扰动在归一化空间
+        p_std = dm.p_std.to(device)  # (1, 141)
+
+        with torch.no_grad():
+            for i in range(0, len(pool_indices), batch_size):
+                end_idx = min(i + batch_size, len(pool_indices))
+                batch_indices = pool_indices[i:end_idx]
+
+                X_batch = self._pool_X[batch_indices].to(device)
+                P_batch = self._pool_P[batch_indices].to(device)  # (B, 141)
+                B = P_batch.shape[0]
+
+                # MC 采样: 对参数加噪声前向 K 次
+                preds_list = []
+                for _ in range(n_mc_samples):
+                    # 在归一化参数空间加高斯噪声
+                    noise = torch.randn_like(P_batch) * noise_std
+                    P_perturbed = P_batch + noise
+                    preds = pl_module.forward_ic_time(X_batch, P_perturbed)  # (B, 39, T)
+                    preds_list.append(preds)
+
+                # 计算预测方差: 沿 MC 采样维度求方差，再对变量和时间取平均
+                preds_stack = torch.stack(preds_list, dim=0)  # (K, B, 39, T)
+                variance = torch.var(preds_stack, dim=0)      # (B, 39, T)
+                uncertainty = variance.mean(dim=(1, 2))        # (B,)
+                all_uncertainties.append(uncertainty.cpu().numpy())
+
+        pl_module.train()
+        return np.concatenate(all_uncertainties)
 
     def _predict_pool_trajectories(self, pl_module, device, pool_indices, dm):
         """
@@ -869,6 +935,9 @@ class ActiveLearningCallback(pl.Callback):
             # ---- Step 5: 残差 r(t) = dû/dt - f(u, p)，仅在掩码区间计算 ----
             residual = du_dt - f_u  # (39, T)
 
+            # 防御性处理: 早期模型预测可能产生 inf/nan, 用 nan_to_num 替换为有限值
+            residual = np.nan_to_num(residual, nan=0.0, posinf=1e6, neginf=-1e6)
+
             # 应用掩码：只在连续区间（mask=True）的时间步计算残差
             valid_count = mask.sum()
             if valid_count < T * 0.1:
@@ -879,6 +948,9 @@ class ActiveLearningCallback(pl.Callback):
                 masked_residual = residual[:, mask]  # (39, valid_count)
                 residual_scores[i] = np.sqrt(np.mean(masked_residual ** 2))
 
+        # 最终防御: 确保所有得分有限 (避免 normalize 产生 nan)
+        residual_scores = np.nan_to_num(residual_scores, nan=0.0,
+                                         posinf=1e6, neginf=-1e6)
         return residual_scores
 
     def _detect_event_mask(self, u, event_window=4, event_tol=0.08,
@@ -1005,6 +1077,72 @@ class ActiveLearningCallback(pl.Callback):
             distances = euclidean_distances(batch, train_flat)
             min_distances = distances.min(axis=1)
             diversity_scores.append(min_distances)
+
+        return np.concatenate(diversity_scores)
+
+    def _compute_trajectory_diversity_pca(self, pred_trajectories, dm, n_components=20):
+        """
+        PCA 降维后的轨迹多样性得分。
+
+        解决原版 _compute_trajectory_diversity 的维度灾难问题：
+        - 原版: 展平为 (39*T=19500,) 维向量算欧氏距离，高维下距离趋同
+        - PCA 版: 先降到 20 维，保留 95%+ 方差，在低维空间算距离
+
+        算法：
+        1. 合并池预测轨迹和训练集轨迹，统一展平
+        2. PCA 降到 n_components 维（拟合在训练集上，避免数据泄露）
+        3. 在低维空间计算池样本到训练集的最小欧氏距离
+
+        Args:
+            pred_trajectories: (N, 39, T) 池子集预测轨迹 (真实值空间)
+            dm: 数据模块 (用于获取训练集轨迹)
+            n_components: PCA 降维目标维度 (默认 20)
+
+        Returns:
+            diversity_scores: (N,) 每个样本到训练集的最小轨迹距离(PCA空间)
+        """
+        from sklearn.decomposition import PCA
+
+        N, V, T = pred_trajectories.shape
+
+        # 从训练集采样代表点
+        train_X, train_P, train_Y_norm = dm.train_dataset_lhs.tensors
+        n_representatives = min(500, train_X.shape[0])
+        rng = np.random.RandomState(self.random_seed)
+        rep_idx = rng.choice(train_X.shape[0], n_representatives, replace=False)
+
+        # 训练集代表点的真实轨迹，反归一化到真实值空间
+        train_Y_norm_np = train_Y_norm[rep_idx].cpu().numpy()  # (R, 39, T)
+        mean_y = dm.mean_y.cpu().numpy().reshape(-1)  # (39,)
+        std_y = dm.std_y.cpu().numpy().reshape(-1)    # (39,)
+        train_Y_real = train_Y_norm_np * std_y[:, None] + mean_y[:, None]  # (R, 39, T)
+
+        # 展平轨迹
+        pool_flat = pred_trajectories.reshape(N, -1)        # (N, 39*T)
+        train_flat = train_Y_real.reshape(n_representatives, -1)  # (R, 39*T)
+
+        # PCA 拟合在训练集上（避免池数据泄露影响主成分方向）
+        n_comp = min(n_components, n_representatives, train_flat.shape[1])
+        pca = PCA(n_components=n_comp, random_state=self.random_seed)
+        pca.fit(train_flat)
+
+        # 降维
+        pool_pca = pca.transform(pool_flat)     # (N, n_comp)
+        train_pca = pca.transform(train_flat)   # (R, n_comp)
+
+        # 低维空间计算最小欧氏距离
+        batch_size = 500
+        diversity_scores = []
+        for i in range(0, N, batch_size):
+            end_idx = min(i + batch_size, N)
+            batch = pool_pca[i:end_idx]
+            distances = euclidean_distances(batch, train_pca)
+            min_distances = distances.min(axis=1)
+            diversity_scores.append(min_distances)
+
+        explained_var = pca.explained_variance_ratio_.sum()
+        print(f"[PIAL-v2] PCA: {train_flat.shape[1]}→{n_comp} 维, "
+              f"保留方差: {explained_var:.1%}")
 
         return np.concatenate(diversity_scores)
 
@@ -1139,6 +1277,9 @@ class ActiveLearningCallback(pl.Callback):
 
         print(f"[RGS] 合并候选总数: {len(all_params_list)}")
 
+        # Step 3.5: 参数合理性校验（在昂贵的 ODE 验证前剔除明显异常的参数）
+        all_params_list = self._validate_param_ranges(all_params_list)
+
         # Step 4: ODE 物理验证全部候选
         valid_results, valid_names = self._physics_validate_and_prune(all_params_list, dm)
         
@@ -1165,6 +1306,80 @@ class ActiveLearningCallback(pl.Callback):
             'labels': [r[3] for r in selected_results],
             'sample_plots': sample_plots
         }
+
+    def _validate_param_ranges(self, all_params_list):
+        """
+        RGS 参数合理性校验：在 ODE 验证前剔除明显异常的参数组合。
+
+        校验规则：
+        1. 非负性：所有参数必须 >= 0
+        2. 上界约束：连续参数不超过默认值的 5 倍（避免数值爆炸）
+        3. 特殊参数约束：mdt > 0, B0 > 0, C0 > 0 等关键参数有物理意义下界
+
+        Args:
+            all_params_list: [(name, p_vec), ...] 候选参数列表
+
+        Returns:
+            过滤后的候选参数列表
+        """
+        # 关键参数的物理下界（必须大于此值）
+        param_lower_bounds = {
+            'mdt': 10.0,      # 细胞周期时间至少 10 分钟
+            'B0': 0.001,      # 生长速率
+            'C0': 0.001,      # CLN3 系数
+            'Dn3': 0.001,     # CLN3 解除抑制系数
+            'ESP1T': 0.001,   # ESP1 总量
+        }
+
+        # 关键参数的相对上界（不超过默认值的多少倍）
+        param_upper_multiplier = {
+            'mdt': 5.0, 'B0': 5.0, 'C0': 5.0, 'Dn3': 5.0, 'Jn3': 5.0,
+            'ksn2p': 5.0, 'ksn2pp': 5.0, 'kdn2': 5.0,
+        }
+
+        valid_list = []
+        rejected_count = 0
+
+        for name, p_vec in all_params_list:
+            p_dict = dict(zip(PARAM_KEYS, p_vec)) if not isinstance(p_vec, dict) else p_vec
+            is_valid = True
+
+            # 1. 非负性校验
+            for k, v in p_dict.items():
+                if isinstance(v, (int, float, np.floating)) and v < 0:
+                    is_valid = False
+                    break
+
+            # 2. 关键参数下界校验
+            if is_valid:
+                for k, lower in param_lower_bounds.items():
+                    if k in p_dict:
+                        v = p_dict[k]
+                        if isinstance(v, (int, float, np.floating)) and v < lower:
+                            is_valid = False
+                            break
+
+            # 3. 关键参数上界校验（相对默认值）
+            if is_valid:
+                for k, mult in param_upper_multiplier.items():
+                    if k in p_dict and k in _defaults:
+                        v = p_dict[k]
+                        if isinstance(v, (int, float, np.floating)):
+                            upper = _defaults[k] * mult
+                            if v > upper:
+                                is_valid = False
+                                break
+
+            if is_valid:
+                valid_list.append((name, p_vec))
+            else:
+                rejected_count += 1
+
+        if rejected_count > 0:
+            print(f"[RGS] 参数合理性校验剔除 {rejected_count} 个异常参数组合 "
+                  f"(剩余 {len(valid_list)}/{len(all_params_list)})")
+
+        return valid_list
 
     def _evaluate_real_mutants(self, pl_module, dm, device):
         """在 Real Mutant 测试集上推理，计算每个样本的真实值 MAE (反归一化后)"""
