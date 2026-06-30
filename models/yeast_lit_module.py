@@ -13,9 +13,6 @@ from .components.lno_cross import NIPSYeastLNO
 from .components.hyper_fno import HyperFNO
 from .components.hp_fno import hpYeastFNO
 from .components.neural_ode import NeuralODEModel
-from .components.patchtst import PatchTST
-from .components.unet1d_adapter import Unet1DAdapter
-from .components.fno1d_adapter import FNO1DAdapter
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 
@@ -29,9 +26,6 @@ MODEL_REGISTRY = {
     'hyper_fno': HyperFNO,
     'hp_fno': hpYeastFNO,
     'neural_ode': NeuralODEModel,
-    'patchtst': PatchTST,
-    'unet1d': Unet1DAdapter,
-    'fno1d': FNO1DAdapter,
 }
 
 
@@ -94,17 +88,6 @@ class YeastLitModule(pl.LightningModule):
         elif model_name == 'neural_ode':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, hidden_dim=width,
                                     method=ode_method, rtol=ode_rtol, atol=ode_atol)
-        elif model_name == 'patchtst':
-            # PatchTST (ICLR 2023): 通道独立 + Patching + Transformer, 适合自回归滚动
-            # modes 参数在此用作兼容接口（未使用），width 用作 d_model
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
-                                    width=width, n_blocks=n_blocks)
-        elif model_name == 'unet1d':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
-                                    hidden_channels=width, n_blocks=n_blocks)
-        elif model_name == 'fno1d':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
-                                    modes=modes, width=width)
 
         loss_class = LOSS_REGISTRY[loss_type]
         if loss_type == 'mse_only':
