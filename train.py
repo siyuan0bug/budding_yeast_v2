@@ -159,17 +159,29 @@ def main():
     
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
     parser.add_argument('--al_strategy', type=str, default='none',
-                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs', 'pial'],
+                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs', 'pial', 'mutant_aware',
+                                   'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
                                "us/is/random=标准池化AL; rgs=Real-Guided局部密集采样; "
-                               "pial=Physics-Informed AL (ODE残差+轨迹多样性)")
+                               "pial=Physics-Informed AL (ODE残差+轨迹多样性); "
+                               "mutant_aware=基于atlas数据的优先级加权采样, 需配合 --atlas_csv; "
+                               "al4pde_random/uncertainty/diversity=al4pde风格池化AL(需配合--al_pool_dataset); "
+                               "maal=Mutant-Aware AL (diversity+target priority, 需配合--al_pool_dataset)")
+    parser.add_argument('--atlas_csv', type=str, default=None,
+                        help="mutant_aware 策略专用: mutant_atlas_merged.csv 路径 (含 lhs_MAE_min, lhs_n_samples 列)")
+    # al4pde 框架专用参数
+    parser.add_argument('--al_pool_dataset', type=str, default=None,
+                        help="al4pde/maal 策略专用: 候选池数据集路径 (v5), 含 target 样本 (_LHS_T 后缀)")
+    parser.add_argument('--al_target_weight', type=float, default=0.4,
+                        help="MAAL 的 target priority 权重 (默认 0.4; diversity 权重 = 1 - target_weight)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
     parser.add_argument('--al_num_add', type=int, default=500, help="每轮 AL 新增样本数 (减小以避免引入噪声)")
     parser.add_argument('--al_perturbation', type=float, default=0.05, help="RGS专用: 连续参数局部扰动幅度 (0.05=±5%%, 减小以提升参数合理性)")
     parser.add_argument('--al_mae_threshold', type=float, default=0.1, help="RGS专用: MAE大于此阈值的Real Mutant优先密集采样")
     # 标准池化 AL 专属参数
     parser.add_argument('--al_initial_train_size', type=int, default=2000,
-                        help="标准AL初始训练集大小 (仅us/is/random策略生效, 默认2000, 减小以让AL有更大发挥空间)")
+                        help="AL初始训练集大小 (默认2000; us/is/random=池化AL让AL有发挥空间; "
+                             "mutant_aware/rgs=查询合成AL建议设为50000+, 先在全量数据上预训练再触发AL定向采样)")
     parser.add_argument('--al_initial_selection', type=str, default='kmeans',
                         choices=['kmeans', 'random'],
                         help="标准AL初始训练集选择方法 (kmeans=聚类多样性, random=随机)")
@@ -263,6 +275,11 @@ def main():
               pool_subset_size=args.al_pool_subset_size,
               uncertainty_metric=args.al_uncertainty_metric,
               random_seed=args.seed,
+              # mutant_aware 策略专用参数
+              atlas_csv_path=args.atlas_csv,
+              # al4pde 框架专用参数
+              al_pool_dataset=args.al_pool_dataset,
+              target_weight=args.al_target_weight,
           )
         callbacks.append(al_cb)
     else:

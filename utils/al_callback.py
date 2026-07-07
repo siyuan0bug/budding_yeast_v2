@@ -67,7 +67,12 @@ class ActiveLearningCallback(pl.Callback):
                  diversity_weight=0.5,
                  pool_subset_size=10000,
                  uncertainty_metric='variance',
-                 random_seed=42):
+                 random_seed=42,
+                 # ====== mutant_aware 策略专属参数 ======
+                 atlas_csv_path=None,
+                 # ====== al4pde 框架专属参数 ======
+                 al_pool_dataset=None,
+                 target_weight=0.4):
         """
         标准主动学习 (Active Learning) 回调模块。
 
@@ -76,7 +81,7 @@ class ActiveLearningCallback(pl.Callback):
            - on_train_start 时通过 K-Means 聚类从全量 LHS 训练集中选出初始训练子集，
              剩余样本构成未标注池 (unlabeled pool)。
            - 每轮 AL 触发时，依据查询策略从池中选取最具信息量的样本加入训练集。
-        2. **查询合成 AL (Query Synthesis)**：通过 LHS 引擎生成新候选样本，适用于 'rgs' 策略。
+        2. **查询合成 AL (Query Synthesis)**：通过 LHS 引擎生成新候选样本，适用于 'rgs' / 'mutant_aware' 策略。
 
         Args:
             trigger_every_n_epochs: 每隔多少 epoch 触发一次 AL 采样
@@ -88,8 +93,13 @@ class ActiveLearningCallback(pl.Callback):
                 - 'vessal': VeSSAL (不确定性+多样性)
                 - 'hggs': HGGS 流形采样
                 - 'rgs': Real-Guided Sampling (局部密集采样, 查询合成)
+                - 'mutant_aware': Mutant-Aware AL (基于 atlas 数据的优先级加权采样, 查询合成)
+                    利用 lhs_MAE_min 和 lhs_n_samples 历史 atlas 数据计算每个 Real Mutant 的
+                    优先级，聚焦采样到 LHS 覆盖不足 + 模型表现差的突变体邻域。
+                    需要 atlas_csv_path 参数指向 mutant_atlas_merged.csv 文件。
+                    若 atlas 不可用，自动降级为 'rgs' 策略。
             num_add: 每轮 AL 要新增的样本数 (默认 5000)
-            perturbation: RGS 专用，连续参数的相对扰动幅度 (0.1 = ±10%)
+            perturbation: RGS/mutant_aware 专用，连续参数的相对扰动幅度 (0.1 = ±10%)
             mae_threshold: RGS 专用，MAE 大于此阈值的 Real Mutant 优先密集采样
 
             initial_train_size: 标准AL初始训练集大小 (默认 5000，约占 50000+ 样本的 10%)
@@ -102,6 +112,8 @@ class ActiveLearningCallback(pl.Callback):
                 - 'variance': 预测方差 (沿时间维度)
                 - 'entropy': 预测熵
             random_seed: 随机种子，保证 AL 选择可复现
+            atlas_csv_path: mutant_aware 策略专用，mutant_atlas_merged.csv 路径
+                (含 lhs_MAE_min, lhs_n_samples 列；若 None 或加载失败，降级为 'rgs')
         """
         self.trigger_every_n_epochs = trigger_every_n_epochs
         self.strategy = strategy.lower()
@@ -127,16 +139,33 @@ class ActiveLearningCallback(pl.Callback):
         self._pool_size = 0        # 当前池中剩余样本数
         self._train_size_history = []  # 训练集大小历史记录
 
+        # ====== mutant_aware 策略状态 ======
+        self.atlas_csv_path = atlas_csv_path
+        self._mutant_atlas = None        # {mutant_name: {'lhs_mae_min', 'lhs_n_samples', 'pattern', 'lhs_mae_median'}}
+        self._atlas_loaded = False       # atlas 是否成功加载
+        self._global_lhs_budget = 0      # 全局 LHS 预算 (与 _rgs_sample 共享)
+
+        # ====== al4pde 框架状态 ======
+        self.al_pool_dataset = al_pool_dataset
+        self.target_weight = target_weight
+        # diversity_weight 复用已有的 self.diversity_weight (IS 策略参数)
+        # MAAL: acquisition = diversity_weight * diversity + target_weight * priority
+        # 约束: diversity_weight + target_weight = 1 (在 _maal_sample 中自动归一化)
+        self._al4pde_pool_loaded = False
+        self._pool_mutant_names = None   # 候选池样本的 mutant name (用于 MAAL family 匹配)
+        self._al4pde_t_grid = None       # al4pde 候选池的 t_grid (内存优化: 不预存 X, 动态构造)
+
     # ==================================================================
     # 标准主动学习框架：初始训练集选择
     # ==================================================================
     def on_train_start(self, trainer, pl_module):
         """
         标准主动学习初始化（所有策略统一执行）：
-        - 从全量 LHS 训练集中通过 K-Means 聚类选出初始训练子集
-        - 剩余样本构成未标注池 (unlabeled pool)
-        - 对于池化策略 (us/is/random/wrs/vessal/hggs)：后续从池中查询
-        - 对于查询合成策略 (rgs)：后续通过 LHS 引擎生成新样本，池仅作备份
+        - 池化策略 (us/is/random/wrs/vessal/hggs)：通过 K-Means 聚类选出初始训练子集,
+          剩余样本构成未标注池 (unlabeled pool), 后续从池中查询
+        - 查询合成策略 (rgs/mutant_aware)：直接用全量数据开始训练, 无需池化
+          (查询合成 AL 通过 LHS 引擎生成新样本, 不需要从池中查询;
+           先在全量数据上预训练收敛, 再触发 AL 做定向采样"锦上添花")
 
         数据划分合规性：
         - 初始训练集和未标注池均仅包含 LHS 样本 (来自 dm.train_dataset_lhs)
@@ -158,10 +187,40 @@ class ActiveLearningCallback(pl.Callback):
         # 获取全量 LHS 训练集
         full_X, full_P, full_Y = dm.train_dataset_lhs.tensors
         full_size = full_X.shape[0]
-        initial_size = min(self.initial_train_size, full_size)
 
         print(f"\n[AL Manager] ===== 标准主动学习初始化 =====")
         print(f"[AL Manager] 策略: {self.strategy.upper()} | 全量 LHS 训练集: {full_size}")
+
+        # ====== 查询合成策略 (rgs/mutant_aware): 跳过 K-Means, 直接用全量数据 ======
+        # 设计理由:
+        #   1. 查询合成 AL 通过 LHS 引擎生成新样本, 不需要从池中查询, 池化无意义
+        #   2. 全量数据预训练让模型先收敛, 再触发 AL 定向采样, 避免"雪中送炭"式欠训练
+        #   3. K-Means 在大数据集 (120000+ 样本 × 141 维) 上做 50000 簇聚类耗时数小时, 不可行
+        #   4. 池化策略仍走 K-Means 初始化, 让 AL 有"发挥空间"
+        if self.strategy in ('rgs', 'mutant_aware'):
+            mode_desc = ("查询合成模式 (RGS 通过 LHS 引擎生成新样本)" if self.strategy == 'rgs'
+                         else "查询合成模式 (Mutant-Aware 基于 atlas 优先级加权采样)")
+            print(f"[AL Manager] {mode_desc}")
+            print(f"[AL Manager] 跳过 K-Means 初始化, 直接用全量 {full_size} 样本开始训练")
+            print(f"[AL Manager] AL 触发时机: epoch {self.trigger_every_n_epochs} 后开始定向采样")
+            print(f"[AL Manager] 验证集/测试集保持不变 (仅含 LHS / LHS+Real)")
+            print(f"[AL Manager] ===== 初始化完成 =====\n")
+
+            self._al_initialized = True
+            self._train_size_history.append(full_size)
+            # 查询合成策略不需要未标注池
+            self._pool_X = None
+            self._pool_P = None
+            self._pool_Y = None
+            self._pool_size = 0
+
+            # ====== mutant_aware 策略：加载 atlas 数据 ======
+            if self.strategy == 'mutant_aware':
+                self._load_mutant_atlas()
+            return
+
+        # ====== 池化策略 (us/is/random/wrs/vessal/hggs) + al4pde 框架: K-Means 初始化 ======
+        initial_size = min(self.initial_train_size, full_size)
         print(f"[AL Manager] 初始训练集目标大小: {initial_size} | 选择方法: {self.initial_selection}")
 
         # 选择初始训练集索引
@@ -185,22 +244,29 @@ class ActiveLearningCallback(pl.Callback):
             full_Y[selected_idx]
         )
 
-        # 保存未标注池 (剩余样本) —— 池化策略会从中查询，RGS 不使用但保留以备扩展
-        self._pool_X = full_X[pool_idx]
-        self._pool_P = full_P[pool_idx]
-        self._pool_Y = full_Y[pool_idx]
-        self._pool_size = self._pool_X.shape[0]
+        # ====== al4pde 框架: 加载 v5 候选池 (覆盖默认的 v1 剩余样本池) ======
+        if self.strategy in ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal'):
+            if self.al_pool_dataset:
+                self._load_al4pde_pool(dm)
+            else:
+                # 降级: 用 v1 剩余样本作为候选池
+                print("[al4pde] 警告: 未指定 --al_pool_dataset, 降级用 v1 剩余样本作为候选池")
+                self._pool_X = full_X[pool_idx]
+                self._pool_P = full_P[pool_idx]
+                self._pool_Y = full_Y[pool_idx]
+                self._pool_size = len(pool_idx)
+        else:
+            # 标准池化策略: 保存未标注池 (v1 剩余样本)
+            self._pool_X = full_X[pool_idx]
+            self._pool_P = full_P[pool_idx]
+            self._pool_Y = full_Y[pool_idx]
+            self._pool_size = self._pool_X.shape[0]
+
         self._al_initialized = True
         self._train_size_history.append(initial_size)
 
-        # 策略分类提示
-        if self.strategy == 'rgs':
-            mode_desc = "查询合成模式 (RGS 通过 LHS 引擎生成新样本)"
-        else:
-            mode_desc = f"池化模式 (从 {self._pool_size} 样本池中查询)"
-
         print(f"[AL Manager] 初始训练集: {initial_size} 样本 (K-Means={self.initial_selection=='kmeans'})")
-        print(f"[AL Manager] 未标注池: {self._pool_size} 样本 | {mode_desc}")
+        print(f"[AL Manager] 未标注池: {self._pool_size} 样本 | 策略: {self.strategy}")
         print(f"[AL Manager] 验证集/测试集保持不变 (仅含 LHS / LHS+Real)")
         print(f"[AL Manager] ===== 初始化完成 =====\n")
 
@@ -261,6 +327,18 @@ class ActiveLearningCallback(pl.Callback):
             # 查询合成策略 (RGS)：通过 LHS 引擎生成新样本，但仍走标准 AL 框架
             if self.strategy == 'rgs':
                 broadcast_data = self._rgs_sample(trainer, pl_module, dm, device, current_epoch)
+            # 查询合成策略 (Mutant-Aware)：基于 atlas 优先级加权采样
+            elif self.strategy == 'mutant_aware':
+                broadcast_data = self._mutant_aware_sample(trainer, pl_module, dm, device, current_epoch)
+            # ====== al4pde 框架策略 (从 v5 候选池查询) ======
+            elif self.strategy == 'al4pde_random':
+                broadcast_data = self._al4pde_random_sample(trainer, pl_module, dm, device, current_epoch)
+            elif self.strategy == 'al4pde_uncertainty':
+                broadcast_data = self._al4pde_uncertainty_sample(trainer, pl_module, dm, device, current_epoch)
+            elif self.strategy == 'al4pde_diversity':
+                broadcast_data = self._al4pde_diversity_sample(trainer, pl_module, dm, device, current_epoch)
+            elif self.strategy == 'maal':
+                broadcast_data = self._maal_sample(trainer, pl_module, dm, device, current_epoch)
             # 所有池化策略 (us/is/random/wrs/vessal/hggs)：统一走标准 AL 入口
             elif self._al_initialized:
                 broadcast_data = self._standard_al_sample(trainer, pl_module, dm, device, current_epoch)
@@ -811,7 +889,7 @@ class ActiveLearningCallback(pl.Callback):
                 end_idx = min(i + batch_size, len(pool_indices))
                 batch_indices = pool_indices[i:end_idx]
 
-                X_batch = self._pool_X[batch_indices].to(device)
+                X_batch = self._get_pool_X_batch(batch_indices).to(device)
                 P_batch = self._pool_P[batch_indices].to(device)  # (B, 141)
                 B = P_batch.shape[0]
 
@@ -858,7 +936,7 @@ class ActiveLearningCallback(pl.Callback):
                 end_idx = min(i + batch_size, len(pool_indices))
                 batch_indices = pool_indices[i:end_idx]
 
-                X_batch = self._pool_X[batch_indices].to(device)
+                X_batch = self._get_pool_X_batch(batch_indices).to(device)
                 P_batch = self._pool_P[batch_indices].to(device)
 
                 # 模型预测: (B, 39, T) 归一化空间
@@ -1306,6 +1384,407 @@ class ActiveLearningCallback(pl.Callback):
             'labels': [r[3] for r in selected_results],
             'sample_plots': sample_plots
         }
+
+    # ==================================================================
+    # Mutant-Aware 策略：基于 atlas 数据的优先级加权采样
+    # ==================================================================
+    def _load_mutant_atlas(self):
+        """
+        加载 mutant_atlas_merged.csv，解析 lhs_MAE_min 和 lhs_n_samples 列。
+        存储为 self._mutant_atlas = {mutant_name: {'lhs_mae_min', 'lhs_n_samples', 'pattern', 'lhs_mae_median'}}
+
+        若文件不存在或路径未提供，打印警告并标记降级 (_atlas_loaded=False)。
+        """
+        import csv
+
+        if self.atlas_csv_path is None:
+            print("[Mutant-Aware] 警告: 未提供 atlas_csv_path，策略将降级为 RGS")
+            self._atlas_loaded = False
+            return
+
+        try:
+            self._mutant_atlas = {}
+            with open(self.atlas_csv_path, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    mutant_name = row['Mutant']
+                    self._mutant_atlas[mutant_name] = {
+                        'lhs_mae_min': float(row['lhs_MAE_min']),
+                        'lhs_n_samples': int(float(row['lhs_n_samples'])),
+                        'pattern': row.get('Pattern', 'Unknown'),
+                        'lhs_mae_median': float(row.get('lhs_MAE_median', 0.0)),
+                    }
+            self._atlas_loaded = True
+            print(f"[Mutant-Aware] Atlas 加载成功: {len(self._mutant_atlas)} 个突变体 | "
+                  f"源: {self.atlas_csv_path}")
+
+            # 打印 top-5 高优先级突变体摘要
+            sorted_atlas = sorted(self._mutant_atlas.items(),
+                                  key=lambda x: x[1]['lhs_mae_min'], reverse=True)
+            print("[Mutant-Aware] Top-5 lhs_MAE_min:")
+            for name, info in sorted_atlas[:5]:
+                print(f"  - {name}: lhs_MAE_min={info['lhs_mae_min']:.4f}, "
+                      f"lhs_n_samples={info['lhs_n_samples']}")
+        except Exception as e:
+            print(f"[Mutant-Aware] 警告: Atlas 加载失败 ({e})，策略将降级为 RGS")
+            self._mutant_atlas = None
+            self._atlas_loaded = False
+
+    def _load_al4pde_pool(self, dm):
+        """
+        加载 v5 数据集, 构建 al4pde 候选池 (v5 除去 Real Mutant 的全部数据)。
+
+        候选池组成:
+        - v5 全部 LHS 样本 (名称含 '_LHS_'): target + LHS 常规
+          · target 样本 (_LHS_T 后缀, v5 定向扩展采样): ~54,619 个
+          · LHS 常规样本 (_LHS_ 非 T): ~107,389 个
+        - 除去 126 个 Real Mutant (名称不含 '_LHS_')
+        - 总计 ~162,008 个样本
+
+        候选池用于 al4pde_random/uncertainty/diversity/maal 四种策略的样本查询。
+
+        数据归一化:
+        - 候选池数据必须与 dm.train_dataset_lhs 格式一致 (归一化后的 X/P/Y)
+        - 归一化统计量来自 v1 全部 LHS 样本 (dm.mean_y/std_y/p_mean/p_std)
+        - X = [IC_norm, t_grid] (N, 39, 2, 500)
+        - P_norm = (P - p_mean) / p_std
+        - Y_norm = (Y - mean_y) / std_y
+        """
+        print(f"[al4pde] 加载候选池数据集: {self.al_pool_dataset}")
+        v5_data = np.load(self.al_pool_dataset, allow_pickle=True)
+        mutant_names = v5_data['mutant_names']
+        data_arr = v5_data['data']
+        params_arr = v5_data['params']
+
+        # 除去 Real Mutant 的全部数据 (LHS 常规 + target)
+        # Real Mutant 名称不含 '_LHS_', LHS 样本 (含 target) 名称含 '_LHS_'
+        non_real_mask = np.array(['_LHS_' in str(n) for n in mutant_names])
+        pool_idx = np.where(non_real_mask)[0]
+        rng = np.random.RandomState(self.random_seed)
+        rng.shuffle(pool_idx)
+
+        # 统计 target / 非 target 分布 (仅用于打印)
+        target_count = sum(1 for i in pool_idx if '_LHS_T' in str(mutant_names[i]))
+        nontarget_count = len(pool_idx) - target_count
+
+        # 归一化 (与 yeast_datamodule.py:157-167 完全一致)
+        T_STEPS = data_arr.shape[2]  # 500
+        mean_y = dm.mean_y  # (1, 39, 1)
+        std_y = dm.std_y     # (1, 39, 1)
+        p_mean = dm.p_mean   # (1, 141)
+        p_std = dm.p_std     # (1, 141)
+
+        Y_tensor = torch.tensor(data_arr[pool_idx], dtype=torch.float32)  # (N, 39, 500)
+        P_tensor = torch.tensor(params_arr[pool_idx], dtype=torch.float32)  # (N, 141)
+
+        # 归一化 Y 和 P (与训练集完全一致)
+        Y_norm = (Y_tensor - mean_y) / std_y
+        Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+        P_norm = (P_tensor - p_mean) / p_std
+        P_norm = torch.nan_to_num(P_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+
+        # 构造 t_grid (共享, 不占额外内存)
+        t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS)  # (1, 1, 500)
+
+        # 内存优化: 不预存 X (23.5 GB), 只存 P + Y + t_grid, forward 时动态构造 X
+        # X = [IC, t_grid], 其中 IC = Y_norm[:, :, 0:1].expand(-1, -1, T)
+        self._pool_X = None  # al4pde 路径不预存 X, 通过 _get_pool_X_batch 动态构造
+        self._pool_P = P_norm
+        self._pool_Y = Y_norm
+        self._al4pde_t_grid = t_grid  # (1, 1, 500) 共享
+        self._pool_mutant_names = mutant_names[pool_idx]
+        self._pool_size = len(pool_idx)
+        self._al4pde_pool_loaded = True
+
+        # 内存估算 (只存 P + Y, 不存 X)
+        mem_gb = (P_norm.nelement() * 4 + Y_norm.nelement() * 4) / (1024**3)
+        print(f"[al4pde] 候选池构建完成: {self._pool_size} 样本 "
+              f"(target={target_count}, nontarget={nontarget_count}) | "
+              f"P_norm(mean={P_norm.mean():.3f}, std={P_norm.std():.3f}), "
+              f"Y_norm(mean={Y_norm.mean():.3f}, std={Y_norm.std():.3f}) | "
+              f"内存={mem_gb:.1f} GB (X 动态构造, 省 23.5 GB)")
+
+    def _get_pool_X_batch(self, indices):
+        """获取候选池样本的 X = [IC, t_grid] (内存优化版)
+
+        标准池化路径 (us/is/random/pial): self._pool_X 已预存, 直接索引返回
+        al4pde 路径: self._pool_X 为 None, 从 self._pool_Y 动态构造 X
+          - IC = Y_norm[:, :, 0:1].expand(-1, -1, T)  (视图, 不占额外内存)
+          - t_grid = self._al4pde_t_grid.expand(B, 39, T)  (共享, 不占额外内存)
+          - X = stack([IC, t_grid], dim=2)  (B, 39, 2, T)  — 仅此 batch 占内存
+
+        Args:
+            indices: 样本索引 (numpy array / slice / list / tensor)
+
+        Returns:
+            X: (B, 39, 2, T) tensor
+        """
+        if self._pool_X is not None:
+            return self._pool_X[indices]
+        # al4pde 优化路径: 从 Y 动态构造 X
+        Y_batch = self._pool_Y[indices]  # (B, 39, T)
+        T = Y_batch.shape[2]
+        IC = Y_batch[:, :, 0:1].expand(-1, -1, T)  # (B, 39, T) — 视图
+        t_grid = self._al4pde_t_grid.to(Y_batch.device).expand(Y_batch.shape[0], 39, T)
+        return torch.stack([IC, t_grid], dim=2)  # (B, 39, 2, T)
+
+    def _mutant_aware_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """
+        Mutant-Aware 查询合成策略：
+        利用 atlas 历史(lhs_MAE_min, lhs_n_samples) + 当前模型 MAE 计算每个 Real Mutant
+        的优先级，聚焦采样到 LHS 覆盖不足 + 模型表现差的突变体邻域。
+
+        核心公式：
+        priority = 0.5 * norm(lhs_MAE_min) + 0.3 * (1 - lhs_n_samples/500) + 0.2 * norm(current_real_mae)
+
+        若 atlas 不可用，降级为 _rgs_sample。
+        """
+        # Step 0: 检查 atlas 是否可用，否则降级
+        if not self._atlas_loaded or self._mutant_atlas is None:
+            print("[Mutant-Aware] Atlas 不可用，降级为 RGS 策略")
+            return self._rgs_sample(trainer, pl_module, dm, device, current_epoch)
+
+        self._global_lhs_budget = 0
+
+        # Step 1: 评估 Real Mutant 当前表现 (MAE) - 复用 RGS 的评估逻辑
+        print("[Mutant-Aware] Step 1: 评估 Real Mutant 当前表现 (MAE)...")
+        mutant_maes = self._evaluate_real_mutants(pl_module, dm, device)
+
+        if not mutant_maes:
+            print("[Mutant-Aware] 无法评估 Real Mutant，降级为全局 LHS 采样")
+            return self._legacy_sample(trainer, pl_module, dm, device, current_epoch)
+
+        # Step 2: 计算每个 mutant 的 priority score
+        print("[Mutant-Aware] Step 2: 计算优先级 (atlas + 当前 MAE)...")
+        mutant_priorities = self._compute_mutant_priorities(mutant_maes)
+
+        # Step 3: 选 top-K mutant 并分配配额
+        print("[Mutant-Aware] Step 3: 按 priority 分配采样名额...")
+        sampling_plan = self._allocate_mutant_aware_quota(mutant_priorities)
+
+        n_target_mutants = len(sampling_plan)
+        n_rgs_samples = sum(sampling_plan.values())
+        global_budget = self._global_lhs_budget
+        print(f"[Mutant-Aware] 定向采样: {n_target_mutants} 个突变体, {n_rgs_samples} 样本 | "
+              f"全局 LHS: {global_budget} 样本")
+
+        # Step 4: 生成全部候选
+        all_params_list = []
+
+        # Step 4a: 定向局部采样候选 - 复用 generate_local_lhs_tasks
+        if sampling_plan:
+            print(f"[Mutant-Aware] Step 4a: 调用 generate_local_lhs_tasks (perturbation={self.perturbation*100:.0f}%)...")
+            rgs_tasks_dict = generate_local_lhs_tasks(
+                target_mutants=sampling_plan,
+                perturbation=self.perturbation
+            )
+
+            if rgs_tasks_dict:
+                for m_name, overrides in rgs_tasks_dict.items():
+                    p_vec = [overrides.get(k, _defaults[k]) for k in PARAM_KEYS]
+                    all_params_list.append((f"MA_Epoch{current_epoch}_{m_name}", p_vec))
+                print(f"[Mutant-Aware] 局部采样引擎返回 {len(rgs_tasks_dict)} 个候选")
+            else:
+                print("[Mutant-Aware] 局部采样引擎未生成任何样本")
+                global_budget += n_rgs_samples  # 转给全局 LHS
+
+        # Step 4b: 全局 LHS 采样候选 (保持多样性)
+        if global_budget > 0:
+            print(f"[Mutant-Aware] Step 4b: 全局 LHS 采样 (保持多样性)...")
+            per_mutant = max(1, global_budget // len(mutant_rules))
+            global_tasks_dict = generate_lhs_tasks(per_mutant)
+
+            p_pool_list_g = []
+            pool_names_g = []
+            for m_name, overrides in global_tasks_dict.items():
+                p_vec = [overrides.get(k, _defaults[k]) for k in PARAM_KEYS]
+                p_pool_list_g.append(p_vec)
+                pool_names_g.append(m_name)
+
+            P_pool_g = np.array(p_pool_list_g)
+            actual_pool_size_g = len(P_pool_g)
+            global_num_add = min(global_budget, actual_pool_size_g)
+
+            idx_sel = np.random.choice(actual_pool_size_g, global_num_add, replace=False)
+            for idx in idx_sel:
+                all_params_list.append((f"MA_Global_Epoch{current_epoch}_{pool_names_g[idx]}", P_pool_g[idx]))
+
+            print(f"[Mutant-Aware] 全局 LHS 返回 {actual_pool_size_g} 个候选，随机选取 {global_num_add} 个")
+
+        if not all_params_list:
+            return None
+
+        print(f"[Mutant-Aware] 合并候选总数: {len(all_params_list)}")
+
+        # Step 5: 参数合理性校验 (复用 RGS)
+        all_params_list = self._validate_param_ranges(all_params_list)
+
+        # Step 6: ODE 物理验证 (复用 RGS)
+        valid_results, valid_names = self._physics_validate_and_prune(all_params_list, dm)
+
+        if not valid_results:
+            return None
+
+        # Step 7: 用真实 MAE 选取 (复用 RGS)
+        selected_results, selected_names = self._select_by_real_mae(
+            pl_module, dm, device, valid_results, valid_names, current_epoch)
+
+        if not selected_results:
+            return None
+
+        # Step 8: 绘制采样对比图 (复用 RGS)
+        sample_plots = self._plot_al_sample_comparison(
+            selected_results, selected_names, dm, current_epoch)
+
+        # Step 9: 组装广播数据
+        return {
+            'X': torch.stack([torch.tensor(r[0]) for r in selected_results]).float(),
+            'Y': torch.stack([torch.tensor(r[1]) for r in selected_results]).float(),
+            'P': torch.stack([torch.tensor(r[2]) for r in selected_results]).float(),
+            'names': selected_names,
+            'labels': [r[3] for r in selected_results],
+            'sample_plots': sample_plots
+        }
+
+    def _compute_mutant_priorities(self, mutant_maes):
+        """
+        计算每个 Real Mutant 的优先级分数。
+
+        priority = 0.5 * norm(lhs_MAE_min) + 0.3 * (1 - lhs_n_samples/500) + 0.2 * norm(current_real_mae)
+
+        - lhs_MAE_min: LHS 覆盖不足量化 (机制 A)，越高越优先
+        - lhs_n_samples: LHS 密度不足量化 (机制 B)，越少越优先
+        - current_real_mae: 模型当前表现，越差越优先
+
+        对于 atlas 中不存在的突变体，使用中性默认值。
+        """
+        # 收集 atlas 数据
+        atlas_names = list(self._mutant_atlas.keys())
+        lhs_mae_mins = np.array([self._mutant_atlas[n]['lhs_mae_min'] for n in atlas_names])
+        lhs_n_samples = np.array([self._mutant_atlas[n]['lhs_n_samples'] for n in atlas_names])
+
+        # 归一化函数
+        def normalize(arr):
+            lo, hi = np.min(arr), np.max(arr)
+            if hi - lo < 1e-12:
+                return np.zeros_like(arr)
+            return (arr - lo) / (hi - lo)
+
+        lhs_mae_norm = normalize(lhs_mae_mins)
+        density_penalty = 1.0 - np.clip(lhs_n_samples / 500.0, 0, 1)  # 越少越接近 1
+
+        # 构建 atlas 索引
+        atlas_idx = {n: i for i, n in enumerate(atlas_names)}
+
+        # 收集当前 MAE
+        current_maes = np.array(list(mutant_maes.values()))
+        current_mae_norm = normalize(current_maes)
+        mae_idx = {n: i for i, n in enumerate(mutant_maes.keys())}
+
+        # 计算优先级
+        mutant_priorities = {}
+        for name in mutant_maes.keys():
+            if name in atlas_idx:
+                i = atlas_idx[name]
+                score_atlas_mae = 0.5 * lhs_mae_norm[i]
+                score_density = 0.3 * density_penalty[i]
+            else:
+                # atlas 中不存在的突变体：中性默认值
+                score_atlas_mae = 0.5 * 0.5
+                score_density = 0.3 * 0.5
+
+            j = mae_idx[name]
+            score_current_mae = 0.2 * current_mae_norm[j]
+
+            priority = score_atlas_mae + score_density + score_current_mae
+            mutant_priorities[name] = priority
+
+        # 打印 top-5
+        sorted_p = sorted(mutant_priorities.items(), key=lambda x: x[1], reverse=True)
+        print("[Mutant-Aware] Top-5 优先级突变体:")
+        for name, pri in sorted_p[:5]:
+            atlas_info = self._mutant_atlas.get(name, {})
+            print(f"  - {name}: priority={pri:.4f} | "
+                  f"lhs_MAE_min={atlas_info.get('lhs_mae_min', 'N/A')}, "
+                  f"lhs_n={atlas_info.get('lhs_n_samples', 'N/A')}, "
+                  f"cur_mae={mutant_maes[name]:.4f}")
+
+        return mutant_priorities
+
+    def _allocate_mutant_aware_quota(self, mutant_priorities):
+        """
+        按 priority 加权分配采样配额。
+
+        规则：
+        - 90% 预算给定向 RGS (按 priority 加权)，10% 给全局 LHS (保持多样性)
+        - 筛选高优先级突变体：lhs_MAE_min > 0.5 或 lhs_n_samples < 300
+        - 聚焦 top-K = max(20, 30% of poor mutants)
+        - 每个 mutant 至少 30 样本，最多占总预算的 30% (避免单一家族垄断)
+        """
+        total_budget = self.num_add
+        rgs_budget = int(total_budget * 0.9)
+        global_budget = total_budget - rgs_budget
+
+        # 筛选高优先级突变体 (满足任一阈值)
+        poor_mutants = {}
+        for name, priority in mutant_priorities.items():
+            atlas_info = self._mutant_atlas.get(name, {})
+            lhs_mae_min = atlas_info.get('lhs_mae_min', 0.0)
+            lhs_n = atlas_info.get('lhs_n_samples', 500)
+
+            # 阈值判断：lhs_MAE_min > 0.5 或 N_LHS < 300
+            is_high_mae = lhs_mae_min > 0.5
+            is_low_density = lhs_n < 300
+
+            if is_high_mae or is_low_density:
+                poor_mutants[name] = priority
+
+        if not poor_mutants:
+            # 没有满足阈值的突变体，全部预算给全局 LHS
+            print("[Mutant-Aware] 无满足阈值的高优先级突变体，全部预算给全局 LHS")
+            self._global_lhs_budget = total_budget
+            return {}
+
+        # 聚焦 top-K 最优先的突变体
+        sorted_poor = sorted(poor_mutants.items(), key=lambda x: x[1], reverse=True)
+        top_k = max(20, int(len(sorted_poor) * 0.3))
+        top_k = min(top_k, len(sorted_poor))
+        focused_mutants = sorted_poor[:top_k]
+
+        # 按 priority 加权分配配额
+        total_priority = sum(p for _, p in focused_mutants)
+        max_per_mutant = int(rgs_budget * 0.3)  # 单个突变体最多占 30%
+
+        sampling_plan = {}
+        for name, pri in focused_mutants:
+            quota = max(30, int(rgs_budget * pri / total_priority))
+            quota = min(quota, max_per_mutant)  # 上限钳制
+            sampling_plan[name] = quota
+
+        # 如果钳制导致总量不足，按比例重新分配剩余
+        allocated = sum(sampling_plan.values())
+        remaining = rgs_budget - allocated
+        if remaining > 0 and focused_mutants:
+            for name, pri in focused_mutants:
+                if remaining <= 0:
+                    break
+                extra = min(remaining, max_per_mutant - sampling_plan.get(name, 0))
+                if extra > 0:
+                    sampling_plan[name] = sampling_plan.get(name, 0) + extra
+                    remaining -= extra
+
+        print(f"[Mutant-Aware] 高优先级突变体 ({len(poor_mutants)}个): "
+              f"聚焦 top-{top_k} 分配 {sum(sampling_plan.values())} 名额")
+        for name, pri in focused_mutants[:5]:
+            atlas_info = self._mutant_atlas.get(name, {})
+            print(f"  - {name}: priority={pri:.4f}, quota={sampling_plan.get(name, 0)} | "
+                  f"lhs_MAE_min={atlas_info.get('lhs_mae_min', 'N/A')}, "
+                  f"lhs_n={atlas_info.get('lhs_n_samples', 'N/A')}")
+        if len(focused_mutants) > 5:
+            print(f"  - ... 还有 {len(focused_mutants)-5} 个聚焦样本")
+
+        self._global_lhs_budget = global_budget
+        return sampling_plan
 
     def _validate_param_ranges(self, all_params_list):
         """
@@ -1808,5 +2287,229 @@ class ActiveLearningCallback(pl.Callback):
 
         if len(valid_results) > 0:
             print(f"[AL Manager] 最终存活并允许入库的细胞: {len(valid_results)} 个")
-        
+
         return valid_results, valid_names
+
+    # ==================================================================
+    # al4pde 框架: 4 种 AL 策略 (从 v5 候选池查询)
+    # ==================================================================
+    def _al4pde_random_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """al4pde Random: 从候选池随机选 num_add 个样本"""
+        if self._pool_size == 0:
+            print("[al4pde_random] 候选池已空, 跳过本轮 AL")
+            return None
+        n_select = min(self.num_add, self._pool_size)
+        sel_idx = np.random.choice(self._pool_size, n_select, replace=False)
+        print(f"[al4pde_random] 随机选取 {n_select} 个样本 (池剩余: {self._pool_size})")
+        return self._build_broadcast_from_pool(sel_idx)
+
+    def _al4pde_uncertainty_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """al4pde Uncertainty: MC dropout top_k 选取 (复用 _compute_mc_dropout_uncertainty)"""
+        if self._pool_size == 0:
+            print("[al4pde_uncertainty] 候选池已空, 跳过本轮 AL")
+            return None
+        print(f"[al4pde_uncertainty] 计算 MC dropout 不确定性 (池大小: {self._pool_size})...")
+        pool_indices = np.arange(self._pool_size)
+        # 复用已有 MC dropout 实现 (n_mc_samples=5 加速)
+        unc_scores = self._compute_mc_dropout_uncertainty(pl_module, device, pool_indices, dm,
+                                                          n_mc_samples=5)
+        n_select = min(self.num_add, self._pool_size)
+        sel_idx = np.argsort(unc_scores)[-n_select:]
+        print(f"[al4pde_uncertainty] top_k 选取 {n_select} 个样本 (unc range: "
+              f"{unc_scores[sel_idx].min():.4f}~{unc_scores[sel_idx].max():.4f})")
+        return self._build_broadcast_from_pool(sel_idx)
+
+    def _al4pde_diversity_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """al4pde Diversity: bmdal_reg MaxDistSelectionMethod (轨迹 spatial_mean 特征)"""
+        if self._pool_size == 0:
+            print("[al4pde_diversity] 候选池已空, 跳过本轮 AL")
+            return None
+        print(f"[al4pde_diversity] 计算轨迹 spatial_mean 特征...")
+        pool_features = self._compute_pool_features_spatial_mean(pl_module, dm, device)
+        train_features = self._compute_train_features_spatial_mean(pl_module, dm, device)
+        n_select = min(self.num_add, self._pool_size)
+        print(f"[al4pde_diversity] bmdal_reg MaxDistSelection 选取 {n_select} 个样本 "
+              f"(pool_feat: {pool_features.shape}, train_feat: {train_features.shape})...")
+        sel_idx = self._bmdal_max_dist_select(pool_features, train_features, n_select)
+        return self._build_broadcast_from_pool(sel_idx)
+
+    def _maal_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """
+        MAAL (Mutant-Aware Active Learning): diversity + target priority 加权。
+
+        acquisition_score = (1 - target_weight) * diversity + target_weight * target_priority
+        - diversity: 候选样本到训练集的最小欧氏距离 (轨迹 spatial_mean 特征)
+        - target_priority: 候选样本所属家族的 Real Mutant MAE (实时模型 forward 计算)
+
+        权重通过 --al_target_weight 控制 (默认 0.4), diversity 权重 = 1 - target_weight。
+        """
+        if self._pool_size == 0:
+            print("[MAAL] 候选池已空, 跳过本轮 AL")
+            return None
+
+        # Step 1: 对候选池和训练集做 forward, 得到轨迹 spatial_mean 特征
+        print(f"[MAAL] Step 1: 计算轨迹 spatial_mean 特征 (池: {self._pool_size})...")
+        pool_features = self._compute_pool_features_spatial_mean(pl_module, dm, device)
+        train_features = self._compute_train_features_spatial_mean(pl_module, dm, device)
+
+        # Step 2: 计算 diversity score (候选到训练集的最小距离)
+        print("[MAAL] Step 2: 计算 diversity score (min distance to train)...")
+        diversity_scores = self._compute_diversity_scores(pool_features, train_features)
+        diversity_scores = self._normalize_array(diversity_scores)
+
+        # Step 3: 计算 target_priority (实时模型 forward 126 Real Mutants)
+        print("[MAAL] Step 3: 计算 target_priority (实时 Real Mutant MAE)...")
+        mutant_maes = self._evaluate_real_mutants(pl_module, dm, device)
+        target_priorities = self._map_family_priority(mutant_maes)
+        target_priorities = self._normalize_array(target_priorities)
+
+        # Step 4: 加权 acquisition
+        div_w = 1.0 - self.target_weight
+        tgt_w = self.target_weight
+        acquisition = div_w * diversity_scores + tgt_w * target_priorities
+        print(f"[MAAL] Step 4: 加权 acquisition (diversity={div_w:.2f}, target={tgt_w:.2f}) | "
+              f"score range: {acquisition.min():.4f}~{acquisition.max():.4f}")
+
+        # Step 5: top_k 选取
+        n_select = min(self.num_add, self._pool_size)
+        sel_idx = np.argsort(acquisition)[-n_select:]
+        print(f"[MAAL] Step 5: top_k 选取 {n_select} 个样本")
+        return self._build_broadcast_from_pool(sel_idx)
+
+    # ====== al4pde 框架辅助方法 ======
+    def _compute_pool_features_spatial_mean(self, pl_module, dm, device, batch_size=200):
+        """对候选池做 forward, 返回轨迹 spatial_mean 特征 (al4pde 默认 traj_transform)
+
+        features(c) = model(X(c), params(c)).mean(time_dim) -> (N, 39)
+        """
+        pl_module.eval()
+        features = []
+        with torch.no_grad():
+            for i in range(0, self._pool_size, batch_size):
+                end_idx = min(i + batch_size, self._pool_size)
+                X_batch = self._get_pool_X_batch(slice(i, end_idx)).to(device)
+                P_batch = self._pool_P[i:end_idx].to(device)
+                # forward: (B, 39, 2, T) + (B, 141) -> (B, 39, T)
+                preds = pl_module.forward_ic_time(X_batch, P_batch)
+                # spatial_mean: 对时间维取 mean -> (B, 39)
+                feat = preds.mean(dim=2).cpu()
+                features.append(feat)
+        pl_module.train()
+        return torch.cat(features, dim=0)
+
+    def _compute_train_features_spatial_mean(self, pl_module, dm, device, batch_size=200):
+        """对训练集做 forward, 返回轨迹 spatial_mean 特征"""
+        train_X, train_P, _ = dm.train_dataset_lhs.tensors
+        n_train = len(train_P)
+        pl_module.eval()
+        features = []
+        with torch.no_grad():
+            for i in range(0, n_train, batch_size):
+                end_idx = min(i + batch_size, n_train)
+                X_batch = train_X[i:end_idx].to(device)
+                P_batch = train_P[i:end_idx].to(device)
+                preds = pl_module.forward_ic_time(X_batch, P_batch)
+                feat = preds.mean(dim=2).cpu()
+                features.append(feat)
+        pl_module.train()
+        return torch.cat(features, dim=0)
+
+    def _bmdal_max_dist_select(self, pool_features, train_features, n_select):
+        """用 bmdal_reg MaxDistSelectionMethod 选 batch (参考 al4pde distance_pool_based.py)"""
+        from bmdal_reg.bmdal.feature_data import TensorFeatureData
+        from bmdal_reg.bmdal.feature_maps import IdentityFeatureMap
+        from bmdal_reg.bmdal.features import Features
+        from bmdal_reg.bmdal.selection import MaxDistSelectionMethod
+
+        n_features = pool_features.shape[1]
+        train_ft = Features(IdentityFeatureMap(n_features=n_features),
+                            TensorFeatureData(train_features))
+        pool_ft = Features(IdentityFeatureMap(n_features=n_features),
+                           TensorFeatureData(pool_features))
+        sel_method = MaxDistSelectionMethod(pool_features=pool_ft, train_features=train_ft,
+                                            sel_with_train=True)
+        sel_idx = sel_method.select(n_select).detach().cpu().numpy()
+        return sel_idx
+
+    def _compute_diversity_scores(self, pool_features, train_features, chunk=500):
+        """计算每个候选样本到训练集的最小欧氏距离 (diversity score)
+
+        Args:
+            pool_features: (N, D) torch.Tensor
+            train_features: (M, D) torch.Tensor
+
+        Returns:
+            scores: (N,) numpy array, 每个候选样本到训练集的最近距离
+        """
+        scores = []
+        for i in range(0, len(pool_features), chunk):
+            p_chunk = pool_features[i:i + chunk]  # (chunk, D)
+            # dist: (chunk, M)
+            dist = torch.cdist(p_chunk, train_features)
+            min_dist = dist.min(dim=1)[0]  # (chunk,)
+            scores.append(min_dist)
+        return torch.cat(scores, dim=0).numpy()
+
+    def _map_family_priority(self, mutant_maes):
+        """将 Real Mutant MAE 映射到候选池样本的 target_priority
+
+        候选池样本的 mutant_name 格式: "73_cdc20_ts_LHS_T001"
+        Real Mutant 的 mutant_name 格式: "73_cdc20_ts"
+        匹配规则: 候选样本的 family 前缀 (split('_LHS_')[0]) 是 Real Mutant 名的前缀
+
+        Args:
+            mutant_maes: {mutant_name: mae} dict
+
+        Returns:
+            priorities: (N,) numpy array, 每个候选样本的 target_priority
+        """
+        priorities = np.zeros(self._pool_size)
+        # 预处理 mutant_maes: 按名字长度降序, 优先匹配更具体的名字
+        sorted_maes = sorted(mutant_maes.items(), key=lambda x: len(x[0]), reverse=True)
+
+        for i, name in enumerate(self._pool_mutant_names):
+            family = str(name).split('_LHS_')[0]
+            # 找最匹配的 real mutant
+            best_mae = 0.0
+            for m_name, mae in sorted_maes:
+                if m_name == family or m_name.startswith(family) or family.startswith(m_name):
+                    best_mae = max(best_mae, mae)
+            priorities[i] = best_mae
+        return priorities
+
+    def _normalize_array(self, arr):
+        """归一化数组到 [0, 1]"""
+        arr = np.asarray(arr, dtype=np.float64)
+        min_val = arr.min()
+        max_val = arr.max()
+        if max_val - min_val < 1e-8:
+            return np.zeros_like(arr)
+        return (arr - min_val) / (max_val - min_val)
+
+    def _build_broadcast_from_pool(self, sel_idx):
+        """从候选池选样本后构建 broadcast_data (统一接口)
+
+        选中样本从候选池移除, 返回的 X/P/Y 用于 on_train_epoch_end 的训练集扩容。
+        注意: Y 用候选池的真实轨迹 (从 v5 加载), 而非模型预测。
+
+        内存优化: al4pde 路径下 self._pool_X 为 None, X 通过 _get_pool_X_batch 动态构造。
+        """
+        sel_idx = np.array(sel_idx, dtype=np.int64)
+        # 选中的样本 (X 动态构造, P/Y 直接索引)
+        sel_X = self._get_pool_X_batch(sel_idx).clone()
+        sel_P = self._pool_P[sel_idx].clone()
+        sel_Y = self._pool_Y[sel_idx].clone()
+
+        # 从候选池移除已选样本
+        mask = np.ones(self._pool_size, dtype=bool)
+        mask[sel_idx] = False
+        if self._pool_X is not None:
+            self._pool_X = self._pool_X[mask]
+        self._pool_P = self._pool_P[mask]
+        self._pool_Y = self._pool_Y[mask]
+        if self._pool_mutant_names is not None:
+            self._pool_mutant_names = self._pool_mutant_names[mask]
+        self._pool_size = mask.sum()
+
+        print(f"[al4pde] 候选池剩余: {self._pool_size} 样本")
+        return {'X': sel_X, 'P': sel_P, 'Y': sel_Y}
