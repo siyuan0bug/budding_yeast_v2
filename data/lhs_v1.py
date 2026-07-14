@@ -10,6 +10,65 @@ import warnings
 warnings.filterwarnings("ignore") # 忽略 ODE 求解中常见的除零或精度警告
 
 # ==========================================
+# 去重防泄漏算法（v6 版内联实现）
+# ==========================================
+DEDUP_RTOL = 0.08  # 近重复剔除相对阈值（与 analyze_samples.py 严格一致）
+
+
+def build_real_mutant_full(mutant_rules, defaults):
+    """构建全部 real mutant 的完整参数向量 {name: full_dict}。"""
+    real_mutant_full = {}
+    for rm_name, rm_rules in mutant_rules.items():
+        rm_full = dict(defaults)
+        rm_full.update(rm_rules)
+        real_mutant_full[rm_name] = rm_full
+    return real_mutant_full
+
+
+def build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, mutated_set):
+    """预筛：哪些 real mutant 可能被当前家族样本接近。"""
+    candidates = []
+    for rm_name, rm_full in real_mutant_full.items():
+        is_cand = True
+        for rp, rv in mutant_rules[rm_name].items():
+            if rp in mutated_set:
+                continue
+            d = defaults.get(rp, 0.0)
+            ea = max(1e-6, d * DEDUP_RTOL) if d == 0.0 else 1e-6
+            if not np.isclose(d, rv, rtol=DEDUP_RTOL, atol=ea):
+                is_cand = False
+                break
+        if is_cand:
+            candidates.append((rm_name, rm_full))
+    return candidates
+
+
+def is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+    """近母体检查：所有突变参数在母体值 8% 以内 → 返回 True（应丢弃）。
+    零值参数(KO)用 max(1e-6, default*0.08) 作 atol。"""
+    for p_name in mutated_params:
+        orig = original_rules[p_name]
+        eff_atol = max(1e-6, defaults.get(p_name, 0.0) * DEDUP_RTOL) if orig == 0.0 else 1e-6
+        if not np.isclose(sample_dict[p_name], orig, rtol=DEDUP_RTOL, atol=eff_atol):
+            return False
+    return True
+
+
+def is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+    """全局跨 real+WT 检查：接近任一 real mutant → 返回 True（应丢弃）。"""
+    for rm_name, rm_full in cross_check_candidates:
+        near_this = True
+        for p_name in mutated_params:
+            rv = rm_full[p_name]
+            ea = max(1e-6, defaults.get(p_name, 0.0) * DEDUP_RTOL) if rv == 0.0 else 1e-6
+            if not np.isclose(sample_dict[p_name], rv, rtol=DEDUP_RTOL, atol=ea):
+                near_this = False
+                break
+        if near_this:
+            return True
+    return False
+
+# ==========================================
 # 0. 全局配置参数
 # ==========================================
 SIM_TF = int(os.environ.get("SIM_TF", 210))       # 模拟总时长 (min)
@@ -17,7 +76,9 @@ SIM_STEPS = int(os.environ.get("SIM_STEPS", 500)) # 采样总步数
 NUM_LHS_SAMPLES = 10000  # LHS 采样数量
 SIM_TIMEOUT = 5.0 # 单个细胞求解超时阈值 (秒)
 
+OUTPUT_DIR = "/home/users/zsy/mydata/budding_yeast"
 DATASET_NAME = f"lhs_cheat_{SIM_TF}min_{SIM_STEPS}steps_dual_labels.npz"
+DATASET_PATH = os.path.join(OUTPUT_DIR, DATASET_NAME)
 
 # ==========================================
 # 1. 变量映射与基础设定
@@ -485,6 +546,10 @@ def generate_lhs_tasks(mutant_rules):
         if not mutated_params:
             continue
 
+        # 全局跨检查预筛
+        _mutated_set = set(mutated_params)
+        cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
+
         continuous_mutated = [p for p in mutated_params if p not in DISCRETE_STRICT_PARAMS]
         strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
         has_bub2 = any(p in ['BUB2_active', 'init_BUB2'] for p in strict_mutated)
@@ -556,12 +621,11 @@ def generate_lhs_tasks(mutant_rules):
                     sample_dict[p] = val
 
             # ----- 克隆剔除：丢弃与母体完全相同的样本 -----
-            is_identical = True
-            for p_name in mutated_params:
-                if not np.isclose(sample_dict[p_name], original_rules[p_name], rtol=1e-5, atol=1e-8):
-                    is_identical = False
-                    break
-            if is_identical:
+            if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                continue
+
+            # 全局跨检查：拦截跨家系污染和 WT 污染
+            if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
                 continue
 
             # 原有的纯离散内部去重（保持不变）
@@ -718,7 +782,7 @@ if __name__ == '__main__':
     all_bio_labels = np.array(final_bio_labels)
     all_pattern_labels = np.array(final_pattern_labels)
     
-    np.savez_compressed(DATASET_NAME, 
+    np.savez_compressed(DATASET_PATH, 
                         data=all_tensors, 
                         params=all_params,
                         param_names=param_keys,
@@ -726,7 +790,7 @@ if __name__ == '__main__':
                         labels=all_bio_labels,             
                         pattern_labels=all_pattern_labels) 
                         
-    print(f"\n📊 保存成功！文件: {DATASET_NAME}")
+    print(f"\n📊 保存成功！文件: {DATASET_PATH}")
     print(f"✅ 耗时: {time.time() - start_time:.2f} 秒")
     print(f"📊 张量维度 (Samples, Vars, Timesteps): {all_tensors.shape}")
     print(f"📊 参数维度 (Samples, Param_Count): {all_params.shape}")
@@ -740,3 +804,38 @@ if __name__ == '__main__':
     u_pat, c_pat = np.unique(all_pattern_labels, return_counts=True)
     for lbl, count in zip(u_pat, c_pat):
         print(f"  - {lbl}: {count} 个")
+
+    # ==========================================
+    # 📊 各家族 LHS 样本数量统计 (普通 LHS + Target 定向 LHS)
+    # ==========================================
+    print("\n" + "="*75)
+    print("📊 各家族 LHS 样本数量统计 (按突变体母体分组)")
+    print("="*75)
+
+    from collections import defaultdict
+    family_stats = defaultdict(lambda: {'real': 0, 'lhs_normal': 0, 'lhs_target': 0})
+
+    for name in final_names:
+        if '_LHS_T' in name:
+            m_name = name.split('_LHS_T')[0]
+            family_stats[m_name]['lhs_target'] += 1
+        elif '_LHS_' in name:
+            m_name = name.split('_LHS_')[0]
+            family_stats[m_name]['lhs_normal'] += 1
+        else:
+            family_stats[name]['real'] += 1
+
+    print(f"{'突变体母体':<35} | {'Real':<6} | {'普通LHS':<8} | {'TargetLHS':<9} | {'合计':<6}")
+    print("-" * 75)
+    total_real = total_normal = total_target = 0
+    for m_name in sorted(family_stats.keys()):
+        s = family_stats[m_name]
+        total = s['real'] + s['lhs_normal'] + s['lhs_target']
+        if total > 0:
+            print(f"{m_name:<35} | {s['real']:<6} | {s['lhs_normal']:<8} | {s['lhs_target']:<9} | {total:<6}")
+        total_real += s['real']
+        total_normal += s['lhs_normal']
+        total_target += s['lhs_target']
+    print("-" * 75)
+    print(f"{'合计':<35} | {total_real:<6} | {total_normal:<8} | {total_target:<9} | {total_real+total_normal+total_target:<6}")
+    print("="*75)

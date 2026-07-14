@@ -51,35 +51,39 @@
 
 ### 2.2 初始训练集
 
-按策略分流（[al_callback.py:148-245](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L148-L245)）：
+按策略分流（[al_callback.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)）：
 
 - **池化策略**（us / is / random / wrs / vessal / hggs / pial）：
   从 `dm.train_dataset_lhs`（全量 LHS 训练集，含 X/P/Y）中通过 **K-Means 聚类**选种子
   - 簇数 = `initial_train_size`（默认 5000）
-  - 在 141 维参数空间聚类，选离簇心最近的样本（[_kmeans_initial_selection](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L247-L288)）
+  - 在 141 维参数空间聚类，选离簇心最近的样本（[_kmeans_initial_selection](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)）
   - 目的：保证初始集在参数空间均匀覆盖，避免随机选带来的聚集
 
 - **查询合成策略**（rgs / mutant_aware）：
-  **跳过 K-Means**，直接用全量 LHS 数据开始训练（[al_callback.py:187-207](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L187-L207)）
+  **跳过 K-Means**，直接用全量 LHS 数据开始训练
   - 原因：合成策略本身会定向采样，初始集不必特意选种子
+
+- **al4pde 框架策略**（al4pde_random / al4pde_uncertainty / al4pde_diversity / maal）：
+  从 v1 数据集（`DATASET_CHEAT`）的 LHS 常规样本中用 **K-Means 选 15000 个**作为初始训练集（`--al_initial_train_size 15000`），候选池用 v5 数据集（`--al_pool_dataset`）。总训练量 = 15000 初始 + 50000 AL = 65000。
 
 ### 2.3 触发时机
 
 每 `trigger_every_n_epochs` 个 epoch 触发一次（epoch 0 跳过），在 `on_train_epoch_end` 钩子中执行（[al_callback.py:290-313](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L290-L313)）。
 
-不同策略不同触发周期（[run_pipeline.sh:130-138](file:///home/users/zsy/trae_workspace/budding_yeast_v2/run_pipeline.sh#L130-L138)）：
+不同策略不同触发周期（[run_pipeline.sh](file:///home/users/zsy/trae_workspace/budding_yeast_v2/run_pipeline.sh)）：
 
 | 策略 | trigger_every_n_epochs |
 |------|------------------------|
 | pial | 50 |
 | mutant_aware | 100 |
+| al4pde_* / maal | 4（200 epochs / 4 = 50 轮 AL，总 50,000 样本） |
 | 其他（us/is/random/wrs/vessal/hggs/rgs） | 10 |
 
 **嵌入训练过程内**，不重训。
 
 ### 2.4 选样策略
 
-每轮选 `num_add` 个样本（默认 5000，v2 mutant_aware 为 500）。在 [_standard_al_sample](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L343-L408) 中分发：
+每轮选 `num_add` 个样本（默认 5000，al4pde/maal 为 1000）。在 `_standard_al_sample` 中分发：
 
 | 策略 | 原理 |
 |------|------|
@@ -89,10 +93,16 @@
 | `wrs` | 加权蓄水池采样 |
 | `vessal` | 动态权重（随训练进度增多样性权重） |
 | `hggs` | K-Means 分层纯多样性 |
-| `pial` | MC Dropout 不确定性(α=0.6→0.5) + PCA 轨迹多样性(β=0.3→0.4) + ODE 残差(γ=0.1)（[L731-820](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L731-L820)） |
+| `pial` | MC Dropout 不确定性(α=0.6→0.5) + PCA 轨迹多样性(β=0.3→0.4) + ODE 残差(γ=0.1) |
 | `rgs` / `mutant_aware` | 查询合成分支，走定向采样 |
+| `al4pde_random` | al4pde 框架基线：从 v5 候选池随机采样 |
+| `al4pde_uncertainty` | MC Dropout 不确定性（10 forward passes），选方差最大的样本 |
+| `al4pde_diversity` | 特征空间最大距离多样性（bmdal_reg 风格），选最分散的样本 |
+| `maal` | `0.6×diversity + 0.4×target_priority`；target_priority 用 3D 加权：`0.5×MAE百分位 + 0.3×参数空间距离 + 0.2×家族覆盖度` |
 
 详见 [ALGORITHMS_AL.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/ALGORITHMS_AL.md)。
+
+**实验结论**（详见 [eval_result/AL4PDE_V2_EVAL_REPORT.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/eval_result/AL4PDE_V2_EVAL_REPORT.md)）：4 策略中 **random 最优**（Real MAE 0.0976），diversity 最差（0.2725）；cdc20_ts 系列是 diversity/maal 的灾难区（MAE>1.6），random 能命中（MAE 0.07-0.12）。V2 配置（65000 样本）比 V1 配置（15000 样本）Real MAE 改善 49-61%。
 
 ### 2.5 标注方式
 
@@ -109,11 +119,15 @@
 
 ### 2.6 数据池管理
 
-仅池化策略有池（[al_callback.py:131-138, L222-238](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L131-L138)）：
+池化策略与 al4pde 框架策略均有池（[al_callback.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)）：
 
-- **池的来源**：在 `on_train_start` 中由「全量 LHS − 初始训练集」剩余样本构成 `_pool_X / _pool_P / _pool_Y`
-- **池的更新**：被选中样本通过 mask **从池中移除**（[L1206-1216](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L1206-L1216)），池单调递减
-- **池耗尽处理**：池空时跳过本轮采样（[L364-366](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py#L364-L366)）
+- **标准池化策略的池**：在 `on_train_start` 中由「全量 LHS − 初始训练集」剩余样本构成 `_pool_X / _pool_P / _pool_Y`
+  - 被选中样本通过 mask **从池中移除**，池单调递减
+  - 池空时跳过本轮采样
+
+- **al4pde 框架的池**（`--al_pool_dataset`）：v5 数据集排除 126 Real Mutant 后的 ~162,008 样本（含 54,619 target `_LHS_T` + 107,389 普通 LHS `_LHS_`）
+  - **内存优化**：候选池只加载 `P_norm` + `Y_IC` + `mutant_names` 到内存（~0.12GB），完整 `Y` 按需从磁盘加载（`_load_full_Y_from_disk`），避免 12GB 常驻内存
+  - 动态从 `Y_IC` 和共享 `t_grid` 构造 `X`，减少内存占用
 
 **查询合成策略无池**：每轮用 LHS 引擎新合成候选，用完即弃。
 
@@ -249,18 +263,19 @@ for al_iter in 0..num_al_iter-1:
 | **AL 与训练的关系** | 训练**内嵌** AL（Callback），单次训练全程增量扩容 | 训练与 AL **外层交替**，每轮**从头重训** ensemble |
 | **模型架构** | 单模型（PyTorch Lightning） | Ensemble 集成（多模型平均不确定性） |
 | **初始集选择** | K-Means 聚类选种子（多样性优先） | 纯随机（简单） |
-| **数据量增长** | 固定每轮 +5000（线性） | 指数增长 2×（默认）或线性或手动 |
-| **标注成本** | 池化：零成本（预计算）；合成：`solve_ivp` 较慢 | 始终调 Oracle（JAX 求解器）实时算 |
-| **数据池来源** | 全量 LHS 预生成（确定性） | 池类预生成 10 万；非池每轮新生成 |
-| **数据生成方法** | `qmc.LatinHypercube` 拉丁超立方 + 物理保护 | `torch.rand` 纯均匀随机 |
+| **数据量增长** | 固定每轮 +1000-5000（线性） | 指数增长 2×（默认）或线性或手动 |
+| **标注成本** | 池化/al4pde：零成本（预计算）；合成：`solve_ivp` 较慢 | 始终调 Oracle（JAX 求解器）实时算 |
+| **数据池来源** | 全量 LHS 预生成（标准池化）或 v5 候选池 162,008（al4pde 框架） | 池类预生成 10 万；非池每轮新生成 |
+| **数据生成方法** | `qmc.LatinHypercube` 拉丁超立方 + 物理保护 + target 定向采样 | `torch.rand` 纯均匀随机 |
 | **物理保护** | 离散真值图鉴、成对锁定、克隆拦截、高斯微扰 | 无（仅 min/max 边界） |
-| **策略丰富度** | 8 种（含 PIAL 物理信息、RGS 查询合成） | ~6 种（含 BAIT/LCMD 等 coreset 距离类） |
-| **特色策略** | PIAL（MC Dropout+PCA+ODE 残差）、RGS（Real Mutant 引导合成） | BAIT/LCMD/MaxDist（基于 `bmdal_reg` 库的批量距离选择） |
+| **策略丰富度** | 13 种（含 PIAL 物理信息、RGS 查询合成、al4pde 框架 4 策略、MAAL） | ~6 种（含 BAIT/LCMD 等 coreset 距离类） |
+| **特色策略** | PIAL（MC Dropout+PCA+ODE 残差）、RGS（Real Mutant 引导合成）、MAAL（diversity+target_priority 3D 加权） | BAIT/LCMD/MaxDist（基于 `bmdal_reg` 库的批量距离选择） |
 | **终止** | 隐式（跑到 max_epochs=200） | 显式（num_al_iter=5） |
-| **数据存储** | 内存中 `torch.cat` 扩容 | 磁盘 `.npy` 追加 + 每轮重新加载 |
+| **数据存储** | 内存中 `torch.cat` 扩容（al4pde 框架用磁盘按需加载优化内存） | 磁盘 `.npy` 追加 + 每轮重新加载 |
 | **分布式** | DDP broadcast 同步 | 单卡 / Ensemble 并行 |
 | **不确定性来源** | MC Dropout（参数加噪声多次前向） | Ensemble（多模型独立训练的不一致性） |
-| **多样性策略** | PCA 降维 + 参数空间 K-Means | `bmdal_reg` 库的批量距离/coreset（LCMD/MaxDist/BAIT） |
+| **多样性策略** | PCA 降维 + 参数空间 K-Means + bmdal_reg 风格最大距离（al4pde_diversity） | `bmdal_reg` 库的批量距离/coreset（LCMD/MaxDist/BAIT） |
+| **实验最优策略** | al4pde 框架中 **random 最优**（Real MAE 0.0976），diversity 最差（0.2725） | 取决于任务，通常 coreset/BAIT 优于 random |
 
 ---
 
@@ -318,11 +333,19 @@ for al_iter in 0..num_al_iter-1:
 
 | 维度 | Budding Yeast v2 | AL4PDE |
 |------|------------------|--------|
-| **生成阶段** | LHS 强制均匀覆盖 + 物理保护 | 纯随机，靠 AL 弥补 |
-| **AL 阶段** | 定向优化（基于 Real Mutant 引导） | 严格基于不确定性/距离 |
+| **生成阶段** | LHS 强制均匀覆盖 + 物理保护 + target 定向采样 | 纯随机，靠 AL 弥补 |
+| **AL 阶段** | 定向优化（基于 Real Mutant 引导）+ al4pde 框架池化对比 | 严格基于不确定性/距离 |
 | **训练阶段** | 增量扩容，持续学习 | 重训式，独立评估 |
-| **数据规模** | 大（80000 样本 LHS 池） | 中（10万池，但实际只用几千） |
-| **研究导向** | 工程优化（数据效率） | 学术对比（策略 ablation） |
+| **数据规模** | 大（标准池化 80K LHS 池；al4pde 框架 162K v5 候选池，训练 65K） | 中（10万池，但实际只用几千） |
+| **研究导向** | 工程优化（数据效率）+ al4pde 框架策略 ablation | 学术对比（策略 ablation） |
+
+### 5.6 al4pde 框架移植实验的关键发现
+
+将 al4pde 项目的池化 AL 范式移植到 budding_yeast_v2 后，得到与原项目**相反**的结论：
+
+- **在 al4pde 项目中**：coreset/BAIT/LCMD 等距离类策略通常**优于** random（因 PDE 参数空间低维、纯随机生成覆盖差）。
+- **在 budding_yeast_v2 中**：**random 最优**（Real MAE 0.0976），diversity 最差（0.2725）。根因是 diversity 采集函数系统性避开 cdc20_ts 参数聚类（该区域特征相似但行为关键），而 random 无偏采样能命中。
+- **启示**：AL 策略的有效性高度依赖数据生成方式。budding_yeast_v2 的 LHS + target 定向采样已提供良好基础覆盖，此时"无偏随机补充"优于"特征空间最大化多样性"；而 al4pde 的纯随机生成覆盖差，需要 AL 策略主动弥补。
 
 ---
 

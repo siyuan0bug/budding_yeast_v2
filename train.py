@@ -1,4 +1,5 @@
 import os
+import time
 import argparse
 import torch
 import numpy as np
@@ -94,6 +95,32 @@ class SimToRealVisualizerCallback(Callback):
         if isinstance(trainer.logger, WandbLogger) and log_dict:
             trainer.logger.experiment.log(log_dict)
         pl_module.train()
+
+class EpochSummaryCallback(Callback):
+    """每个 epoch 结束后用 print 输出训练摘要, 确保日志文件中可见 (不依赖 tqdm 终端渲染)."""
+
+    def __init__(self):
+        super().__init__()
+        self.epoch_start_time = None
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        self.epoch_start_time = time.time()
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if self.epoch_start_time is None:
+            return
+        epoch = trainer.current_epoch
+        m = trainer.callback_metrics
+        train_loss = float(m.get('train_loss', float('nan')))
+        val_lhs = float(m.get('val_loss_lhs', float('nan')))
+        test_lhs = float(m.get('test_loss_lhs', float('nan')))
+        test_real = float(m.get('test_loss_real', float('nan')))
+        lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0.0
+        elapsed = time.time() - self.epoch_start_time
+        print(f"[Epoch {epoch+1:03d}/{trainer.max_epochs:03d}] "
+              f"train_loss={train_loss:.6f} | val_lhs={val_lhs:.6f} | "
+              f"test_lhs={test_lhs:.6f} | test_real={test_real:.6f} | "
+              f"lr={lr:.2e} | {elapsed:.1f}s", flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description='Train Yeast Model')
@@ -257,7 +284,7 @@ def main():
     visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)
 
     # 🌟🌟🌟 新增 2：挂载回调拦截器 🌟🌟🌟
-    callbacks = [checkpoint_callback, lr_monitor, visualizer]
+    callbacks = [checkpoint_callback, lr_monitor, visualizer, EpochSummaryCallback()]
     
     if args.al_strategy != 'none':
         from budding_yeast_v2.utils.al_callback import ActiveLearningCallback

@@ -1,11 +1,15 @@
 # Budding Yeast v2 - Architecture & Framework Overview
 
-该文档用于梳理 `budding_yeast_v2` 目前的整体架构，澄清在融合了旧版基线（budding_yeast_v2）和新版主动学习框架（AL4PDE）之后的目录结构、代码模块及其各自的作用。
+该文档梳理 `budding_yeast_v2` 项目的整体架构：目录结构、代码模块及其作用。
 
 ## 1. 整体架构概览 (High-level Architecture)
-本项目目前融合了两套核心范式：
-- **经典训练范式 (PINN / FNO Base)**：直接使用预先生成好的大规模静态数据集（如 LHS 采样产生），训练算子模型预测细胞周期系统，并通过 PINN 物理残差和事件重置约束 (Jump Condition) 来约束物理合规性。
-- **主动学习范式 (AL4PDE AR+AL)**：通过少量初始数据训练一个自回归模型 (AR Model)，然后利用模型对“候选池 (Candidate Pool)”进行大批量推理，利用 Acquisition Function（多样性、不确定性、距离等策略）挑选最有价值的数据，交由真实 ODE 模拟器生成 Ground Truth，再并入训练集。不断循环以用极小的数据量达到极高的泛化能力。
+
+本项目是一个**基于神经算子（Neural Operator）的代理模型（surrogate model）项目**，用于预测出芽酵母细胞周期动力学。采用 **PyTorch Lightning** 框架，核心范式是**经典训练 + 内嵌主动学习（Callback 模式）**：
+
+- **经典训练范式**：直接使用预先生成好的大规模静态数据集（LHS 采样 + target 定向采样），训练算子模型预测 39 变量 × 500 时间步的细胞周期轨迹。支持 PINN 物理残差约束。
+- **内嵌主动学习范式**：通过 PyTorch Lightning 的 Callback 机制（`ActiveLearningCallback`）在训练过程中持续扩容训练集。模型不重训，新数据通过 `torch.cat` 拼接进现有 `train_dataset_lhs`，下一 epoch 立即生效。共 13 种 AL 策略（含 al4pde 框架池化策略）。
+
+> **注意**：自回归（AR）+ 外层迭代重训式 AL 框架（移植自 al4pde 项目）在**独立的 `al4pde4yeast/` 项目**中实现，不在 `budding_yeast_v2` 内。详见 [AL_VS_AL4PDE.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/AL_VS_AL4PDE.md) 的两项目对比。
 
 ---
 
@@ -13,92 +17,164 @@
 
 ```text
 budding_yeast_v2/
-├── configs/                     # 【配置中心】所有超参数的 yaml 存放地
-│   └── ar_al_default.yaml       # 专门为 AR (自回归) + AL (主动学习) 准备的配置文件 (移植自 AL4PDE)
+├── train.py                     # ⭐ 训练入口：组装 LightningModule + DataModule + Callbacks → trainer.fit
+├── eval.py                      # 评估入口：加载 checkpoint，评估 real mutants + LHS 测试集
+├── tune.py                      # Optuna 超参搜索（目标：Real Mutants MAE）
+├── analyze_seeds.py             # 多 seed 实验汇总（均值±标准差）
+├── analyze_data_distribution.py # 数据分布探索分析
+├── run_pipeline.sh              # ⭐ 主批量实验脚本：17 列配置，并行执行 train + eval
+├── run_tune.sh                  # Optuna 搜索封装
+├── run_v3_pipeline.sh           # V3 数据集专用流水线
+│
+├── models/                      # 【模型层】
+│   ├── yeast_lit_module.py      # ⭐ LightningModule：模型注册表 + 训练/验证/优化器 + forward_ic_time
+│   └── components/              # 各模型实现
+│       ├── pure_fno.py          # PureFNO_ICLR2021 (FNO 基线)
+│       ├── cross_fno.py         # NIPSYeastFNO (Cross-Attn 注入参数)
+│       ├── hyper_fno.py         # ⭐ HyperFNO (动态投影 + 超网络，主力模型)
+│       ├── hp_fno.py            # hpYeastFNO (耦合谱卷积 + HyperNet shift)
+│       ├── ultimate_fno.py      # UltimateFNO (因果矩阵掩码, 双输入接口)
+│       ├── wno_cross.py         # NIPSYeastWNO (小波卷积版)
+│       ├── lno_cross.py         # NIPSYeastLNO (Laplace 卷积版)
+│       ├── neural_ode.py        # NeuralODEModel (torchdiffeq)
+│       └── patchtst.py          # PatchTST (ICLR2023, FiLM 注入参数)
+│
 ├── data/                        # 【数据与生成层】
-│   ├── dataset_utils.py         # 数据集读取与切分工具类 (如通用加载、分层采样划分)
-│   ├── param_gen.py             # 核心参数采样逻辑
-│   ├── lhs_v0.py / lhs_v1.py    # 拉丁超立方抽样 (LHS) 脚本，包含严格的生物学合理性拦截 (Hard Conflict Rejection)
-│   ├── lhs_v1_origin.py         # 原始版本 LHS 逻辑备用
-│   ├── yeast_datamodule.py      # 旧版 PyTorch Lightning 数据模块，用于加载静态大规模数据集
-│   └── ar_datamodule.py         # 新版！AL4PDE 风格，专为将长轨迹切分为短自回归 step 的数据模块
-├── models/                      # 【模型与损失层】(最核心模块)
-│   ├── components/              # 底层网络结构
-│   │   ├── neural_ode.py        # 基于 Neural ODE 的对照基线
-│   │   ├── hyper_fno.py         # Hyper-FNO (参数化频域神经算子)
-│   │   ├── hp_fno.py            # HPO-FNO 架构
-│   │   ├── patchtst.py          # PatchTST 时序预测架构
-│   │   ├── cross_fno.py, lno_cross.py, wno_cross.py, pure_fno.py, ultimate_fno.py # 其他各类型的神经算子变体
-│   │   └── al4pde_modules/      # 移植自 AL4PDE 的底层模块 (如 fno.py, sinenet_cond_2d.py, unet_cond_1d.py 等)
-│   ├── yeast_lit_module.py      # 旧版及基础训练框架：基于 PyTorch Lightning 封装，支持单次 rollout 训练、自回归滚动，和 Curriculum Learning。
-│   ├── ar_model.py              # 新版！移植自 AL4PDE 的 ARModelWrapper，不使用 Lightning，专门支持多步自回归的循环训练。
-│   └── ar_loss.py               # 新版！自回归专用 Loss，支持 Teacher Forcing Schedule 逐步过渡到纯 AR。
-├── acquisition/                 # 【主动学习策略层】(新版新增)
-│   ├── al4pde_acquisition/      # 完全移植自 AL4PDE 的主动学习核心算法
-│   │   ├── pool_based.py        # 基础的 Pool-based 采样框架
-│   │   ├── random.py            # 随机采样策略 (Base)
-│   │   ├── uncertainty_based.py # 基于模型不确定性的采样 (Ensemble Uncertainty)
-│   │   ├── distance_pool_based.py # 基于特征空间或轨迹距离的多样性采样策略
-│   │   ├── batch_selection.py   # Batch 级别的综合筛选策略
-│   │   ├── build_selection.py   # 策略构建工厂
-│   │   └── data_schedule.py     # 主动学习的采样数量调度计划
-│   ├── lcmd_acquisition.py      # LCMD 多样性采集策略
-│   ├── pool_based_strategies.py # 额外整合的主动学习策略封装
-│   └── random_selection.py      # 独立随机采样策略
+│   ├── yeast_datamodule.py      # ⭐ PyTorch Lightning DataModule：加载/划分/归一化/画图样本
+│   ├── dataset_utils.py         # npz 加载器
+│   ├── lhs_v1_origin.py         # ⭐ ODE 真值引擎（solve_ivp + LHS 采样 + 事件重置）
+│   ├── lhs_v1_origin_v2.py      # V2 数据集生成（+ 三大家族定向扩展）
+│   ├── lhs_v1_origin_v3.py      # V3 数据集生成（+ 26 个 MAE>0.3 突变体扩展）
+│   ├── lhs_v1_origin_v4.py      # V4 数据集生成（+ 12 类扩展家族）
+│   ├── lhs_v1_origin_v5.py      # ⭐ V5 数据集生成（+ 7 项定向修复，17 类家族）
+│   ├── lhs_v1_origin_v6.py      # ⭐ V6 数据集生成（+ 6 个修复点，历史最优）
+│   ├── lhs_v0.py / lhs_v1.py    # 早期 LHS 采样脚本
+│   └── DATASET_GENERATION_GUIDE.md # 数据集生成指南
+│
 ├── utils/                       # 【工具与约束层】
-│   ├── al_callback.py           # 【极度重要】不仅包含主动学习的控制回调，还集成了极其重要的防崩溃校验 (RGS), PCA 降维多样性评估，以及 NaN/Inf 防御。
-│   ├── losses.py                # 物理损失计算库，包含 PINNResidualLoss v2 (采用 Ground Truth 事件掩码，以及基于真实变化方向的跳跃惩罚)。
-│   ├── metrics.py               # 模型性能评估指标
-│   ├── normalization.py         # 归一化/反归一化模块
-│   └── physics_eqns_torch.py    # 基于 PyTorch 的细胞周期 ODE 物理方程
-├── scripts/                     # 【新版运行脚本层】
-│   ├── run_ar_al.py / .sh       # 新版！用来启动 Auto-Regressive + Active Learning 主流程的脚本
-│   └── eval_ar_al.py            # AR 模型专用的评估脚本
-├── 根目录脚本 /                    # 【旧版运行与工具脚本】
-│   ├── train.py                 # 旧版主训练入口，对接 yeast_lit_module 和静态数据集
-│   ├── train_eval_filtered.py   # 过滤数据集后的训练入口
-│   ├── eval.py                  # 旧版评估指标和画图脚本
-│   ├── tune.py / run_tune.sh    # 超参数搜索脚本
-│   ├── run_pipeline.sh          # 旧版/基线跑全量训练的脚本
-│   ├── run_filtered_experiment.sh # 旧版过滤实验启动脚本
-│   └── analyze_data_distribution.py / analyze_seeds.py # 数据探索分析工具
-└── Markdown 文档                 # 其他相关开发记录文档 (如 ALGORITHMS_AL.md 等)
+│   ├── al_callback.py           # ⭐ 主动学习回调（13 种策略：池化/查询合成/al4pde 框架）
+│   ├── losses.py                # 损失注册表 + curriculum 权重（含 PINNResidualLoss v2）
+│   ├── metrics.py               # MAE/MSE/Relative L2/Correlation
+│   └── physics_eqns_torch.py    # ODE 方程的 PyTorch 可微版（供 PINN 残差用）
+│
+├── eval_result/                 # 评估结果输出（global_metrics_denorm.json + per_mutant_metrics.csv + 轨迹图）
+├── train_result/                # 训练 checkpoint 输出
+├── tune_result/                 # Optuna 搜索结果
+├── logs/                        # 并行实验日志（每个实验一个 .log 文件）
+├── wandb/                       # W&B 日志（在线/离线）
+│
+└── Markdown 文档
+    ├── AGENTS.md                # ⭐ 项目工作指南（AI Agent 与开发者入口）
+    ├── ALGORITHMS_AL.md         # 主动学习算法详解（13 种策略）
+    ├── ALGORITHMS_PINN_RESIDUAL.md # PINN 残差损失详解
+    ├── AL_VS_AL4PDE.md          # budding_yeast_v2 vs al4pde 项目 AL 对比
+    ├── ARCHITECTURE_OVERVIEW.md # 本文档
+    ├── normalization_scheme.md  # 归一化方案对比
+    ├── data_distribution_analysis.md # 数据分布分析
+    └── 总结.md                  # v2 cheat 数据集说明
 ```
 
 ---
 
-## 3. 旧版 (基线) vs 新版 (AL4PDE) 工作流对比
+## 3. 核心工作流
 
-为了防止在调参时混淆，请明确两套流程的文件调用链是完全分开的：
+### 工作流：经典训练 + 内嵌主动学习
 
-### 工作流 A：经典基线训练 (Old / Base Framework)
-**定位**：在大规模生成的静态训练集上拟合，验证模型拟合物理系统的极限能力。
-- **入口**：`train.py` 
-- **数据**：`data/yeast_datamodule.py` 负责读取整个预生成好的大池子，借助 `data/dataset_utils.py` 进行划分。
-- **模型**：`models/yeast_lit_module.py`，支持一次性前向输出或自回归步进。采用 PyTorch Lightning 的 Trainer 训练。
-- **损失**：`utils/losses.py`，受 Curriculum Learning 自动调整（前 30 轮纯 MSE，后慢慢加入物理损失）。
+**定位**：在大规模静态数据集上拟合，通过 Callback 在训练过程中持续扩容训练集。
 
-### 工作流 B：自回归 + 主动学习 (AL4PDE AR+AL Framework)
-**定位**：解决数据生成昂贵的问题。用小数据起步，让模型自动寻找对自己最有价值的数据。
-- **入口**：`scripts/run_ar_al.py` (配置：`configs/ar_al_default.yaml`)
-- **数据**：使用 `data/ar_datamodule.py` 将长轨迹切片成短块 (例如 `num_train_steps=2`)。
-- **模型**：使用纯 PyTorch 写的 `models/ar_model.py` (绕开 Lightning)。为了防止早期自回归发散，引入了 `Teacher Forcing Schedule`，在前 50% 的 epoch 中将 Ground Truth 喂给下一步。
-- **主动学习交互**：
-  1. 生成极大规模候选池 (如 10,000 * Mutants 种参数)，通过 `utils/al_callback.py` 中的 `_validate_param_ranges` 拦截掉荒谬的参数（防溢出）。
-  2. 使用 `ar_model.py` 对候选池进行全序列推理。遇到崩溃的残差时，使用 `np.nan_to_num` 防御。
-  3. 计算多样性：使用 `_compute_trajectory_diversity_pca` 将推理结果降维到 20 维，然后计算到现有训练集的欧式距离，选出差异最大的。
-  4. 选出的候选参数调用 ODE 模拟器获得真实 Ground Truth，然后加入到下一轮 AL 的训练池中。
-  5. 循环该过程 (5 轮)。
+**调用链**：
+```
+train.py
+  ├─ YeastLitModule (models/yeast_lit_module.py)
+  │    ├─ MODEL_REGISTRY → 选择模型 (hyper_fno / cross_fno / patchtst / ...)
+  │    ├─ LOSS_REGISTRY → 选择损失 (mse_only / physics_informed / pinn_residual / ...)
+  │    ├─ forward_ic_time(x, p) → one_time 或 autoregressive 预测
+  │    └─ Cosine + Warmup 调度器
+  │
+  ├─ YeastDataModule (data/yeast_datamodule.py)
+  │    ├─ 加载 npz 数据集
+  │    ├─ 两级分层划分（家族 × Pattern）+ 孤本保护
+  │    ├─ Z-score 归一化（仅 LHS 样本统计量）
+  │    └─ 3 个 DataLoader: val_lhs / test_lhs / test_real
+  │
+  └─ Callbacks
+       ├─ ModelCheckpoint (monitor val_loss_lhs)
+       ├─ LearningRateMonitor
+       ├─ SimToRealVisualizerCallback (每 10 epoch 画 39 变量轨迹图)
+       ├─ EpochSummaryCallback (每 epoch print 摘要行到日志)
+       └─ ActiveLearningCallback (见下)
+```
+
+**ActiveLearningCallback 流程**（[utils/al_callback.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)）：
+```
+on_train_start:
+  ├─ 标准池化策略: K-Means 选初始训练子集 (默认 5000)
+  ├─ 查询合成策略 (rgs/mutant_aware): 用全量 LHS 数据
+  └─ al4pde 框架策略: K-Means 选 15000 (v1) + 加载 v5 候选池 (162,008)
+
+Lightning 正常训练
+  └─ on_train_epoch_end (每 trigger_epoch 轮):
+      ├─ 到达触发 epoch?
+      │   ├─ pial → 50, mutant_aware → 100, al4pde_*/maal → 4, 其余 → 10
+      │   ├─ 评估池子集 (不确定性/残差/多样性/Real MAE)
+      │   ├─ 按策略选 num_add 个样本
+      │   │   ├─ 标准池化: 从池迁移 (零成本)
+      │   │   ├─ 查询合成: LHS 生成 + ODE 验证 (solve_ivp)
+      │   │   └─ al4pde 框架: 从 v5 候选池选取 (零成本)
+      │   ├─ torch.cat 扩容 dm.train_dataset_lhs
+      │   └─ DDP broadcast 同步
+      └─ 下一 epoch 用新数据继续训练（不重训）
+
+训练结束 → eval.py 独立评估
+```
 
 ---
 
-## 4. 重点注意的修改与细节 (Review Notes)
+## 4. 三大注册表
 
-1. **防爆栈 (Defense Mechanisms)**
-   目前两套模型中都内置了强大的防溢出约束，这在训练 ODE 的代理模型时是必须的，请在修改或排查 bug 时不要去掉它们：
-   - AL Callback 中的参数上限拦截，避免了求解器由于 `dt` 过小而陷入死循环或算出 NaN。
-   - `ar_loss.py` 中的 `teacher_forcing`，完美解决了自回归模型一开始瞎猜导致输入序列爆炸的问题。
-2. **物理约束 (PINN) 的准确度**
-   `losses.py` 里的事件检测现在是绑定的**真值 (Ground Truth)**（`detect_event_mask_torch(target_real)`），这代表模型的物理 Loss（比如 Jump Condition）现在被精确地约束在了真实发生突变的时刻，极大地提升了约束有效性。
-3. **PCA 降维对于 AL 的重要性**
-   如果在 `budding_yeast` 这样一个拥有 39 变量 x 500 步高维特征的场景下不使用 PCA 直接求距离，会导致**距离趋同现象** (即高维空间下任意两点距离几乎相同)，主动学习将完全失效退化为随机采样。目前的 PCA 保留了 95% 以上的方差，请放心使用。
+### 4.1 模型注册表 (MODEL_REGISTRY)
+位于 [models/yeast_lit_module.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/models/yeast_lit_module.py)，映射 `model_name → ModelClass`。当前支持 9 种模型（见目录结构）。统一接口：`forward(ic_time_grid, params) → (B, V, T)`（ultimate_fno 除外，用双输入接口）。
+
+### 4.2 损失注册表 (LOSS_REGISTRY)
+位于 [utils/losses.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/losses.py)，映射 `loss_type → LossClass`。所有损失在**归一化空间**计算。当前支持 6 种：`mse_only` / `mse_negpen` / `mse_smooth` / `physics_informed` / `t_smooth` / `pinn_residual`。
+
+### 4.3 AL 策略
+位于 [utils/al_callback.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)，通过 `--al_strategy` 选择。当前支持 13 种 + none：
+- **标准池化**（6 种）：random / us / is / wrs / vessal / hggs
+- **查询合成**（2 种）：rgs / mutant_aware
+- **物理信息**（1 种）：pial
+- **al4pde 框架**（4 种）：al4pde_random / al4pde_uncertainty / al4pde_diversity / maal
+
+---
+
+## 5. 关键设计决策
+
+### 5.1 防爆栈 (Defense Mechanisms)
+训练 ODE 代理模型时必须内置防溢出约束，修改时不要去掉：
+- **AL Callback** 中的 `_validate_param_ranges`：ODE 验证前剔除异常参数（非负、物理下界、相对上界）。
+- **PINNResidualLoss** 的 `nan_to_num`：早期模型预测可能产生 inf/nan，全程防御。
+- **Event mask 基于真值**：v1 基于预测导致梯度爆炸，v2 改用 `detect_event_mask_torch(target_real)`。
+
+### 5.2 物理约束 (PINN) 的准确度
+[losses.py](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/losses.py) 的事件检测绑定**真值 (Ground Truth)**，代表模型的物理 Loss（如 Jump Condition）被精确约束在真实发生突变的时刻。Curriculum Learning 前 30 轮纯 MSE，之后线性增长物理权重。
+
+### 5.3 PCA 降维对于 AL 的重要性
+在 39 变量 × 500 步高维特征场景下，不使用 PCA 直接求距离会导致**距离趋同现象**（高维空间任意两点距离几乎相同），主动学习退化为随机采样。PIAL 的 `_compute_trajectory_diversity_pca` 降到 20 维，保留 95%+ 方差。
+
+### 5.4 al4pde 框架的内存优化
+V5 候选池完整加载需 ~35 GB。v2 内存优化只存 `P_norm` + `Y_IC` + `mutant_names`（~0.12 GB），完整 `Y` 按需从磁盘加载（`_load_full_Y_from_disk`），每次仅 ~78 MB。
+
+### 5.5 并行实验执行
+[run_pipeline.sh](file:///home/users/zsy/trae_workspace/budding_yeast_v2/run_pipeline.sh) 用后台子 shell `{ ... } &` 并行执行所有实验，每个实验通过 `CUDA_VISIBLE_DEVICES=$GPU_ID` 独占一张 GPU。日志重定向到 `logs/${RUN_NAME}.log`，`PYTHONUNBUFFERED=1` 确保进度条立即写入。
+
+---
+
+## 6. 相关项目：al4pde4yeast
+
+自回归（AR）+ 外层迭代重训式 AL 框架在**独立的 `al4pde4yeast/` 项目**中实现（路径：`/home/users/zsy/trae_workspace/al4pde4yeast/`），不在 `budding_yeast_v2` 内。该项目的特点：
+- ARModelWrapper（绕开 Lightning，纯 PyTorch 多步自回归训练）
+- Teacher Forcing Schedule（前 50% epoch 喂真值，防早期 AR 发散）
+- 外层迭代重训式 AL（每轮从头重训 ensemble，数据量指数增长）
+- 候选池来自 `bmdal_reg` 库的 BAIT/LCMD/MaxDist 距离类策略
+
+两项目的详细对比见 [AL_VS_AL4PDE.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/AL_VS_AL4PDE.md)。

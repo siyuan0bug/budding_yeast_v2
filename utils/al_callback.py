@@ -154,6 +154,12 @@ class ActiveLearningCallback(pl.Callback):
         self._al4pde_pool_loaded = False
         self._pool_mutant_names = None   # 候选池样本的 mutant name (用于 MAAL family 匹配)
         self._al4pde_t_grid = None       # al4pde 候选池的 t_grid (内存优化: 不预存 X, 动态构造)
+        # 内存优化: 候选池只存 P_norm + Y_IC (Y[:, :, 0]), 完整 Y 按需从磁盘加载
+        self._pool_Y_ic = None           # 候选池样本的 IC (归一化), shape (N, 39)
+        self._al4pde_pool_idx = None     # 候选池样本在原始 npz 中的索引 (用于按需加载完整 Y)
+        self._al4pde_pool_path = None    # 候选池 npz 文件路径 (用于按需加载)
+        self._al4pde_mean_y = None       # 归一化统计量 (用于按需加载时归一化 Y)
+        self._al4pde_std_y = None
 
     # ==================================================================
     # 标准主动学习框架：初始训练集选择
@@ -1441,14 +1447,11 @@ class ActiveLearningCallback(pl.Callback):
         - 除去 126 个 Real Mutant (名称不含 '_LHS_')
         - 总计 ~162,008 个样本
 
-        候选池用于 al4pde_random/uncertainty/diversity/maal 四种策略的样本查询。
-
-        数据归一化:
-        - 候选池数据必须与 dm.train_dataset_lhs 格式一致 (归一化后的 X/P/Y)
-        - 归一化统计量来自 v1 全部 LHS 样本 (dm.mean_y/std_y/p_mean/p_std)
-        - X = [IC_norm, t_grid] (N, 39, 2, 500)
-        - P_norm = (P - p_mean) / p_std
-        - Y_norm = (Y - mean_y) / std_y
+        内存优化:
+        - 只加载 P_norm (N×141) + Y_IC (N×39, Y[:, :, 0]) + mutant_names 到内存
+        - 完整 Y (N×39×500) 不加载, 选中样本时从磁盘按需加载
+        - 内存占用从 ~12 GB 降到 ~0.1 GB
+        - X = [IC, t_grid] 通过 Y_IC 动态构造, IC = Y_IC.unsqueeze(2).expand(-1, -1, T)
         """
         print(f"[al4pde] 加载候选池数据集: {self.al_pool_dataset}")
         v5_data = np.load(self.al_pool_dataset, allow_pickle=True)
@@ -1457,7 +1460,6 @@ class ActiveLearningCallback(pl.Callback):
         params_arr = v5_data['params']
 
         # 除去 Real Mutant 的全部数据 (LHS 常规 + target)
-        # Real Mutant 名称不含 '_LHS_', LHS 样本 (含 target) 名称含 '_LHS_'
         non_real_mask = np.array(['_LHS_' in str(n) for n in mutant_names])
         pool_idx = np.where(non_real_mask)[0]
         rng = np.random.RandomState(self.random_seed)
@@ -1467,49 +1469,60 @@ class ActiveLearningCallback(pl.Callback):
         target_count = sum(1 for i in pool_idx if '_LHS_T' in str(mutant_names[i]))
         nontarget_count = len(pool_idx) - target_count
 
-        # 归一化 (与 yeast_datamodule.py:157-167 完全一致)
+        # 归一化统计量 (与 yeast_datamodule.py:157-167 完全一致)
         T_STEPS = data_arr.shape[2]  # 500
         mean_y = dm.mean_y  # (1, 39, 1)
         std_y = dm.std_y     # (1, 39, 1)
         p_mean = dm.p_mean   # (1, 141)
         p_std = dm.p_std     # (1, 141)
 
-        Y_tensor = torch.tensor(data_arr[pool_idx], dtype=torch.float32)  # (N, 39, 500)
-        P_tensor = torch.tensor(params_arr[pool_idx], dtype=torch.float32)  # (N, 141)
+        # 内存优化: 只加载 P 和 Y_IC (Y[:, :, 0]), 不加载完整 Y (N×39×500)
+        P_tensor = torch.tensor(params_arr[pool_idx], dtype=torch.float32)      # (N, 141)
+        Y_ic_tensor = torch.tensor(data_arr[pool_idx, :, 0], dtype=torch.float32)  # (N, 39) 只取第一个时间步
 
-        # 归一化 Y 和 P (与训练集完全一致)
-        Y_norm = (Y_tensor - mean_y) / std_y
-        Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+        # 归一化 P (与训练集完全一致)
         P_norm = (P_tensor - p_mean) / p_std
         P_norm = torch.nan_to_num(P_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+
+        # 归一化 Y_IC: mean_y/std_y 是 (1, 39, 1), 压缩到 (1, 39) 用于 (N, 39) 的 Y_IC
+        mean_y_ic = mean_y.squeeze(0).squeeze(-1)  # (39,)
+        std_y_ic = std_y.squeeze(0).squeeze(-1)    # (39,)
+        Y_ic_norm = (Y_ic_tensor - mean_y_ic) / std_y_ic
+        Y_ic_norm = torch.nan_to_num(Y_ic_norm, nan=0.0, posinf=10.0, neginf=-10.0)
 
         # 构造 t_grid (共享, 不占额外内存)
         t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS)  # (1, 1, 500)
 
-        # 内存优化: 不预存 X (23.5 GB), 只存 P + Y + t_grid, forward 时动态构造 X
-        # X = [IC, t_grid], 其中 IC = Y_norm[:, :, 0:1].expand(-1, -1, T)
-        self._pool_X = None  # al4pde 路径不预存 X, 通过 _get_pool_X_batch 动态构造
+        # 内存优化: 只存 P + Y_IC + t_grid, 不存完整 Y
+        self._pool_X = None
         self._pool_P = P_norm
-        self._pool_Y = Y_norm
-        self._al4pde_t_grid = t_grid  # (1, 1, 500) 共享
+        self._pool_Y = None           # 不再预存完整 Y
+        self._pool_Y_ic = Y_ic_norm   # 只存 IC (N, 39)
+        self._al4pde_t_grid = t_grid
         self._pool_mutant_names = mutant_names[pool_idx]
         self._pool_size = len(pool_idx)
         self._al4pde_pool_loaded = True
 
-        # 内存估算 (只存 P + Y, 不存 X)
-        mem_gb = (P_norm.nelement() * 4 + Y_norm.nelement() * 4) / (1024**3)
+        # 保存按需加载完整 Y 所需的信息
+        self._al4pde_pool_idx = pool_idx                    # 原始数据集中的索引
+        self._al4pde_pool_path = self.al_pool_dataset       # npz 文件路径
+        self._al4pde_mean_y = mean_y                        # 归一化统计量
+        self._al4pde_std_y = std_y
+
+        # 内存估算 (只存 P + Y_IC)
+        mem_gb = (P_norm.nelement() * 4 + Y_ic_norm.nelement() * 4) / (1024**3)
         print(f"[al4pde] 候选池构建完成: {self._pool_size} 样本 "
               f"(target={target_count}, nontarget={nontarget_count}) | "
               f"P_norm(mean={P_norm.mean():.3f}, std={P_norm.std():.3f}), "
-              f"Y_norm(mean={Y_norm.mean():.3f}, std={Y_norm.std():.3f}) | "
-              f"内存={mem_gb:.1f} GB (X 动态构造, 省 23.5 GB)")
+              f"Y_ic_norm(mean={Y_ic_norm.mean():.3f}, std={Y_ic_norm.std():.3f}) | "
+              f"内存={mem_gb:.2f} GB (只存 P + Y_IC, 完整 Y 按需加载)")
 
     def _get_pool_X_batch(self, indices):
         """获取候选池样本的 X = [IC, t_grid] (内存优化版)
 
         标准池化路径 (us/is/random/pial): self._pool_X 已预存, 直接索引返回
-        al4pde 路径: self._pool_X 为 None, 从 self._pool_Y 动态构造 X
-          - IC = Y_norm[:, :, 0:1].expand(-1, -1, T)  (视图, 不占额外内存)
+        al4pde 路径 (内存优化): 从 self._pool_Y_ic 动态构造 X
+          - IC = Y_ic.unsqueeze(2).expand(-1, -1, T)  (视图, 不占额外内存)
           - t_grid = self._al4pde_t_grid.expand(B, 39, T)  (共享, 不占额外内存)
           - X = stack([IC, t_grid], dim=2)  (B, 39, 2, T)  — 仅此 batch 占内存
 
@@ -1521,12 +1534,36 @@ class ActiveLearningCallback(pl.Callback):
         """
         if self._pool_X is not None:
             return self._pool_X[indices]
-        # al4pde 优化路径: 从 Y 动态构造 X
-        Y_batch = self._pool_Y[indices]  # (B, 39, T)
-        T = Y_batch.shape[2]
-        IC = Y_batch[:, :, 0:1].expand(-1, -1, T)  # (B, 39, T) — 视图
-        t_grid = self._al4pde_t_grid.to(Y_batch.device).expand(Y_batch.shape[0], 39, T)
+        # al4pde 优化路径: 从 Y_IC 动态构造 X (不需要完整 Y)
+        Y_ic_batch = self._pool_Y_ic[indices]  # (B, 39)
+        T = self._al4pde_t_grid.shape[2]
+        IC = Y_ic_batch.unsqueeze(2).expand(-1, -1, T)  # (B, 39, T) — 视图
+        t_grid = self._al4pde_t_grid.to(IC.device).expand(IC.shape[0], 39, T)
         return torch.stack([IC, t_grid], dim=2)  # (B, 39, 2, T)
+
+    def _load_full_Y_from_disk(self, sel_idx):
+        """从磁盘按需加载选中样本的完整 Y (归一化)
+
+        内存优化: 候选池不预存完整 Y, 只在选中样本时从 npz 文件按需加载。
+        选中样本数通常为 num_add (1000), 加载量 = 1000 × 39 × 500 × 4 bytes ≈ 78 MB, 可接受。
+
+        Args:
+            sel_idx: 选中样本在候选池中的索引 (numpy array)
+
+        Returns:
+            Y_sel_norm: (B, 39, T) 归一化后的完整 Y tensor
+        """
+        # 获取选中样本在原始 npz 数据集中的索引
+        orig_idx = self._al4pde_pool_idx[sel_idx]
+
+        # 从 npz 文件加载 (只加载选中的样本)
+        v5_data = np.load(self._al4pde_pool_path, allow_pickle=True)
+        Y_sel = torch.tensor(v5_data['data'][orig_idx], dtype=torch.float32)  # (B, 39, 500)
+
+        # 归一化 (与训练集完全一致)
+        Y_sel_norm = (Y_sel - self._al4pde_mean_y) / self._al4pde_std_y
+        Y_sel_norm = torch.nan_to_num(Y_sel_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+        return Y_sel_norm
 
     def _mutant_aware_sample(self, trainer, pl_module, dm, device, current_epoch):
         """
@@ -2358,9 +2395,9 @@ class ActiveLearningCallback(pl.Callback):
         diversity_scores = self._normalize_array(diversity_scores)
 
         # Step 3: 计算 target_priority (实时模型 forward 126 Real Mutants)
-        print("[MAAL] Step 3: 计算 target_priority (实时 Real Mutant MAE)...")
+        print("[MAAL] Step 3: 计算 target_priority (改进版: MAE百分位 + 参数距离 + 覆盖度)...")
         mutant_maes = self._evaluate_real_mutants(pl_module, dm, device)
-        target_priorities = self._map_family_priority(mutant_maes)
+        target_priorities = self._map_family_priority(mutant_maes, dm)
         target_priorities = self._normalize_array(target_priorities)
 
         # Step 4: 加权 acquisition
@@ -2450,8 +2487,13 @@ class ActiveLearningCallback(pl.Callback):
             scores.append(min_dist)
         return torch.cat(scores, dim=0).numpy()
 
-    def _map_family_priority(self, mutant_maes):
-        """将 Real Mutant MAE 映射到候选池样本的 target_priority
+    def _map_family_priority(self, mutant_maes, dm=None):
+        """将 Real Mutant MAE 映射到候选池样本的 target_priority (改进版)
+
+        改进点 (解决原版"赢者通吃"问题):
+        1. MAE 百分位排名 (权重 0.5): 用百分位替代原始 MAE, 避免极端值主导
+        2. 参数空间距离 (权重 0.3): 候选样本到匹配 Real Mutant 的参数距离越近, priority 越高
+        3. 家族覆盖度 (权重 0.2): 候选池中同家族样本数越少 (覆盖不足), priority 越高
 
         候选池样本的 mutant_name 格式: "73_cdc20_ts_LHS_T001"
         Real Mutant 的 mutant_name 格式: "73_cdc20_ts"
@@ -2459,6 +2501,7 @@ class ActiveLearningCallback(pl.Callback):
 
         Args:
             mutant_maes: {mutant_name: mae} dict
+            dm: 数据模块 (用于获取 Real Mutant 参数向量, 计算参数空间距离)
 
         Returns:
             priorities: (N,) numpy array, 每个候选样本的 target_priority
@@ -2467,14 +2510,69 @@ class ActiveLearningCallback(pl.Callback):
         # 预处理 mutant_maes: 按名字长度降序, 优先匹配更具体的名字
         sorted_maes = sorted(mutant_maes.items(), key=lambda x: len(x[0]), reverse=True)
 
+        # 1. MAE 百分位排名 (替代原始 MAE, 避免极端值主导)
+        mae_values = np.array(list(mutant_maes.values()))
+        mae_percentile = {}
+        for name, mae in mutant_maes.items():
+            mae_percentile[name] = float((mae_values <= mae).mean())
+
+        # 2. 家族覆盖度统计 (候选池中每个家族的样本数)
+        family_counts = {}
+        for name in self._pool_mutant_names:
+            family = str(name).split('_LHS_')[0]
+            family_counts[family] = family_counts.get(family, 0) + 1
+        max_family_count = max(family_counts.values()) if family_counts else 1
+
+        # 3. Real Mutant 参数向量 (用于参数空间距离计算)
+        real_params = {}
+        if dm is not None and hasattr(dm, 'test_dataset_real'):
+            test_dataset = dm.test_dataset_real
+            real_names = []
+            if hasattr(dm, '_mutant_names') and hasattr(dm, '_test_idx_real'):
+                real_names = [str(dm._mutant_names[i]) for i in dm._test_idx_real]
+            for idx in range(len(test_dataset)):
+                _, P, _ = test_dataset[idx]
+                name = real_names[idx] if idx < len(real_names) else f"Real_{idx}"
+                real_params[name] = P.cpu().numpy()
+
+        # 候选池参数 (归一化空间, 用于距离计算)
+        pool_P_np = self._pool_P.cpu().numpy() if hasattr(self._pool_P, 'cpu') else np.array(self._pool_P)
+
         for i, name in enumerate(self._pool_mutant_names):
             family = str(name).split('_LHS_')[0]
-            # 找最匹配的 real mutant
+            # 找最匹配的 real mutant (优先取 MAE 最大的匹配)
             best_mae = 0.0
+            best_name = None
             for m_name, mae in sorted_maes:
                 if m_name == family or m_name.startswith(family) or family.startswith(m_name):
-                    best_mae = max(best_mae, mae)
-            priorities[i] = best_mae
+                    if mae > best_mae:
+                        best_mae = mae
+                        best_name = m_name
+
+            # 维度 1: MAE 百分位排名 [0, 1]
+            base_priority = mae_percentile.get(best_name, 0.0) if best_name else 0.0
+
+            # 维度 2: 家族覆盖度 [0, 1] (样本越少, priority 越高)
+            family_count = family_counts.get(family, 1)
+            coverage_factor = 1.0 - (family_count / max_family_count)
+
+            # 维度 3: 参数空间距离 [0, 1] (距离越近, priority 越高)
+            distance_factor = 0.5  # 默认值 (无匹配 Real Mutant 时)
+            if best_name and best_name in real_params:
+                cand_p = pool_P_np[i]
+                real_p = real_params[best_name]
+                dist = np.linalg.norm(cand_p - real_p)
+                distance_factor = 1.0 / (1.0 + dist)
+
+            # 综合 priority: 0.5 * 百分位 + 0.3 * 距离 + 0.2 * 覆盖度
+            priorities[i] = 0.5 * base_priority + 0.3 * distance_factor + 0.2 * coverage_factor
+
+        # 打印摘要
+        top_families = sorted(family_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        print(f"[MAAL] target_priority 改进版: 0.5*MAE百分位 + 0.3*参数距离 + 0.2*覆盖度")
+        print(f"[MAAL] priority range: {priorities.min():.4f}~{priorities.max():.4f}, "
+              f"mean={priorities.mean():.4f}")
+        print(f"[MAAL] Top-5 家族覆盖度: {top_families}")
         return priorities
 
     def _normalize_array(self, arr):
@@ -2492,13 +2590,19 @@ class ActiveLearningCallback(pl.Callback):
         选中样本从候选池移除, 返回的 X/P/Y 用于 on_train_epoch_end 的训练集扩容。
         注意: Y 用候选池的真实轨迹 (从 v5 加载), 而非模型预测。
 
-        内存优化: al4pde 路径下 self._pool_X 为 None, X 通过 _get_pool_X_batch 动态构造。
+        内存优化: al4pde 路径下 self._pool_X 和 self._pool_Y 均为 None,
+        X 通过 _get_pool_X_batch 从 Y_IC 动态构造, Y 通过 _load_full_Y_from_disk 按需加载。
         """
         sel_idx = np.array(sel_idx, dtype=np.int64)
-        # 选中的样本 (X 动态构造, P/Y 直接索引)
+        # 选中的样本 (X 从 Y_IC 动态构造, P 直接索引, Y 从磁盘按需加载)
         sel_X = self._get_pool_X_batch(sel_idx).clone()
         sel_P = self._pool_P[sel_idx].clone()
-        sel_Y = self._pool_Y[sel_idx].clone()
+        if self._pool_Y is not None:
+            sel_Y = self._pool_Y[sel_idx].clone()
+        else:
+            # 内存优化路径: 从磁盘按需加载完整 Y
+            print(f"[al4pde] 从磁盘按需加载 {len(sel_idx)} 个样本的完整 Y...")
+            sel_Y = self._load_full_Y_from_disk(sel_idx)
 
         # 从候选池移除已选样本
         mask = np.ones(self._pool_size, dtype=bool)
@@ -2506,9 +2610,14 @@ class ActiveLearningCallback(pl.Callback):
         if self._pool_X is not None:
             self._pool_X = self._pool_X[mask]
         self._pool_P = self._pool_P[mask]
-        self._pool_Y = self._pool_Y[mask]
+        if self._pool_Y is not None:
+            self._pool_Y = self._pool_Y[mask]
+        if self._pool_Y_ic is not None:
+            self._pool_Y_ic = self._pool_Y_ic[mask]
         if self._pool_mutant_names is not None:
             self._pool_mutant_names = self._pool_mutant_names[mask]
+        if self._al4pde_pool_idx is not None:
+            self._al4pde_pool_idx = self._al4pde_pool_idx[mask]
         self._pool_size = mask.sum()
 
         print(f"[al4pde] 候选池剩余: {self._pool_size} 样本")

@@ -20,8 +20,17 @@
 - 模型在仿真分布上训练，但必须在真实实验分布上泛化。这是本项目所有设计决策（归一化方案、数据划分、主动学习、PINN 损失）的根本驱动力。
 
 ### 1.3 数据集命名约定
-- `lhs_cheat_origin_210min_500steps_dual_labels.npz` — 主数据集（"cheat"= 训练/测试同分布可见，"dual_labels"= 含生物活性 + Pattern 双重标签）。
+- `lhs_cheat_origin_210min_500steps_dual_labels.npz` — **v1 主数据集**（"cheat"= 训练/测试同分布可见，"dual_labels"= 含生物活性 + Pattern 双重标签）。
 - `lhs_blind_210min_500steps_dual_labels.npz` — 盲测数据集。
+- **数据集版本演进**（逐步增加 target 定向采样家族，缓解 Sim-to-Real Gap）：
+  - **v1** (53,796)：基础 LHS 采样，Real MAE≈0.250，Sim-to-Real Gap 4.53×
+  - **v2** (66,000)：+ 三大家族定向扩展（cln_triple/CLB2_db/contamination_fix）
+  - **v3** (87,000)：+ 26 个 MAE>0.3 突变体的 density/boundary 邻域采样
+  - **v4** (125,000)：+ 12 类扩展家族（KO/tem1_ts/cdc14_ts/swi5_cdh1/cln1_cln2_KO 等）
+  - **v5** (162,134)：+ 7 项定向修复（CLB1_clb2/cdc6/tem1_ts/CLB2_db_clb5_Raff/APC_A_GAL_CLB2/cdc15_net1_ts/sic1_cdh1），Real MAE≈0.055，Sim-to-Real Gap 0.89×
+  - **v5_no_target**：v5 去除所有 `_LHS_T` 定向样本（仅保留 Real Mutant + 普通 LHS），用于对照实验验证 target 贡献
+  - **v6**：v5 + 6 个修复点（P0 tem1_ts 拆分 pert=0.05、P1 CLB2_db_Gal 新增、P2/P3 pert 增大），Real MAE≈0.049（历史最优），Sim-to-Real Gap 0.83×
+- **target 定向采样**：`_LHS_T{idx:03d}` 后缀样本（density/boundary/anchor 模式），在 real mutant 邻域密集采样；占 v5 数据集 33.7% 的 target 样本贡献了 Real MAE 的 85.7%。
 - **Pattern 标签**：A/B/C 三类，表示细胞周期行为模式（如正常分裂/异常/不可逆 arrest），用于分层划分与稀有流形保护。
 
 ### 1.4 项目形态
@@ -44,6 +53,7 @@ export PYTHONPATH=$(pwd)/..:$PYTHONPATH
 
 ### 2.3 GPU 与分布式
 - 通过 `CUDA_VISIBLE_DEVICES` 指定单卡；多卡时设 `NCCL_P2P_DISABLE=1`。
+- `run_pipeline.sh` **不再全局设 `CUDA_VISIBLE_DEVICES`**，改为每个实验在 `EXPERIMENTS` 数组第 17 列指定 `GPU_ID`，由后台子 shell 通过 `CUDA_VISIBLE_DEVICES=$GPU_ID` 独占一张卡并行执行。
 - 默认 `precision="bf16-mixed"` 加速。
 - 多卡 strategy：`ddp_find_unused_parameters_true`（因部分模型有未使用参数）。
 
@@ -70,11 +80,15 @@ export PYTHONPATH=$(pwd)/..:$PYTHONPATH
 | `run_tune.sh` | Optuna 搜索封装 |
 
 ### 3.1 run_pipeline.sh 实验配置格式
-`EXPERIMENTS` 数组每行 16 列（空格分隔）：
+`EXPERIMENTS` 数组每行 17 列（空格分隔）：
 ```
-MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE
+MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
 ```
-脚本逻辑：编辑 `EXPERIMENTS` 数组 → 自动 `train.py` → 找 `train_result/<run_name>/*.ckpt` → `eval.py`。脚本内含 PINN 专属参数自动注入（`LOSS_TYPE=pinn_residual` 时加 `--lambda_phys 0.01 --lambda_jump 0.001 ...`）和 PIAL 推迟触发逻辑（`pial` → `TRIGGER_EPOCH=50`，其余 → 10）。
+第 17 列 `GPU_ID` 为可选的 GPU 编号（0-7，每个实验独占一张卡并行执行），未指定时默认 0。
+
+**并行执行**: 脚本用后台子 shell `{ ... } &` 并行执行所有实验，每个实验通过 `CUDA_VISIBLE_DEVICES=$GPU_ID` 独占一张 GPU。日志重定向到 `logs/${RUN_NAME}.log`（含时间戳）。脚本顶部 `export PYTHONUNBUFFERED=1` 强制 Python stdout 无缓冲，确保 tqdm 进度条和 print 摘要行立即写入日志。
+
+脚本逻辑：编辑 `EXPERIMENTS` 数组 → 自动 `train.py` → 找 `train_result/<run_name>/*.ckpt` → `eval.py`。脚本内含 PINN 专属参数自动注入（`LOSS_TYPE=pinn_residual` 时加 `--lambda_phys 0.01 --lambda_jump 0.001 ...`）和 AL 推迟触发逻辑（`pial` → `TRIGGER_EPOCH=50`，`mutant_aware` → `TRIGGER_EPOCH=100`，`al4pde_*`/`maal` → `TRIGGER_EPOCH=4`，其余 → 10）。al4pde/maal 策略自动注入 `--al_pool_dataset $DATASET_V5 --al_initial_train_size 15000`。
 
 ### 3.2 常用命令
 ```bash
@@ -120,7 +134,7 @@ budding_yeast_v2/
 │   ├── dataset_utils.py                # npz 加载器
 │   └── lhs_v1_origin.py                # ⭐ ODE 真值引擎（solve_ivp + LHS 采样 + 事件重置）
 └── utils/
-    ├── al_callback.py                  # ⭐ 主动学习回调（9 种策略）
+    ├── al_callback.py                  # ⭐ 主动学习回调（13 种策略：池化/查询合成/al4pde 框架）
     ├── losses.py                       # 损失注册表 + curriculum 权重
     ├── metrics.py                      # MAE/MSE/Relative L2/Correlation
     └── physics_eqns_torch.py           # ODE 方程的 PyTorch 可微版（供 PINN 残差用）
@@ -231,6 +245,7 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 - `ModelCheckpoint`：存 `train_result/<run_name>/best-{epoch:02d}-{val_loss_lhs:.4f}.ckpt`。
 - `LearningRateMonitor`。
 - `SimToRealVisualizerCallback`：每 10 epoch 在固定画图样本上预测并上传 W&B（39 变量网格图，反归一化）。
+- `EpochSummaryCallback`：每个 epoch 结束用 `print(flush=True)` 输出摘要行（`train_loss`/`val_lhs`/`test_lhs`/`test_real`/`lr`/`耗时`），确保日志文件可见进度（不依赖 tqdm 终端渲染）。
 - `ActiveLearningCallback`（见第 10 节）。
 
 ---
@@ -255,12 +270,16 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 ## 10. 主动学习（AL）系统
 
 ### 10.1 触发机制
-- `ActiveLearningCallback` 在 `on_train_start` 用 K-Means（或 random）从全量 LHS 训练集训出初始子集（默认 `initial_train_size=2000/5000`），剩余进未标注池。
-- 每隔 `trigger_every_n_epochs` 触发一次采样。
+- `ActiveLearningCallback` 在 `on_train_start` 用 K-Means（或 random）从全量 LHS 训练集训出初始子集（默认 `initial_train_size=2000/5000`；al4pde/maal 框架为 15000），剩余进未标注池。
+- 每隔 `trigger_every_n_epochs` 触发一次采样。`run_pipeline.sh` 按策略自动注入触发 epoch：
+  - `pial` → 50（早期模型预测差，ODE 残差无意义）
+  - `mutant_aware` → 100（需模型基本收敛后再做 atlas 优先级评估）
+  - `al4pde_*` / `maal` → 4（200 epochs / 4 = 50 轮 AL，总 50,000 样本）
+  - 其余 → 10
 - **Trainer 必须设 `reload_dataloaders_every_n_epochs=trigger_epoch`**，否则 AL 新增数据不会生效。此逻辑已在 `train.py`/`tune.py` 中根据 `al_strategy != 'none'` 自动开启。
 - AL 仅在 `trainer.is_global_zero` 进程执行采样，再 `broadcast` 到其他进程。
 
-### 10.2 策略清单（`--al_strategy`）
+### 10.2 策略清单（`--al_strategy`，共 13 种 + none）
 
 | 策略 | 范式 | 机制 |
 |------|------|------|
@@ -272,7 +291,12 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 | `vessal` | 池化 | VeSSAL（不确定性+多样性） |
 | `hggs` | 池化 | HGGS 流形采样 |
 | `rgs` | **查询合成** | Real-Guided Sampling：评估 Real Mutant MAE → top-K 差样本邻域局部 LHS 扰动（90% 预算）+ 全局 LHS（10%）→ ODE `solve_ivp` 物理验证当"标注" → 用真实 MAE 选取最难的 `num_add` 个 |
-| `pial` | 池化 | Physics-Informed AL：三信号融合 = MC Dropout 不确定性（主导）+ PCA 轨迹多样性 + ODE 残差（辅助）。**推迟到 epoch 50 触发**（早期模型预测差，ODE 残差无意义） |
+| `pial` | 池化 | Physics-Informed AL：三信号融合 = MC Dropout 不确定性（主导）+ PCA 轨迹多样性 + ODE 残差（辅助）。**推迟到 epoch 50 触发** |
+| `mutant_aware` | **查询合成** | Mutant-Aware AL：基于 atlas 的 `lhs_MAE_min`/`lhs_n_samples`/当前 MAE 三维加权 priority，聚焦采样到 LHS 覆盖不足 + 模型表现差的突变体邻域；atlas 不可用自动降级为 rgs。**推迟到 epoch 100 触发**，需 `--atlas_csv` |
+| `al4pde_random` | **al4pde 池化** | al4pde 框架基线：从 `--al_pool_dataset`（v5）候选池随机采样。初始 15000（v1 K-Means）+ AL 50000 |
+| `al4pde_uncertainty` | **al4pde 池化** | MC Dropout 不确定性（10 forward passes），选方差最大的样本 |
+| `al4pde_diversity` | **al4pde 池化** | 特征空间最大距离多样性（bmdal_reg 风格），选最分散的样本 |
+| `maal` | **al4pde 池化** | Mutant-Aware AL = `0.6×diversity + 0.4×target_priority`。target_priority 用 3D 加权公式：`0.5×MAE百分位排名 + 0.3×参数空间距离 + 0.2×家族覆盖度` |
 
 ### 10.3 RGS 细节
 - `perturbation`：连续参数局部扰动幅度（0.05=±5%）。
@@ -284,6 +308,14 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 ### 10.4 PIAL 细节
 - `_compute_trajectory_diversity_pca`：PCA 降到 20 维解决维度灾难（原版 39×500=19500 维距离趋同），PCA 拟合在训练集上避免泄露。
 - 不确定性为主信号，ODE 残差为辅助（因残差计算昂贵且早期不准）。
+
+### 10.5 al4pde 框架细节（al4pde_random/uncertainty/diversity + maal）
+- **配置**：初始训练集 15000（v1 LHS 常规样本 K-Means）+ AL 50000（每 4 epoch 触发，50 轮 × 1000 样本）= 总 65000。
+- **候选池**：v5 数据集排除 126 Real Mutant 后的 ~162,008 样本（含 54,619 target `_LHS_T` + 107,389 普通 LHS `_LHS_`）。
+- **内存优化**：候选池只加载 `P_norm` + `Y_IC` + `mutant_names` 到内存（~0.12GB），完整 `Y` 按需从磁盘加载（`_load_full_Y_from_disk`），避免 12GB 常驻内存。
+- **MAAL target_priority**（`_map_family_priority`）：3D 加权 `0.5×MAE百分位排名 + 0.3×参数空间距离 + 0.2×家族覆盖度`，需 `--al_target_weight`（默认 0.4）。
+- **关键参数**：`--al_pool_dataset`（v5 路径）、`--al_initial_train_size 15000`、`--al_target_weight 0.4`。
+- **实验结论**（详见 [eval_result/AL4PDE_V2_EVAL_REPORT.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/eval_result/AL4PDE_V2_EVAL_REPORT.md)）：V2 配置（65000 样本）比 V1 配置（15000 样本）Real MAE 改善 49-61%；4 策略中 **random 最优**（Real MAE 0.0976），diversity 最差（0.2725）；cdc20_ts 系列是 diversity/maal 的灾难区（MAE>1.6），random 能命中（MAE 0.07-0.12）。
 
 ---
 
@@ -311,7 +343,7 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 修改 `YeastDataModule` 切分逻辑时必须保留两级分层 + 孤本保护，否则稀有 Pattern 流形丢失、同母体泄露。
 
 ### 12.4 AL 生效条件
-`reload_dataloaders_every_n_epochs` 必须设为 `al_trigger_epoch`（已自动化）。`pial` 推迟到 epoch 50。AL 采样仅在 global_zero 进程执行。
+`reload_dataloaders_every_n_epochs` 必须设为 `al_trigger_epoch`（已自动化）。触发 epoch 按策略：`pial`→50，`mutant_aware`→100，`al4pde_*`/`maal`→4，其余→10。al4pde/maal 需 `--al_pool_dataset`（v5 路径）+ `--al_initial_train_size 15000`；mutant_aware 需 `--atlas_csv`。AL 采样仅在 global_zero 进程执行。
 
 ### 12.5 ultimate_fno 特殊性
 双输入接口 `forward(ic, t_grid, param_cond)`，`param_dim=42`，**不支持自回归滚动**，在 `forward_ic_time` 中单独分支处理。
@@ -345,7 +377,7 @@ v1 的三个致命问题（`lambda_phys=1.0` 灾难性恶化、`lambda_penalty=1
 3. 若是查询合成（如 rgs），用 `lhs_v1_origin.py` 引擎生成 + ODE 验证。
 
 ### 13.4 新增实验
-编辑 `run_pipeline.sh` 的 `EXPERIMENTS` 数组，按 16 列格式添加一行即可。
+编辑 `run_pipeline.sh` 的 `EXPERIMENTS` 数组，按 17 列格式添加一行（最后一列 `GPU_ID` 指定独占 GPU，默认 0）。al4pde/maal 策略自动注入 `--al_pool_dataset` + `--al_initial_train_size 15000`；mutant_aware 自动注入 `--atlas_csv`。
 
 ---
 

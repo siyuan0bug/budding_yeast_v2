@@ -1,21 +1,17 @@
-# --- 忽略所有大型数据集 ---
-*.npz
-*.npy
-*.csv
+# --- 默认忽略所有文件，仅跟踪 Python / Shell / Markdown ---
+*
+!*/
 
-# --- 忽略生成的图表文件夹和图片 ---
-*_plots/
-*.png
+# 允许版本管理的文件类型
+!*.py
+!*.sh
+!*.md
+!.gitignore
 
-# --- 忽略可能存在的其他目录（比如你提到的 otherdata） ---
-# 如果你不想管理 otherdata 目录下的内容，就取消下面这行的注释
-otherdata/
-*result/
-swanlog/
-wandb/
-eval_result_old/
-lightning_logs/
+# --- 日志文件（明确忽略，防止误提交）---
+*.log
+logs/
 
-# --- 忽略 Python 缓存 ---
+# --- Python 缓存 ---
 __pycache__/
 *.pyc

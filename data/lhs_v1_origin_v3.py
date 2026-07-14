@@ -10,6 +10,65 @@ import warnings
 warnings.filterwarnings("ignore") # 忽略 ODE 求解中常见的除零或精度警告
 
 # ==========================================
+# 去重防泄漏算法（v6 版内联实现）
+# ==========================================
+DEDUP_RTOL = 0.08  # 近重复剔除相对阈值（与 analyze_samples.py 严格一致）
+
+
+def build_real_mutant_full(mutant_rules, defaults):
+    """构建全部 real mutant 的完整参数向量 {name: full_dict}。"""
+    real_mutant_full = {}
+    for rm_name, rm_rules in mutant_rules.items():
+        rm_full = dict(defaults)
+        rm_full.update(rm_rules)
+        real_mutant_full[rm_name] = rm_full
+    return real_mutant_full
+
+
+def build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, mutated_set):
+    """预筛：哪些 real mutant 可能被当前家族样本接近。"""
+    candidates = []
+    for rm_name, rm_full in real_mutant_full.items():
+        is_cand = True
+        for rp, rv in mutant_rules[rm_name].items():
+            if rp in mutated_set:
+                continue
+            d = defaults.get(rp, 0.0)
+            ea = max(1e-6, d * DEDUP_RTOL) if d == 0.0 else 1e-6
+            if not np.isclose(d, rv, rtol=DEDUP_RTOL, atol=ea):
+                is_cand = False
+                break
+        if is_cand:
+            candidates.append((rm_name, rm_full))
+    return candidates
+
+
+def is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+    """近母体检查：所有突变参数在母体值 8% 以内 → 返回 True（应丢弃）。
+    零值参数(KO)用 max(1e-6, default*0.08) 作 atol。"""
+    for p_name in mutated_params:
+        orig = original_rules[p_name]
+        eff_atol = max(1e-6, defaults.get(p_name, 0.0) * DEDUP_RTOL) if orig == 0.0 else 1e-6
+        if not np.isclose(sample_dict[p_name], orig, rtol=DEDUP_RTOL, atol=eff_atol):
+            return False
+    return True
+
+
+def is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+    """全局跨 real+WT 检查：接近任一 real mutant → 返回 True（应丢弃）。"""
+    for rm_name, rm_full in cross_check_candidates:
+        near_this = True
+        for p_name in mutated_params:
+            rv = rm_full[p_name]
+            ea = max(1e-6, defaults.get(p_name, 0.0) * DEDUP_RTOL) if rv == 0.0 else 1e-6
+            if not np.isclose(sample_dict[p_name], rv, rtol=DEDUP_RTOL, atol=ea):
+                near_this = False
+                break
+        if near_this:
+            return True
+    return False
+
+# ==========================================
 # 0. 全局配置参数
 # ==========================================
 SIM_TF = int(os.environ.get("SIM_TF", 210))       # 模拟总时长 (min)
@@ -18,7 +77,7 @@ NUM_LHS_SAMPLES = 1000  # LHS 采样数量
 SIM_TIMEOUT = 5.0 # 单个细胞求解超时阈值 (秒)
 
 # v3 数据集输出目录 (Sim-to-Real Gap 缓解方案 V3: 残留瓶颈定向扩展)
-OUTPUT_DIR = "/home/users/zsy/trae_workspace/mydata/budding_yeast"
+OUTPUT_DIR = "/home/users/zsy/mydata/budding_yeast"
 DATASET_NAME = f"lhs_cheat_origin_v3_{SIM_TF}min_{SIM_STEPS}steps_dual_labels.npz"
 DATASET_PATH = os.path.join(OUTPUT_DIR, DATASET_NAME)
 
@@ -459,7 +518,10 @@ def generate_lhs_tasks(num_lhs_samples):
     
     defaults = get_default_params()
     defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
-    
+
+    # 全局跨检查预计算：构建全部真实突变体的完整参数向量
+    real_mutant_full = build_real_mutant_full(mutant_rules, defaults)
+
     # 建立历史突变值记忆池 (仅用于推导连续参数极值)
     all_historical_values = {}
     for rules in mutant_rules.values():
@@ -478,7 +540,12 @@ def generate_lhs_tasks(num_lhs_samples):
         mutated_params = list(original_rules.keys())
         if not mutated_params:
             continue
-            
+
+        # 全局跨检查预筛：当前家族 mutated_params 下，哪些真实突变体可能被接近
+        # 若突变体 B 的非共享突变参数远离 default，则样本（该参数=default）不可能接近 B
+        _mutated_set = set(mutated_params)
+        cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
+
         # 根据全局保护名单剥离连续与离散变量 (废弃字符串匹配)
         strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
         continuous_mutated = [p for p in mutated_params if p not in DISCRETE_STRICT_PARAMS]
@@ -572,15 +639,13 @@ def generate_lhs_tasks(num_lhs_samples):
             # ==========================================
             # 🛡️ 终极 Bug 修复：等价碰撞拦截器 (取代原微扰逻辑)
             # ==========================================
-            is_identical = True
-            for p_name in mutated_params:
-                # 精度对齐校验：严格判断该样本是否与母体完全一致
-                if not np.isclose(sample_dict[p_name], original_rules[p_name], rtol=1e-5, atol=1e-8):
-                    is_identical = False
-                    break
-                    
-            if is_identical:
-                continue # 发现像 34_cdh1_KO 这种 MAE=0 的一模一样样本，直接舍去！
+            # 近重复剔除：所有突变参数均在母体值 8% 以内视为数据泄漏
+            if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                continue
+
+            # 全局跨检查：拦截跨家系污染和 WT 污染
+            if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+                continue
                 
             # 纯离散去重：防止像 mdt 这种少状态参数导致生成数百个完全一致的内部样本
             if not continuous_mutated and not has_bub2:
@@ -599,7 +664,7 @@ def generate_lhs_tasks(num_lhs_samples):
 # ==========================================
 # 4.5 【RGS专用】Real-Guided 局部密集采样引擎
 # ==========================================
-def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.1):
+def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.3):
     """
     RGS (Real-Guided Sampling) 局部密集采样：
     逻辑与 generate_lhs_tasks 完全一致（原汁原味），
@@ -620,6 +685,9 @@ def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.
     defaults = get_default_params()
     defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992,
                      'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
+
+    # 全局跨检查预计算：构建全部真实突变体的完整参数向量
+    real_mutant_full = build_real_mutant_full(mutant_rules, defaults)
 
     pure_wt_mutants = ['1_WT_Glc', '2.1_WT_Gal', '2.2_WT_Raff']
 
@@ -642,6 +710,10 @@ def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.
         mutated_params = list(original_rules.keys())
         if not mutated_params:
             continue
+
+        # 全局跨检查预筛
+        _mutated_set = set(mutated_params)
+        cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
 
         # ── 与 generate_lhs_tasks 完全一致的参数分类 ──
         strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
@@ -677,9 +749,15 @@ def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.
 
             for i, p_name in enumerate(continuous_mutated):
                 center_val = original_rules[p_name]
-                # 局部扰动：center * (1 ± perturbation)，下限不低于 0
-                l_bound = max(0.0, center_val * (1.0 - perturbation))
-                u_bound = center_val * (1.0 + perturbation)
+                # 0值修复：KO突变体 center_val=0 时 center*(1±pert)=0 采样退化
+                # 改用默认值为参考：采样范围 [0, defaults[p_name]*perturbation]
+                ref_val = defaults.get(p_name, 0.0)
+                if center_val == 0.0 and ref_val > 0.0:
+                    l_bound = 0.0
+                    u_bound = ref_val * perturbation
+                else:
+                    l_bound = max(0.0, center_val * (1.0 - perturbation))
+                    u_bound = center_val * (1.0 + perturbation)
                 if u_bound <= l_bound:
                     u_bound = l_bound + 1e-6
                 continuous_samples[p_name] = l_bound + lhs_matrix[:, i] * (u_bound - l_bound)
@@ -728,12 +806,11 @@ def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.
                     sample_dict[p] = val
 
             # ── 与 generate_lhs_tasks 完全一致的等价碰撞拦截器 ──
-            is_identical = True
-            for p_name in mutated_params:
-                if not np.isclose(sample_dict[p_name], original_rules[p_name], rtol=1e-5, atol=1e-8):
-                    is_identical = False
-                    break
-            if is_identical:
+            if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                continue
+
+            # 全局跨检查：拦截跨家系污染和 WT 污染
+            if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
                 continue
 
             # 纯离散去重
@@ -873,7 +950,7 @@ V3_EXPANSION_FAMILIES = {
 
 
 def generate_targeted_lhs_tasks(target_families=None, default_num_per_mutant=100,
-                                 default_perturbation=0.1):
+                                 default_perturbation=0.3):
     """
     定向扩展采样引擎：针对 Sim-to-Real Gap 的三大家族 + N_LHS 不足突变体
     进行定向密集采样，补齐 LHS 训练分布的覆盖盲区。
@@ -919,12 +996,15 @@ def generate_targeted_lhs_tasks(target_families=None, default_num_per_mutant=100
     defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992,
                      'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
 
+    # 全局跨检查预计算：构建全部真实突变体的完整参数向量
+    real_mutant_full = build_real_mutant_full(mutant_rules, defaults)
+
     lhs_tasks_dict = {}
 
     for family_name, family_cfg in target_families.items():
         mutants = family_cfg['mutants']
         num_per = family_cfg.get('num_per_mutant', default_num_per_mutant)
-        perturbation = family_cfg.get('perturbation', default_perturbation)
+        perturbation = max(family_cfg.get('perturbation', default_perturbation), 0.30)
         mode = family_cfg.get('mode', 'density')
         boundary_params = family_cfg.get('boundary_params', {})
         anchor_params = family_cfg.get('anchor_params', {})
@@ -939,6 +1019,10 @@ def generate_targeted_lhs_tasks(target_families=None, default_num_per_mutant=100
             mutated_params = list(original_rules.keys())
             if not mutated_params:
                 continue
+
+            # 全局跨检查预筛
+            _mutated_set = set(mutated_params)
+            cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
 
             # ── 与 generate_lhs_tasks 完全一致的参数分类 ──
             strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
@@ -971,21 +1055,32 @@ def generate_targeted_lhs_tasks(target_families=None, default_num_per_mutant=100
 
                 for i, p_name in enumerate(continuous_mutated):
                     center_val = original_rules[p_name]
+                    # 0值修复：KO突变体 center_val=0 时采样退化，改用默认值为参考
+                    ref_val = defaults.get(p_name, 0.0)
+                    zero_ko = (center_val == 0.0 and ref_val > 0.0)
 
                     if mode == 'boundary' and p_name in boundary_params:
                         # 边界扩展模式：覆盖到 0 边界，同时保留原参数邻域
                         b_val = boundary_params[p_name]
-                        l_bound = min(b_val, center_val * (1.0 - perturbation))
-                        l_bound = max(0.0, l_bound)
-                        u_bound = max(center_val * (1.0 + perturbation), b_val + 1e-6)
-                        if u_bound <= l_bound:
-                            u_bound = l_bound + 1e-6
+                        if zero_ko:
+                            l_bound = 0.0
+                            u_bound = ref_val * perturbation
+                            if b_val > 0:
+                                u_bound = max(u_bound, b_val + 1e-6)
+                        else:
+                            l_bound = min(b_val, center_val * (1.0 - perturbation))
+                            l_bound = max(0.0, l_bound)
+                            u_bound = max(center_val * (1.0 + perturbation), b_val + 1e-6)
                     else:
                         # density / anchor 模式：与 generate_local_lhs_tasks 一致
-                        l_bound = max(0.0, center_val * (1.0 - perturbation))
-                        u_bound = center_val * (1.0 + perturbation)
-                        if u_bound <= l_bound:
-                            u_bound = l_bound + 1e-6
+                        if zero_ko:
+                            l_bound = 0.0
+                            u_bound = ref_val * perturbation
+                        else:
+                            l_bound = max(0.0, center_val * (1.0 - perturbation))
+                            u_bound = center_val * (1.0 + perturbation)
+                    if u_bound <= l_bound:
+                        u_bound = l_bound + 1e-6
 
                     continuous_samples[p_name] = l_bound + lhs_matrix[:, i] * (u_bound - l_bound)
 
@@ -1039,12 +1134,11 @@ def generate_targeted_lhs_tasks(target_families=None, default_num_per_mutant=100
                         sample_dict[p] = val
 
                 # ── 与 generate_lhs_tasks 完全一致的等价碰撞拦截器 ──
-                is_identical = True
-                for p_name in mutated_params:
-                    if not np.isclose(sample_dict[p_name], original_rules[p_name], rtol=1e-5, atol=1e-8):
-                        is_identical = False
-                        break
-                if is_identical:
+                if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                    continue
+
+                # 全局跨检查：拦截跨家系污染和 WT 污染
+                if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
                     continue
 
                 # 纯离散去重
@@ -1239,3 +1333,38 @@ if __name__ == '__main__':
     u_pat, c_pat = np.unique(all_pattern_labels, return_counts=True)
     for lbl, count in zip(u_pat, c_pat):
         print(f"  - {lbl}: {count} 个")
+
+    # ==========================================
+    # 📊 各家族 LHS 样本数量统计 (普通 LHS + Target 定向 LHS)
+    # ==========================================
+    print("\n" + "="*75)
+    print("📊 各家族 LHS 样本数量统计 (按突变体母体分组)")
+    print("="*75)
+
+    from collections import defaultdict
+    family_stats = defaultdict(lambda: {'real': 0, 'lhs_normal': 0, 'lhs_target': 0})
+
+    for name in final_names:
+        if '_LHS_T' in name:
+            m_name = name.split('_LHS_T')[0]
+            family_stats[m_name]['lhs_target'] += 1
+        elif '_LHS_' in name:
+            m_name = name.split('_LHS_')[0]
+            family_stats[m_name]['lhs_normal'] += 1
+        else:
+            family_stats[name]['real'] += 1
+
+    print(f"{'突变体母体':<35} | {'Real':<6} | {'普通LHS':<8} | {'TargetLHS':<9} | {'合计':<6}")
+    print("-" * 75)
+    total_real = total_normal = total_target = 0
+    for m_name in sorted(family_stats.keys()):
+        s = family_stats[m_name]
+        total = s['real'] + s['lhs_normal'] + s['lhs_target']
+        if total > 0:
+            print(f"{m_name:<35} | {s['real']:<6} | {s['lhs_normal']:<8} | {s['lhs_target']:<9} | {total:<6}")
+        total_real += s['real']
+        total_normal += s['lhs_normal']
+        total_target += s['lhs_target']
+    print("-" * 75)
+    print(f"{'合计':<35} | {total_real:<6} | {total_normal:<8} | {total_target:<9} | {total_real+total_normal+total_target:<6}")
+    print("="*75)

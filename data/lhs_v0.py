@@ -17,7 +17,9 @@ SIM_STEPS = int(os.environ.get("SIM_STEPS", 500))
 NUM_LHS_SAMPLES = 80000  # 全局盲抽样本数
 SIM_TIMEOUT = 5.0 
 
+OUTPUT_DIR = "/home/users/zsy/mydata/budding_yeast"
 DATASET_NAME = f"lhs_blind_{SIM_TF}min_{SIM_STEPS}steps_dual_labels.npz"
+DATASET_PATH = os.path.join(OUTPUT_DIR, DATASET_NAME)
 
 # ==========================================
 # 1. 严格离散保护名单与变量映射
@@ -783,7 +785,7 @@ if __name__ == '__main__':
     all_bio_labels = np.array(final_bio_labels)
     all_pattern_labels = np.array(final_pattern_labels)
     
-    np.savez_compressed(DATASET_NAME, 
+    np.savez_compressed(DATASET_PATH, 
                         data=all_tensors, 
                         params=all_params,
                         param_names=param_keys,
@@ -791,7 +793,7 @@ if __name__ == '__main__':
                         labels=all_bio_labels,             
                         pattern_labels=all_pattern_labels) 
                         
-    print(f"\n📊 保存成功！文件: {DATASET_NAME}")
+    print(f"\n📊 保存成功！文件: {DATASET_PATH}")
     print(f"✅ 耗时: {time.time() - start_time:.2f} 秒")
     print(f"📊 张量维度 (Samples, Vars, Timesteps): {all_tensors.shape}")
     print(f"📊 参数维度 (Samples, Param_Count): {all_params.shape}")
