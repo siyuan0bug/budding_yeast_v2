@@ -1,7 +1,9 @@
 import torch
+import torch.nn.functional as F
 import numpy as np
+import time
 import pytorch_lightning as pl
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -16,12 +18,26 @@ from sklearn.metrics.pairwise import euclidean_distances
 # 1. 完美、完整地导入原版 LHS 引擎的所有核心组件
 # ==============================================================
 from budding_yeast_v2.data.lhs_v1_origin import (
-    simulate_mutant, 
-    get_default_params, 
+    simulate_mutant,
+    get_default_params,
     generate_lhs_tasks,
     generate_local_lhs_tasks,
     mutant_rules,
     eqns as _yeast_ode_eqns,
+    SIM_TIMEOUT,
+)
+
+# ==============================================================
+# al4pde 候选池生成: 使用 v5 采样算法 (普通采样 + density + boundary)
+# ==============================================================
+from budding_yeast_v2.data.lhs_v1_origin_v5 import (
+    generate_lhs_tasks as generate_lhs_tasks_v5,
+    generate_targeted_lhs_tasks as generate_targeted_lhs_tasks_density,
+    initial_conds as initial_conds_v5,
+)
+# v5_boundary 的 boundary 采样: 连续参数范围统一 [0, center_val*(1+pert)], 强制 0 值邻域覆盖
+from budding_yeast_v2.data.lhs_v1_origin_v5_boundary import (
+    generate_targeted_lhs_tasks as generate_targeted_lhs_tasks_boundary,
 )
 
 # ==============================================================
@@ -38,6 +54,39 @@ VARIABLE_NAMES = [
     "CDC20", "CDH1T", "CDH1", "CDC14T", "CDC14", "NET1T", "NET1", "RENT", "TEM1", "CDC15",
     "PPX", "PDS1", "ESP1", "ORI", "BUD", "SPN", "Vi20", "lte1", "BUB2"
 ]
+
+# ==================================================================
+# MASS 生物学先验 (源自 data/mass_dataset_generator.py 的"通路→机制→严重程度"分层采样框架)
+# 用于 al4pde_mass 策略: 按"通路频率 × 机制频率"给候选样本打生物学优先级。
+#   - 通路频率: 参数所属绑定组对应通路的 high/medium/low 频率 (6/3/1), 同参数多组时取最高频通路
+#   - 机制频率: 由候选参数相对 WT 默认值的扰动模式推断粗机制类 (loss/gain/partial),
+#     权重取自 Chen 2004 操作实例统计 (KO=50, GAL-OE=23, ts=17, MC=12, db=10)
+# 详见 mass_dataset_generator.BINDING_GROUPS / PATHWAYS 的组→通路→频率映射。
+# ==================================================================
+_MASS_PARAM_PATHWAY_FREQ = {
+    # high (6): G1 Cdh1 / G2 Cln2 / G3 Sic1 / G4 Cdc6 / G5 Cdc20 / G6 Clb5
+    'init_CDH1T': 6.0, 'init_CDH1': 6.0, 'kscdh': 6.0,
+    'ksn2p': 6.0, 'ksn2pp': 6.0,
+    'ksc1p': 6.0, 'ksc1pp': 6.0,
+    'ksf6p': 6.0, 'ksf6pp': 6.0, 'ksf6ppp': 6.0,
+    'ks20p': 6.0, 'ks20pp': 6.0,
+    'ksb5p': 6.0, 'ksb5pp': 6.0,
+    # medium (3): G7/G11 Clb2 / G8/G12 Net1-Cdc14 / G9 Pds1 / G13 Tem1
+    'kdb2P': 3.0, 'kdb2pp': 3.0,
+    'ksb2p': 3.0, 'ksb2pp': 3.0,
+    'kasrent': 3.0, 'kasrentp': 3.0,
+    'ks14': 3.0, 'kppc1': 3.0, 'kppf6': 3.0,
+    'ks1pdspp': 3.0, 'ks2pdspp': 3.0, 'kd2pdspp': 3.0, 'kd3pdspp': 3.0,
+    'ka15pp': 3.0, 'Tem1T': 3.0,
+    # low (1): G10 Swi5 / G14 Cdc15 / G15 Bck2(MC) / G16-G20 检查点
+    'ksswip': 1.0, 'ksswipp': 1.0,
+    'kkpnetpp': 1.0, 'Cdc15T': 1.0,
+    'B0': 1.0,
+    'ka20pp': 1.0, 'Vi20_active': 1.0, 'init_BUB2': 1.0, 'BUB2_active': 1.0,
+}
+# 机制频率权重 (Chen 2004 操作实例统计, 归一化前的原始权重)
+_MASS_MECH_WEIGHTS = {'KO': 50.0, 'GAL-OE': 23.0, 'ts': 17.0, 'MC': 12.0, 'db': 10.0}
+
 
 def solve_single_mutant_bridge(name, p_vec):
     """将 AL 选拔出的 141 维张量完美还原为 simulate_mutant 所需的字典"""
@@ -72,7 +121,8 @@ class ActiveLearningCallback(pl.Callback):
                  atlas_csv_path=None,
                  # ====== al4pde 框架专属参数 ======
                  al_pool_dataset=None,
-                 target_weight=0.4):
+                 target_weight=0.4,
+                 mass_weight=0.5):
         """
         标准主动学习 (Active Learning) 回调模块。
 
@@ -148,6 +198,8 @@ class ActiveLearningCallback(pl.Callback):
         # ====== al4pde 框架状态 ======
         self.al_pool_dataset = al_pool_dataset
         self.target_weight = target_weight
+        # al4pde_mass 策略: MASS 生物学分层优先级权重 (diversity 权重 = 1 - mass_weight)
+        self.mass_weight = mass_weight
         # diversity_weight 复用已有的 self.diversity_weight (IS 策略参数)
         # MAAL: acquisition = diversity_weight * diversity + target_weight * priority
         # 约束: diversity_weight + target_weight = 1 (在 _maal_sample 中自动归一化)
@@ -158,8 +210,38 @@ class ActiveLearningCallback(pl.Callback):
         self._pool_Y_ic = None           # 候选池样本的 IC (归一化), shape (N, 39)
         self._al4pde_pool_idx = None     # 候选池样本在原始 npz 中的索引 (用于按需加载完整 Y)
         self._al4pde_pool_path = None    # 候选池 npz 文件路径 (用于按需加载)
-        self._al4pde_mean_y = None       # 归一化统计量 (用于按需加载时归一化 Y)
+        self._al4pde_mean_y = None       # 归一化统计量 (用于仿真后归一化 Y)
         self._al4pde_std_y = None
+        self._pool_P_real = None        # 未归一化参数 (用于选中后 ODE 仿真)
+        self._pool_shape_features_cached = None  # ODE 预计算的形状特征缓存 (diversity/maal 用)
+
+        # ====== al4pde 频率/数量机制 (v2.2 P2/P3/P4 改进) ======
+        # al4pde 原始 (run_active_learning.py + data_schedule.py):
+        #   - num_al_iter=5, 每轮训练 num_epochs=500 ep, 末轮 is_last 不选数据
+        #   - 原始 ExponentialSchedule: n_samples(al_iter) = first_batch_num * 2^al_iter * batch_size
+        # v2.1: initial=15000, trigger=4ep, num_add=1000, 51 轮 (增量式)
+        # v2.2 (已作废): initial=5000, 分段 trigger 8/4/8, num_add 递增 1000/3000/4000, 29 轮
+        # v2.3 (外层重训式, 方案 A, 向原版 al4pde 靠拢):
+        #   - 5 轮 AL, 每轮全新模型 + 全新余弦周期跑满 (100 epoch), 取最后一轮最后 epoch
+        #   - 初始 5000 (沿用 v2.2 基线), 中间 4 次采集, 每次追加 19000, 总追加 76000 → 总 81000
+        #   - 选样与训练解耦: 由 train.py 外层循环调用 al4pde_select_and_append,
+        #     不再走 on_train_epoch_end (外层重训模式下该钩子对 al4pde 直接跳过)
+
+        if self.strategy in ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
+                             'maal', 'al4pde_boundary', 'al4pde_mass'):
+            print(f"[AL Manager] Override al4pde settings (v2.3 外层重训式): "
+                  f"initial_train_size=5000, 5 轮, 每次采集追加 19000 (总 76000)")
+            self.initial_train_size = 5000
+            self.trigger_every_n_epochs = 4  # 保留字段, 外层重训模式下不生效
+            self.num_add = 1000              # 保留字段, 外层重训模式下不生效
+            self._al4pde_num_al_iter = 5        # v2.3: 5 轮 AL (前 4 轮采集, 末轮只训练)
+            self._al4pde_per_round_add = 19000  # v2.3: 每次采集追加数 (76000 / 4)
+        else:
+            self._al4pde_num_al_iter = 6
+            self._al4pde_per_round_add = 1000
+        
+        self._al4pde_al_iter = 0           # 当前 AL 轮次 (0-indexed, 每次选择后递增)
+        self._outer_loop_mode = False      # v2.3: 外层重训模式 (由 train.py 启用, 关闭 in-loop 触发)
 
     # ==================================================================
     # 标准主动学习框架：初始训练集选择
@@ -249,18 +331,19 @@ class ActiveLearningCallback(pl.Callback):
             full_P[selected_idx],
             full_Y[selected_idx]
         )
+        # 同步更新 _train_idx_lhs: AL 替换了 train_dataset_lhs 为 selected_idx 子集,
+        # _train_idx_lhs 也需对应缩小, 否则后续 _map_family_priority_train_based 等
+        # 函数用 _train_idx_lhs 取名字时大小不匹配 (42661 vs 15000) 导致 IndexError
+        if hasattr(dm, '_train_idx_lhs'):
+            dm._train_idx_lhs = np.asarray(dm._train_idx_lhs)[selected_idx]
 
-        # ====== al4pde 框架: 加载 v5 候选池 (覆盖默认的 v1 剩余样本池) ======
-        if self.strategy in ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal'):
-            if self.al_pool_dataset:
-                self._load_al4pde_pool(dm)
-            else:
-                # 降级: 用 v1 剩余样本作为候选池
-                print("[al4pde] 警告: 未指定 --al_pool_dataset, 降级用 v1 剩余样本作为候选池")
-                self._pool_X = full_X[pool_idx]
-                self._pool_P = full_P[pool_idx]
-                self._pool_Y = full_Y[pool_idx]
-                self._pool_size = len(pool_idx)
+        # ====== al4pde 框架: 生成参数候选池 (v5 采样算法, 只含参数不含轨迹) ======
+        if self.strategy in ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
+                             'maal', 'al4pde_boundary', 'al4pde_mass'):
+            self._generate_param_only_pool(dm)
+            # diversity/maal/boundary 需要轨迹形状特征: 预计算 ODE 仿真并缓存
+            if self.strategy in ('al4pde_diversity', 'maal', 'al4pde_boundary', 'al4pde_mass'):
+                self._precompute_pool_ode_shape_features(dm)
         else:
             # 标准池化策略: 保存未标注池 (v1 剩余样本)
             self._pool_X = full_X[pool_idx]
@@ -319,12 +402,123 @@ class ActiveLearningCallback(pl.Callback):
         print(f"[AL Manager] K-Means 完成: 选中 {len(selected_idx)} 个多样性样本")
         return selected_idx
 
+    # ==================================================================
+    # v2.3 外层重训式 al4pde: 供 train.py 外层循环调用的公开接口
+    # ==================================================================
+    def enable_outer_loop_mode(self):
+        """v2.3: 启用外层重训模式 (选样由 train.py 外层循环驱动, on_train_epoch_end 不再触发)。"""
+        self._outer_loop_mode = True
+
+    def al4pde_setup(self, dm, device='cuda'):
+        """v2.3 外层重训式: 一次性初始化 (缩至初始子集 + 生成候选池 + ODE 预计算)。
+        供 train.py 在外层循环开始前调用一次 (等价于原 on_train_start 的 al4pde 分支)。"""
+        from torch.utils.data import TensorDataset
+        full_X, full_P, full_Y = dm.train_dataset_lhs.tensors
+        full_size = full_X.shape[0]
+        initial_size = min(self.initial_train_size, full_size)
+        print(f"[al4pde v2.3] 初始训练集: {initial_size}/{full_size} (选择方法={self.initial_selection})")
+        if self.initial_selection == 'kmeans':
+            selected_idx = self._kmeans_initial_selection(full_P, initial_size)
+        else:
+            rng = np.random.RandomState(self.random_seed)
+            selected_idx = rng.choice(full_size, initial_size, replace=False)
+        dm.train_dataset_lhs = TensorDataset(full_X[selected_idx], full_P[selected_idx], full_Y[selected_idx])
+        if hasattr(dm, '_train_idx_lhs'):
+            dm._train_idx_lhs = np.asarray(dm._train_idx_lhs)[selected_idx]
+        # 生成参数候选池 (v5 采样); diversity/maal/boundary 额外做 ODE 形状特征预计算
+        self._generate_param_only_pool(dm)
+        if self.strategy in ('al4pde_diversity', 'maal', 'al4pde_boundary', 'al4pde_mass'):
+            self._precompute_pool_ode_shape_features(dm)
+        self._al_initialized = True
+        self._al4pde_al_iter = 0
+        self._train_size_history.append(len(dm.train_dataset_lhs))
+
+    def al4pde_select_and_append(self, pl_module, dm, device='cuda'):
+        """v2.3 外层重训式: 用当前(上一轮训练完的)模型选样并追加到 train_dataset_lhs。
+        返回本次追加的样本数。"""
+        from torch.utils.data import TensorDataset
+        if pl_module is not None:
+            pl_module = pl_module.to(device)
+            pl_module.eval()
+        if self.strategy == 'al4pde_random':
+            bd = self._al4pde_random_sample(None, pl_module, dm, device, 0)
+        elif self.strategy == 'al4pde_uncertainty':
+            bd = self._al4pde_uncertainty_sample(None, pl_module, dm, device, 0)
+        elif self.strategy == 'al4pde_diversity':
+            bd = self._al4pde_diversity_sample(None, pl_module, dm, device, 0)
+        elif self.strategy == 'al4pde_boundary':
+            bd = self._al4pde_boundary_sample(None, pl_module, dm, device, 0)
+        elif self.strategy == 'maal':
+            bd = self._maal_sample(None, pl_module, dm, device, 0)
+        elif self.strategy == 'al4pde_mass':
+            bd = self._al4pde_mass_sample(None, pl_module, dm, device, 0)
+        else:
+            bd = None
+        if bd is None:
+            print("[al4pde v2.3] 本轮候选池为空, 未追加样本")
+            if pl_module is not None:
+                pl_module.train()
+            return 0
+        old_X, old_P, old_Y = dm.train_dataset_lhs.tensors
+        dm.train_dataset_lhs = TensorDataset(
+            torch.cat([old_X, bd['X'].to(old_X.device)], dim=0),
+            torch.cat([old_P, bd['P'].to(old_X.device)], dim=0),
+            torch.cat([old_Y, bd['Y'].to(old_Y.device)], dim=0),
+        )
+        if 'names' in bd and hasattr(dm, '_mutant_names'):
+            new_names = list(bd['names'])
+            n_existing = len(dm._mutant_names)
+            dm._mutant_names = list(dm._mutant_names) + new_names
+            new_indices = np.arange(n_existing, n_existing + len(new_names))
+            if hasattr(dm, '_train_idx_lhs'):
+                dm._train_idx_lhs = np.concatenate([np.asarray(dm._train_idx_lhs), new_indices])
+            else:
+                dm._train_idx_lhs = new_indices
+        self._al4pde_al_iter += 1
+        self._train_size_history.append(len(dm.train_dataset_lhs))
+        n_added = int(bd['X'].shape[0])
+        print(f"[al4pde v2.3] 追加 {n_added} 个样本 → 训练集 {len(dm.train_dataset_lhs)} "
+              f"(al_iter={self._al4pde_al_iter})")
+        if pl_module is not None:
+            pl_module.train()
+        return n_added
+
     def on_train_epoch_end(self, trainer, pl_module):
         current_epoch = trainer.current_epoch
-        if current_epoch == 0 or current_epoch % self.trigger_every_n_epochs != 0:
+        # v2.3: al4pde 外层重训模式下, 选样由 train.py 外层循环负责, 关闭 in-loop 触发
+        if getattr(self, '_outer_loop_mode', False) and self._is_al4pde_strategy():
+            return
+        # v2.2 P3: al4pde 分段式触发频率 (8/4/8 ep), 适配训练阶段
+        #   早期 (ep 1-30): 每 8 ep (模型未稳定, 稀疏触发)
+        #   中期 (ep 30-120): 每 4 ep (主力阶段, 密集触发)
+        #   后期 (ep 120-150): 每 8 ep (过拟合期, 减少干扰)
+        if self._is_al4pde_strategy():
+            if current_epoch <= 30:
+                trigger_interval = 8
+            elif current_epoch <= 120:
+                trigger_interval = 4
+            else:
+                trigger_interval = 8
+        else:
+            trigger_interval = self.trigger_every_n_epochs
+
+        if current_epoch == 0 or current_epoch % trigger_interval != 0:
+            return
+
+        # al4pde 框架: 最后一轮 AL 不选数据 (对齐 al4pde run_active_learning.py is_last 逻辑)
+        # al4pde 原始: for al_iter in range(num_al_iter): train → if not is_last: select
+        # 5 轮 AL 中前 4 轮选数据 (al_iter 0,1,2,3), 末轮 (al_iter 4) 只训练不选
+        if self._is_al4pde_strategy() and self._al4pde_al_iter >= self._al4pde_num_al_iter - 1:
+            if self._al4pde_al_iter == self._al4pde_num_al_iter - 1:
+                print(f"[AL Manager] Epoch {current_epoch}: al4pde 末轮 (al_iter={self._al4pde_al_iter}), "
+                      f"对齐 al4pde is_last 逻辑, 跳过采样")
             return
 
         print(f"\n[AL Manager] Epoch {current_epoch} 触发主动学习采样: {self.strategy.upper()}")
+        if self._is_al4pde_strategy():
+            scheduled_add = self._al4pde_scheduled_num_add()
+            print(f"[AL Manager] al4pde Data Schedule: al_iter={self._al4pde_al_iter}, "
+                  f"本轮新增 {scheduled_add} 个样本")
         dm = trainer.datamodule
         device = pl_module.device
         broadcast_data = None
@@ -343,8 +537,12 @@ class ActiveLearningCallback(pl.Callback):
                 broadcast_data = self._al4pde_uncertainty_sample(trainer, pl_module, dm, device, current_epoch)
             elif self.strategy == 'al4pde_diversity':
                 broadcast_data = self._al4pde_diversity_sample(trainer, pl_module, dm, device, current_epoch)
+            elif self.strategy == 'al4pde_boundary':
+                broadcast_data = self._al4pde_boundary_sample(trainer, pl_module, dm, device, current_epoch)
             elif self.strategy == 'maal':
                 broadcast_data = self._maal_sample(trainer, pl_module, dm, device, current_epoch)
+            elif self.strategy == 'al4pde_mass':
+                broadcast_data = self._al4pde_mass_sample(trainer, pl_module, dm, device, current_epoch)
             # 所有池化策略 (us/is/random/wrs/vessal/hggs)：统一走标准 AL 入口
             elif self._al_initialized:
                 broadcast_data = self._standard_al_sample(trainer, pl_module, dm, device, current_epoch)
@@ -367,6 +565,25 @@ class ActiveLearningCallback(pl.Callback):
             dm.train_dataset_lhs = TensorDataset(updated_X, updated_P, updated_Y)
             self._train_size_history.append(len(dm.train_dataset_lhs))
             print(f"[AL Manager] 训练集成功扩容！当前新样本总数: {len(dm.train_dataset_lhs)}")
+
+            # 同步更新 _mutant_names 和 _train_idx_lhs: 新增样本来自候选池 (不在原全量数据集中),
+            # 需追加名字和索引, 否则后续 AL 迭代中 _map_family_priority_train_based 等
+            # 函数用 _train_idx_lhs 取名字时大小不匹配导致 IndexError
+            if 'names' in broadcast_data and hasattr(dm, '_mutant_names'):
+                new_names = list(broadcast_data['names'])
+                n_existing = len(dm._mutant_names)
+                dm._mutant_names = list(dm._mutant_names) + new_names
+                new_indices = np.arange(n_existing, n_existing + len(new_names))
+                if hasattr(dm, '_train_idx_lhs'):
+                    dm._train_idx_lhs = np.concatenate([np.asarray(dm._train_idx_lhs), new_indices])
+                else:
+                    dm._train_idx_lhs = new_indices
+
+            # al4pde: 递增 AL 轮次计数器 (驱动 ExponentialSchedule 数量增长)
+            if self._is_al4pde_strategy():
+                self._al4pde_al_iter += 1
+                print(f"[AL Manager] al4pde AL 轮次递增 → al_iter={self._al4pde_al_iter} "
+                      f"(共 {self._al4pde_num_al_iter} 轮, 末轮不选)")
 
             # 上传 AL 采样对比图到 wandb
             if 'sample_plots' in broadcast_data and trainer.logger and hasattr(trainer.logger, 'experiment'):
@@ -1436,86 +1653,361 @@ class ActiveLearningCallback(pl.Callback):
             self._mutant_atlas = None
             self._atlas_loaded = False
 
-    def _load_al4pde_pool(self, dm):
+    def _sample_target_with_retry(self, sample_fn, mode_name, all_mutants,
+                                  target_count, max_retries=3):
+        """带补采的 target 采样, 确保每 mutant 最终有 target_count 个样本
+
+        去重 (is_near_mother + is_near_any_real) 会丢弃部分样本, 对不足的 mutant
+        自动补采直到达标或达到 max_retries 上限。
+
+        Args:
+            sample_fn: generate_targeted_lhs_tasks_density 或 _boundary
+            mode_name: 'density' 或 'boundary' (用于打印和键名)
+            all_mutants: 参与采样的 mutant 名列表
+            target_count: 每 mutant 目标样本数
+            max_retries: 最大补采轮数
+
+        Returns:
+            dict: {f"{m}_{mode_name}_{i:03d}": sample_dict}
         """
-        加载 v5 数据集, 构建 al4pde 候选池 (v5 除去 Real Mutant 的全部数据)。
+        PERTURBATION = 0.30
+        result = {m: [] for m in all_mutants}
 
-        候选池组成:
-        - v5 全部 LHS 样本 (名称含 '_LHS_'): target + LHS 常规
-          · target 样本 (_LHS_T 后缀, v5 定向扩展采样): ~54,619 个
-          · LHS 常规样本 (_LHS_ 非 T): ~107,389 个
-        - 除去 126 个 Real Mutant (名称不含 '_LHS_')
-        - 总计 ~162,008 个样本
+        # 初始家族配置: 全 mutant, 每 mutant target_count 个
+        families = {
+            m: {'mutants': [m], 'num_per_mutant': target_count,
+                'perturbation': PERTURBATION, 'mode': mode_name}
+            for m in all_mutants
+        }
 
-        内存优化:
-        - 只加载 P_norm (N×141) + Y_IC (N×39, Y[:, :, 0]) + mutant_names 到内存
-        - 完整 Y (N×39×500) 不加载, 选中样本时从磁盘按需加载
-        - 内存占用从 ~12 GB 降到 ~0.1 GB
-        - X = [IC, t_grid] 通过 Y_IC 动态构造, IC = Y_IC.unsqueeze(2).expand(-1, -1, T)
+        for retry in range(max_retries):
+            tasks = sample_fn(target_families=families,
+                              default_num_per_mutant=target_count)
+            # 按 mutant 分组 (键名格式: {m_name}_LHS_T{idx:03d})
+            for name, sample_dict in tasks.items():
+                if '_LHS_T' in name:
+                    m_name = name.split('_LHS_T')[0]
+                else:
+                    m_name = name.rsplit('_LHS_', 1)[0]
+                if m_name in result:
+                    result[m_name].append(sample_dict)
+
+            # 检查不足的 mutant
+            insufficient = [m for m in all_mutants
+                            if len(result[m]) < target_count]
+            if not insufficient:
+                print(f"[al4pde] {mode_name} 采样: 全部 {len(all_mutants)} 个 mutant "
+                      f"达到 {target_count} 个")
+                break
+
+            # 补采: 对不足的 mutant 请求差额 + buffer
+            buffer = 20
+            families = {
+                m: {'mutants': [m],
+                    'num_per_mutant': target_count - len(result[m]) + buffer,
+                    'perturbation': PERTURBATION, 'mode': mode_name}
+                for m in insufficient
+            }
+            deficit = sum(target_count - len(result[m]) for m in insufficient)
+            print(f"[al4pde] {mode_name} 补采第 {retry+1} 轮: {len(insufficient)} 个 "
+                  f"mutant 不足, deficit 总计 {deficit} 个")
+
+        # 截取每 mutant target_count 个, 重命名键名避免冲突
+        # 键名格式: {m}_LHS_D{idx} (density) 或 {m}_LHS_B{idx} (boundary)
+        # 保留 _LHS_ 子串使现有 split('_LHS_')[0] 提取逻辑自动兼容
+        suffix = '_LHS_D' if mode_name == 'density' else '_LHS_B'
+        final = {}
+        short_count = 0
+        for m in all_mutants:
+            samples = result[m][:target_count]
+            if len(samples) < target_count:
+                short_count += 1
+            for i, sample_dict in enumerate(samples):
+                final[f"{m}{suffix}{i:03d}"] = sample_dict
+
+        if short_count > 0:
+            print(f"[al4pde] {mode_name} 警告: {short_count} 个 mutant 仍未达到 "
+                  f"{target_count} 个 (去重丢弃过多)")
+
+        return final
+
+    def _generate_param_only_pool(self, dm):
+        """生成只含参数的候选池 (实验开始前调用)
+
+        候选池构建规范 (3 类采样, 每 mutant 各 300 个):
+        - 常规采样 (normal): generate_lhs_tasks_v5(300), 全局均匀 LHS
+        - target_density: 突变参数邻域密集采样 (mode=density)
+        - target_boundary: 突变参数 0 值邻域采样 (mode=boundary, v5_boundary 算法)
+        - 暂时弃用 anchor 模式
+        - 去重后不足 300 个的 mutant 自动补采, 确保最终 300 个
+        - 候选池内部不去重
+        - 候选池只存参数信息 (P + Y_IC), 不含完整时间序列
+        - 选中后通过 ODE 仿真生成真实轨迹 (al4pde 原始项目机制)
+
+        内存优化: 只存 P_norm + Y_IC + P_real, 完整 Y 选中后 ODE 生成
         """
-        print(f"[al4pde] 加载候选池数据集: {self.al_pool_dataset}")
-        v5_data = np.load(self.al_pool_dataset, allow_pickle=True)
-        mutant_names = v5_data['mutant_names']
-        data_arr = v5_data['data']
-        params_arr = v5_data['params']
+        NUM_PER_TYPE = 300
+        # v2.2 优先级 3: cdh1 复杂突变体定向增强
+        # 背景: 41/42/45/21/122 等含 cdh1 的多突变体在所有策略下都灾难性差 (Rel L2 上千)。
+        # 改进: density 采样数量从 300 提升到 500, 给 AL 更多 cdh1 邻域候选。
+        # 注1: perturbation 不能从 0.30 降到 0.15 (v5.py 内 max(..., 0.30) 强制下界)。
+        # 注2: boundary 采样保持 300 (用户建议只增强 density)。
+        # 注3: 去重机制 (is_near_mother + is_near_any_real) 不变, _sample_target_with_retry
+        #      的 retry 机制确保去重后仍能达到目标数量, 保证参数对多样性。
+        CDH1_DENSITY_COUNT = 500
+        pure_wt = ['1_WT_Glc', '2.1_WT_Gal', '2.2_WT_Raff']
+        all_mutants = [m for m in mutant_rules.keys() if m not in pure_wt]
+        # 识别 cdh1 家族 (含 cdh1 的多突变体, 不区分大小写)
+        cdh1_mutants = [m for m in all_mutants if 'cdh1' in m.lower()]
+        non_cdh1_mutants = [m for m in all_mutants if 'cdh1' not in m.lower()]
 
-        # 除去 Real Mutant 的全部数据 (LHS 常规 + target)
-        non_real_mask = np.array(['_LHS_' in str(n) for n in mutant_names])
-        pool_idx = np.where(non_real_mask)[0]
-        rng = np.random.RandomState(self.random_seed)
-        rng.shuffle(pool_idx)
+        print(f"[al4pde] ===== 生成参数候选池 (3 类采样: normal/density/boundary) =====")
+        print(f"[al4pde] 参与 mutant: {len(all_mutants)} 个 (排除 {len(pure_wt)} 个 WT)")
+        print(f"[al4pde] 每类每 mutant: {NUM_PER_TYPE} 个 (cdh1 家族 density={CDH1_DENSITY_COUNT})")
+        print(f"[al4pde] cdh1 家族: {len(cdh1_mutants)} 个 | 非 cdh1: {len(non_cdh1_mutants)} 个")
 
-        # 统计 target / 非 target 分布 (仅用于打印)
-        target_count = sum(1 for i in pool_idx if '_LHS_T' in str(mutant_names[i]))
-        nontarget_count = len(pool_idx) - target_count
+        # 1. 常规采样 (全局均匀 LHS)
+        # 键名格式: {m}_LHS_{idx} (generate_lhs_tasks_v5 原始格式, 不加前缀)
+        print(f"[al4pde] 1/3 常规采样: generate_lhs_tasks_v5({NUM_PER_TYPE})")
+        normal_tasks = generate_lhs_tasks_v5(NUM_PER_TYPE)
+        normal_tasks_renamed = dict(normal_tasks)  # 保持原键名
+        print(f"[al4pde] 常规采样生成 {len(normal_tasks_renamed)} 个样本")
 
-        # 归一化统计量 (与 yeast_datamodule.py:157-167 完全一致)
-        T_STEPS = data_arr.shape[2]  # 500
+        # 2. target_density 采样 (突变参数邻域, v5 的 density 模式)
+        # v2.2: cdh1 家族 500 个, 非 cdh1 家族 300 个 (分两次调用)
+        print(f"[al4pde] 2/3 target_density 采样 (mode=density, pert=0.30)")
+        density_tasks = {}
+        if cdh1_mutants:
+            print(f"[al4pde]   cdh1 家族 density 采样: {len(cdh1_mutants)} 个 mutant × {CDH1_DENSITY_COUNT}")
+            cdh1_density = self._sample_target_with_retry(
+                generate_targeted_lhs_tasks_density, 'density',
+                cdh1_mutants, CDH1_DENSITY_COUNT)
+            density_tasks.update(cdh1_density)
+        if non_cdh1_mutants:
+            print(f"[al4pde]   非 cdh1 家族 density 采样: {len(non_cdh1_mutants)} 个 mutant × {NUM_PER_TYPE}")
+            non_cdh1_density = self._sample_target_with_retry(
+                generate_targeted_lhs_tasks_density, 'density',
+                non_cdh1_mutants, NUM_PER_TYPE)
+            density_tasks.update(non_cdh1_density)
+        print(f"[al4pde] density 采样生成 {len(density_tasks)} 个样本 "
+              f"(cdh1: {len(cdh1_mutants) * CDH1_DENSITY_COUNT} 期望 + "
+              f"非 cdh1: {len(non_cdh1_mutants) * NUM_PER_TYPE} 期望)")
+
+        # 3. target_boundary 采样 (0 值邻域, v5_boundary 的 boundary 模式)
+        print(f"[al4pde] 3/3 target_boundary 采样 (mode=boundary, pert=0.30)")
+        boundary_tasks = self._sample_target_with_retry(
+            generate_targeted_lhs_tasks_boundary, 'boundary',
+            all_mutants, NUM_PER_TYPE)
+        print(f"[al4pde] boundary 采样生成 {len(boundary_tasks)} 个样本")
+
+        # 合并 (候选池内部不去重)
+        all_tasks = {}
+        all_tasks.update(normal_tasks_renamed)
+        all_tasks.update(density_tasks)
+        all_tasks.update(boundary_tasks)
+        print(f"[al4pde] 合并候选池: {len(all_tasks)} 个样本 (内部不去重)")
+
+        # 提取参数向量 + 构造 IC
+        y0_base = initial_conds_v5()  # (39,) 固定初始条件
+
+        pool_names = []
+        pool_params = []
+        pool_ics = []
+
+        for name, overrides in all_tasks.items():
+            p_vec = [overrides.get(k, _defaults[k]) for k in PARAM_KEYS]
+            pool_names.append(name)
+            pool_params.append(p_vec)
+
+            # 构造 IC: 用 initial_conds 覆盖 init_CDH1T/init_CDH1/init_BUB2
+            # nCDH1T=21, nCDH1=22, nBUB2=38 (与 lhs_v1_origin_v5.py 变量索引一致)
+            y0 = y0_base.copy()
+            if 'init_CDH1T' in overrides:
+                y0[21] = overrides['init_CDH1T']
+            if 'init_CDH1' in overrides:
+                y0[22] = overrides['init_CDH1']
+            if 'init_BUB2' in overrides:
+                y0[38] = overrides['init_BUB2']
+            pool_ics.append(y0)
+
+        # 转为张量
+        P_tensor = torch.tensor(np.array(pool_params), dtype=torch.float32)    # (N, 141) 未归一化
+        Y_ic_tensor = torch.tensor(np.array(pool_ics), dtype=torch.float32)    # (N, 39) 未归一化
+
+        # 归一化统计量 (与 yeast_datamodule.py 完全一致)
         mean_y = dm.mean_y  # (1, 39, 1)
         std_y = dm.std_y     # (1, 39, 1)
         p_mean = dm.p_mean   # (1, 141)
         p_std = dm.p_std     # (1, 141)
 
-        # 内存优化: 只加载 P 和 Y_IC (Y[:, :, 0]), 不加载完整 Y (N×39×500)
-        P_tensor = torch.tensor(params_arr[pool_idx], dtype=torch.float32)      # (N, 141)
-        Y_ic_tensor = torch.tensor(data_arr[pool_idx, :, 0], dtype=torch.float32)  # (N, 39) 只取第一个时间步
-
-        # 归一化 P (与训练集完全一致)
+        # 归一化 P
         P_norm = (P_tensor - p_mean) / p_std
         P_norm = torch.nan_to_num(P_norm, nan=0.0, posinf=10.0, neginf=-10.0)
 
-        # 归一化 Y_IC: mean_y/std_y 是 (1, 39, 1), 压缩到 (1, 39) 用于 (N, 39) 的 Y_IC
+        # 归一化 Y_IC
         mean_y_ic = mean_y.squeeze(0).squeeze(-1)  # (39,)
         std_y_ic = std_y.squeeze(0).squeeze(-1)    # (39,)
         Y_ic_norm = (Y_ic_tensor - mean_y_ic) / std_y_ic
         Y_ic_norm = torch.nan_to_num(Y_ic_norm, nan=0.0, posinf=10.0, neginf=-10.0)
 
         # 构造 t_grid (共享, 不占额外内存)
-        t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS)  # (1, 1, 500)
+        T_STEPS = 500
+        t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS)
 
-        # 内存优化: 只存 P + Y_IC + t_grid, 不存完整 Y
+        # 统计 3 类采样分布 (仅用于打印)
+        # 键名格式: {m}_LHS_{idx} (normal), {m}_LHS_D{idx} (density), {m}_LHS_B{idx} (boundary)
+        normal_count = sum(1 for n in pool_names
+                           if '_LHS_' in str(n) and '_LHS_D' not in str(n)
+                           and '_LHS_B' not in str(n))
+        density_count = sum(1 for n in pool_names if '_LHS_D' in str(n))
+        boundary_count = sum(1 for n in pool_names if '_LHS_B' in str(n))
+
+        # 存储候选池 (只含参数, 不含完整 Y)
         self._pool_X = None
-        self._pool_P = P_norm
-        self._pool_Y = None           # 不再预存完整 Y
-        self._pool_Y_ic = Y_ic_norm   # 只存 IC (N, 39)
+        self._pool_P = P_norm               # (N, 141) 归一化参数
+        self._pool_Y = None                  # 不预存完整 Y
+        self._pool_Y_ic = Y_ic_norm          # (N, 39) 归一化 IC
         self._al4pde_t_grid = t_grid
-        self._pool_mutant_names = mutant_names[pool_idx]
-        self._pool_size = len(pool_idx)
+        self._pool_mutant_names = np.array(pool_names)
+        self._pool_size = len(pool_names)
         self._al4pde_pool_loaded = True
 
-        # 保存按需加载完整 Y 所需的信息
-        self._al4pde_pool_idx = pool_idx                    # 原始数据集中的索引
-        self._al4pde_pool_path = self.al_pool_dataset       # npz 文件路径
-        self._al4pde_mean_y = mean_y                        # 归一化统计量
+        # 存储未归一化参数 (用于选中后 ODE 仿真)
+        self._pool_P_real = P_tensor         # (N, 141) 未归一化
+
+        # 保存归一化统计量 (用于仿真后归一化 Y)
+        self._al4pde_mean_y = mean_y
         self._al4pde_std_y = std_y
 
-        # 内存估算 (只存 P + Y_IC)
-        mem_gb = (P_norm.nelement() * 4 + Y_ic_norm.nelement() * 4) / (1024**3)
+        # 不再需要磁盘加载相关变量
+        self._al4pde_pool_idx = None
+        self._al4pde_pool_path = None
+
+        mem_gb = (P_norm.nelement() * 4 + Y_ic_norm.nelement() * 4 +
+                  P_tensor.nelement() * 4) / (1024**3)
         print(f"[al4pde] 候选池构建完成: {self._pool_size} 样本 "
-              f"(target={target_count}, nontarget={nontarget_count}) | "
+              f"(normal={normal_count}, density={density_count}, boundary={boundary_count}) | "
               f"P_norm(mean={P_norm.mean():.3f}, std={P_norm.std():.3f}), "
               f"Y_ic_norm(mean={Y_ic_norm.mean():.3f}, std={Y_ic_norm.std():.3f}) | "
-              f"内存={mem_gb:.2f} GB (只存 P + Y_IC, 完整 Y 按需加载)")
+              f"内存={mem_gb:.2f} GB (只存 P + Y_IC + P_real, 完整 Y 选中后 ODE 生成)")
+
+    def _precompute_pool_ode_shape_features(self, dm):
+        """预计算候选池所有样本的 ODE 真实轨迹形状特征并缓存
+
+        用户洞察: diversity 不能只看参数距离, 需结合 mass pattern (轨迹形状)。
+        但候选池只有参数+IC, 没有轨迹, 用模型预测不靠谱 (训练早期模型差)。
+        正确做法: 用 ODE 求解器解出真实轨迹, 提取形状特征后缓存。
+
+        过滤逻辑 (对齐 lhs_v1_origin.py):
+        1. 仿真失败 (返回 None) → 丢弃
+        2. max_mass > 10.0 → 丢弃 (lhs_v1_origin.py L371)
+        3. 动态浓度异常 → 丢弃 (lhs_v1_origin.py L900-935)
+           - RELATIVE_MULTIPLIER = 2.0 (训练集 max × 2)
+           - ABSOLUTE_SAFE_LIMIT = 2.0 (最低阈值)
+           - 检查变量 1-38 (跳过 MASS=0)
+
+        本方法在 AL 初始化时调用一次 (on_train_start):
+        1. 对候选池所有样本并行 ODE 仿真 (solve_single_mutant_bridge)
+        2. 过滤极端值 (mass>10 / 浓度爆炸)
+        3. 从真实轨迹提取 332 维形状特征 (MASS pattern + 全变量统计 + 参数)
+        4. 缓存特征供后续所有 AL 轮次使用 (ODE 轨迹不随训练变化)
+        """
+        n_pool = self._pool_size
+        print(f"[al4pde] ===== 预计算 ODE 形状特征 (diversity/maal 专用) =====")
+        print(f"[al4pde] 对 {n_pool} 个候选池样本并行 ODE 仿真...")
+
+        t_start = time.time()
+        sim_results = [None] * n_pool
+        with ProcessPoolExecutor(max_workers=32) as executor:
+            futures = {
+                i: executor.submit(
+                    solve_single_mutant_bridge,
+                    str(self._pool_mutant_names[i]),
+                    self._pool_P_real[i].numpy()
+                )
+                for i in range(n_pool)
+            }
+            done = 0
+            for i, f in futures.items():
+                try:
+                    sim_results[i] = f.result(timeout=SIM_TIMEOUT + 30)
+                except FutureTimeoutError:
+                    print(f"  ⚠️ 候选池样本 {i} ({self._pool_mutant_names[i]}) 进程级超时,跳过")
+                    sim_results[i] = None
+                done += 1
+                if done % max(1, n_pool // 10) == 0 or done == n_pool:
+                    print(f"  ODE 仿真进度: {done}/{n_pool} ({100*done//n_pool}%)")
+
+        elapsed_ode = time.time() - t_start
+        n_sim_ok = sum(1 for r in sim_results if r is not None)
+        n_sim_fail = n_pool - n_sim_ok
+        print(f"[al4pde] ODE 仿真完成: {n_sim_ok}/{n_pool} 成功, {n_sim_fail} 失败, 耗时 {elapsed_ode:.0f}s")
+
+        # === 过滤阶段 1: 仿真失败 ===
+        valid_mask = np.array([r is not None for r in sim_results])
+
+        # === 过滤阶段 2: 极端值过滤 (对齐 lhs_v1_origin.py) ===
+        # 计算动态浓度阈值: 取 real mutants 每个变量的历史最大值 × 2.0 (最低 2.0)
+        # 用 real mutants 包络作为生物学合理上界, 比用 LHS 训练集更可靠
+        Y_real_norm = dm.test_dataset_real.tensors[2].cpu()
+        std_y_cpu = dm.std_y.cpu()
+        mean_y_cpu = dm.mean_y.cpu()
+        Y_real_raw = Y_real_norm * std_y_cpu + mean_y_cpu
+        real_envelope = Y_real_raw.max(dim=-1)[0].max(dim=0)[0].numpy()
+        dynamic_thresholds = np.maximum(real_envelope * 2.0, 2.0)
+
+        n_mass_discard = 0
+        n_conc_discard = 0
+        for i in range(n_pool):
+            if not valid_mask[i]:
+                continue
+            _, y_uniform, _, _ = sim_results[i]
+            max_mass = float(np.max(y_uniform[0]))  # y_uniform: (39, 500), MASS = y[0]
+
+            # 过滤 2a: max_mass > 10.0 (lhs_v1_origin.py L371)
+            if max_mass > 10.0:
+                valid_mask[i] = False
+                n_mass_discard += 1
+                continue
+
+            # 过滤 2b: 动态浓度异常 (lhs_v1_origin.py L916-924)
+            lhs_max_vals = np.max(y_uniform, axis=1)
+            is_monster = any(lhs_max_vals[v] > dynamic_thresholds[v] for v in range(1, 39))
+            if is_monster:
+                valid_mask[i] = False
+                n_conc_discard += 1
+
+        n_valid = int(valid_mask.sum())
+        n_total_discard = n_pool - n_valid
+        print(f"[al4pde] 过滤完成: {n_valid}/{n_pool} 通过 | "
+              f"仿真失败={n_sim_fail}, mass>10={n_mass_discard}, 浓度爆炸={n_conc_discard}")
+
+        # 移除未通过过滤的样本
+        if n_total_discard > 0:
+            self._pool_P = self._pool_P[valid_mask]
+            if self._pool_Y_ic is not None:
+                self._pool_Y_ic = self._pool_Y_ic[valid_mask]
+            if self._pool_mutant_names is not None:
+                self._pool_mutant_names = self._pool_mutant_names[valid_mask]
+            if self._pool_P_real is not None:
+                self._pool_P_real = self._pool_P_real[valid_mask]
+            self._pool_size = n_valid
+            sim_results = [r for r, m in zip(sim_results, valid_mask) if m]
+            print(f"[al4pde] 移除 {n_total_discard} 个无效样本, 候选池剩余 {self._pool_size}")
+
+        # 从真实 ODE 轨迹提取形状特征
+        features = []
+        for idx, res in enumerate(sim_results):
+            _, y_uniform, p_vec, _ = res  # y_uniform: (39, 500) 真实轨迹
+            y_tensor = torch.from_numpy(y_uniform).float().unsqueeze(0)  # (1, 39, 500)
+            p_norm = self._pool_P[idx:idx+1]  # (1, 141) 已归一化 (与过滤后池对齐)
+            feat = self._extract_shape_features(y_tensor, p_norm)  # (1, 332)
+            features.append(feat.squeeze(0))
+
+        self._pool_shape_features_cached = torch.stack(features, dim=0)  # (N, 332)
+        mem_mb = self._pool_shape_features_cached.nelement() * 4 / (1024**2)
+        print(f"[al4pde] 形状特征缓存完成: {self._pool_shape_features_cached.shape}, "
+              f"内存={mem_mb:.1f} MB")
 
     def _get_pool_X_batch(self, indices):
         """获取候选池样本的 X = [IC, t_grid] (内存优化版)
@@ -1540,30 +2032,6 @@ class ActiveLearningCallback(pl.Callback):
         IC = Y_ic_batch.unsqueeze(2).expand(-1, -1, T)  # (B, 39, T) — 视图
         t_grid = self._al4pde_t_grid.to(IC.device).expand(IC.shape[0], 39, T)
         return torch.stack([IC, t_grid], dim=2)  # (B, 39, 2, T)
-
-    def _load_full_Y_from_disk(self, sel_idx):
-        """从磁盘按需加载选中样本的完整 Y (归一化)
-
-        内存优化: 候选池不预存完整 Y, 只在选中样本时从 npz 文件按需加载。
-        选中样本数通常为 num_add (1000), 加载量 = 1000 × 39 × 500 × 4 bytes ≈ 78 MB, 可接受。
-
-        Args:
-            sel_idx: 选中样本在候选池中的索引 (numpy array)
-
-        Returns:
-            Y_sel_norm: (B, 39, T) 归一化后的完整 Y tensor
-        """
-        # 获取选中样本在原始 npz 数据集中的索引
-        orig_idx = self._al4pde_pool_idx[sel_idx]
-
-        # 从 npz 文件加载 (只加载选中的样本)
-        v5_data = np.load(self._al4pde_pool_path, allow_pickle=True)
-        Y_sel = torch.tensor(v5_data['data'][orig_idx], dtype=torch.float32)  # (B, 39, 500)
-
-        # 归一化 (与训练集完全一致)
-        Y_sel_norm = (Y_sel - self._al4pde_mean_y) / self._al4pde_std_y
-        Y_sel_norm = torch.nan_to_num(Y_sel_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-        return Y_sel_norm
 
     def _mutant_aware_sample(self, trainer, pl_module, dm, device, current_epoch):
         """
@@ -2281,19 +2749,28 @@ class ActiveLearningCallback(pl.Callback):
         with ProcessPoolExecutor(max_workers=32) as executor:
             futures = [(name, executor.submit(solve_single_mutant_bridge, name, p))
                        for name, p in new_params_list]
+            done = 0
+            n_total = len(futures)
             for name, f in futures:
-                res = f.result()
-                if res is not None: 
+                try:
+                    res = f.result(timeout=SIM_TIMEOUT + 30)
+                except FutureTimeoutError:
+                    print(f"  ⚠️ 物理验证样本 {name} 进程级超时,跳过")
+                    res = None
+                if res is not None:
                     valid_results.append(res)
                     valid_names.append(name)
+                done += 1
+                if done % max(1, n_total // 10) == 0 or done == n_total:
+                    print(f"  物理验证进度: {done}/{n_total} ({100*done//n_total}%)")
         
         if len(valid_results) > 0:
-            Y_train_norm = dm.train_dataset_lhs.tensors[2].cpu()
+            Y_real_norm = dm.test_dataset_real.tensors[2].cpu()
             std_y_cpu = dm.std_y.cpu()
             mean_y_cpu = dm.mean_y.cpu()
-            Y_train_raw = Y_train_norm * std_y_cpu + mean_y_cpu
+            Y_real_raw = Y_real_norm * std_y_cpu + mean_y_cpu
             
-            real_envelope = Y_train_raw.max(dim=-1)[0].max(dim=0)[0].numpy()
+            real_envelope = Y_real_raw.max(dim=-1)[0].max(dim=0)[0].numpy()
             dynamic_thresholds = np.maximum(real_envelope * 2.0, 2.0)
             
             pruned_results = []
@@ -2328,17 +2805,32 @@ class ActiveLearningCallback(pl.Callback):
         return valid_results, valid_names
 
     # ==================================================================
+    # al4pde 框架: 频率/数量机制 (对齐 al4pde 原始 ExponentialSchedule)
+    # ==================================================================
+    def _is_al4pde_strategy(self):
+        """判断是否为 al4pde 框架策略 (使用 ExponentialSchedule 数量机制 + 末轮不选)"""
+        return self.strategy in ('al4pde_random', 'al4pde_uncertainty',
+                                 'al4pde_diversity', 'maal', 'al4pde_boundary', 'al4pde_mass')
+
+    def _al4pde_scheduled_num_add(self):
+        """al4pde v2.3 外层重训式: 每次采集固定追加 _al4pde_per_round_add 个 (76000 / 4 = 19000)。
+
+        (v2.2 已作废的递增式 1000/3000/4000 不再使用。)
+        """
+        return getattr(self, '_al4pde_per_round_add', 1000)
+
+    # ==================================================================
     # al4pde 框架: 4 种 AL 策略 (从 v5 候选池查询)
     # ==================================================================
     def _al4pde_random_sample(self, trainer, pl_module, dm, device, current_epoch):
-        """al4pde Random: 从候选池随机选 num_add 个样本"""
+        """al4pde Random: 从候选池随机选 scheduled_num_add 个样本 (ExponentialSchedule)"""
         if self._pool_size == 0:
             print("[al4pde_random] 候选池已空, 跳过本轮 AL")
             return None
-        n_select = min(self.num_add, self._pool_size)
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
         sel_idx = np.random.choice(self._pool_size, n_select, replace=False)
         print(f"[al4pde_random] 随机选取 {n_select} 个样本 (池剩余: {self._pool_size})")
-        return self._build_broadcast_from_pool(sel_idx)
+        return self._build_broadcast_from_pool(sel_idx, dm)
 
     def _al4pde_uncertainty_sample(self, trainer, pl_module, dm, device, current_epoch):
         """al4pde Uncertainty: MC dropout top_k 选取 (复用 _compute_mc_dropout_uncertainty)"""
@@ -2350,33 +2842,42 @@ class ActiveLearningCallback(pl.Callback):
         # 复用已有 MC dropout 实现 (n_mc_samples=5 加速)
         unc_scores = self._compute_mc_dropout_uncertainty(pl_module, device, pool_indices, dm,
                                                           n_mc_samples=5)
-        n_select = min(self.num_add, self._pool_size)
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
         sel_idx = np.argsort(unc_scores)[-n_select:]
         print(f"[al4pde_uncertainty] top_k 选取 {n_select} 个样本 (unc range: "
               f"{unc_scores[sel_idx].min():.4f}~{unc_scores[sel_idx].max():.4f})")
-        return self._build_broadcast_from_pool(sel_idx)
+        return self._build_broadcast_from_pool(sel_idx, dm)
 
     def _al4pde_diversity_sample(self, trainer, pl_module, dm, device, current_epoch):
-        """al4pde Diversity: bmdal_reg MaxDistSelectionMethod (轨迹 spatial_mean 特征)"""
+        """al4pde Diversity: bmdal_reg MaxDistSelectionMethod (轨迹形状感知特征)
+
+        改进: 原版用 spatial_mean(39维) 丢失时间形状信息,
+        现用形状感知特征(332维): MASS全曲线 + 一阶差分 + 全变量统计 + 参数,
+        各组 z-score 标准化后 MaxDist 选择, 兼顾曲线形状和参数多样性。
+        """
         if self._pool_size == 0:
             print("[al4pde_diversity] 候选池已空, 跳过本轮 AL")
             return None
-        print(f"[al4pde_diversity] 计算轨迹 spatial_mean 特征...")
-        pool_features = self._compute_pool_features_spatial_mean(pl_module, dm, device)
-        train_features = self._compute_train_features_spatial_mean(pl_module, dm, device)
-        n_select = min(self.num_add, self._pool_size)
+        print(f"[al4pde_diversity] 计算轨迹形状感知特征 (MASS pattern + 全变量统计 + 参数)...")
+        pool_features = self._compute_pool_features_shape_aware(pl_module, dm, device)
+        train_features = self._compute_train_features_shape_aware(pl_module, dm, device)
+        # 用 train 统计量分组 z-score 标准化 (防止参数等高方差组主导距离)
+        pool_features, train_features = self._standardize_shape_features(pool_features, train_features)
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
         print(f"[al4pde_diversity] bmdal_reg MaxDistSelection 选取 {n_select} 个样本 "
-              f"(pool_feat: {pool_features.shape}, train_feat: {train_features.shape})...")
+              f"(shape_feat: {pool_features.shape}, train_feat: {train_features.shape})...")
         sel_idx = self._bmdal_max_dist_select(pool_features, train_features, n_select)
-        return self._build_broadcast_from_pool(sel_idx)
+        return self._build_broadcast_from_pool(sel_idx, dm)
 
     def _maal_sample(self, trainer, pl_module, dm, device, current_epoch):
         """
         MAAL (Mutant-Aware Active Learning): diversity + target priority 加权。
 
         acquisition_score = (1 - target_weight) * diversity + target_weight * target_priority
-        - diversity: 候选样本到训练集的最小欧氏距离 (轨迹 spatial_mean 特征)
-        - target_priority: 候选样本所属家族的 Real Mutant MAE (实时模型 forward 计算)
+        - diversity: 候选样本到训练集的最小欧氏距离 (轨迹形状感知特征: MASS pattern + 全变量统计 + 参数)
+        - target_priority: 完全基于训练集计算 (零数据泄露)
+            = 0.5*同家族MC dropout不确定性 + 0.3*候选到训练集同家族参数距离 + 0.2*家族覆盖度
+          不再访问 dm.test_dataset_real, 严格遵守数据隔离原则。
 
         权重通过 --al_target_weight 控制 (默认 0.4), diversity 权重 = 1 - target_weight。
         """
@@ -2384,20 +2885,23 @@ class ActiveLearningCallback(pl.Callback):
             print("[MAAL] 候选池已空, 跳过本轮 AL")
             return None
 
-        # Step 1: 对候选池和训练集做 forward, 得到轨迹 spatial_mean 特征
-        print(f"[MAAL] Step 1: 计算轨迹 spatial_mean 特征 (池: {self._pool_size})...")
-        pool_features = self._compute_pool_features_spatial_mean(pl_module, dm, device)
-        train_features = self._compute_train_features_spatial_mean(pl_module, dm, device)
+        # Step 1: 对候选池和训练集做 forward, 得到轨迹形状感知特征
+        print(f"[MAAL] Step 1: 计算轨迹形状感知特征 (池: {self._pool_size})...")
+        pool_features = self._compute_pool_features_shape_aware(pl_module, dm, device)
+        train_features = self._compute_train_features_shape_aware(pl_module, dm, device)
+        # 用 train 统计量分组 z-score 标准化
+        pool_features, train_features = self._standardize_shape_features(pool_features, train_features)
 
         # Step 2: 计算 diversity score (候选到训练集的最小距离)
         print("[MAAL] Step 2: 计算 diversity score (min distance to train)...")
         diversity_scores = self._compute_diversity_scores(pool_features, train_features)
         diversity_scores = self._normalize_array(diversity_scores)
 
-        # Step 3: 计算 target_priority (实时模型 forward 126 Real Mutants)
-        print("[MAAL] Step 3: 计算 target_priority (改进版: MAE百分位 + 参数距离 + 覆盖度)...")
-        mutant_maes = self._evaluate_real_mutants(pl_module, dm, device)
-        target_priorities = self._map_family_priority(mutant_maes, dm)
+        # Step 3: 计算 target_priority (完全基于训练集: 同家族MC不确定性 + 参数距离 + 覆盖度)
+        # 数据隔离: 不访问 dm.test_dataset_real, 零数据泄露
+        print("[MAAL] Step 3: 计算 target_priority (训练集版: 同家族MC不确定性 + 参数距离 + 覆盖度)...")
+        family_uncertainty = self._compute_train_family_uncertainty(pl_module, dm, device)
+        target_priorities = self._map_family_priority_train_based(family_uncertainty, dm)
         target_priorities = self._normalize_array(target_priorities)
 
         # Step 4: 加权 acquisition
@@ -2408,10 +2912,259 @@ class ActiveLearningCallback(pl.Callback):
               f"score range: {acquisition.min():.4f}~{acquisition.max():.4f}")
 
         # Step 5: top_k 选取
-        n_select = min(self.num_add, self._pool_size)
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
         sel_idx = np.argsort(acquisition)[-n_select:]
         print(f"[MAAL] Step 5: top_k 选取 {n_select} 个样本")
-        return self._build_broadcast_from_pool(sel_idx)
+        return self._build_broadcast_from_pool(sel_idx, dm)
+
+    def _al4pde_boundary_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """
+        al4pde Boundary: 借鉴 lhs_v1_origin_v5_boundary.py 的 0 值邻域采样思想。
+
+        老师观点: v5_boundary 的 target 采样只做 boundary 采样 (0 邻域覆盖) 是合理的,
+        AL 算法可以借鉴这种做法。本策略将 boundary 思想从数据生成阶段迁移到 AL 选择阶段:
+        优先选择突变参数接近 0 边界 (敲除边界) 的候选样本。
+
+        acquisition = (1 - boundary_weight) * diversity + boundary_weight * boundary_proximity
+
+        - diversity: 候选样本到训练集的最小欧氏距离 (轨迹形状感知特征: MASS pattern + 全变量统计 + 参数)
+        - boundary_proximity: 候选样本突变参数接近 0 边界的程度 [0, 1]
+            对每个突变参数 p (来自父突变体的 mutant_rules):
+            - val: 候选参数值 (未归一化)
+            - center_val: 父突变体的突变值 (mutant_rules[parent][p], KO 时为 0)
+            - ref_val: 默认参数值 (_defaults[p])
+            - u_bound = ref_val * (1+pert)  if zero_ko else center_val * (1+pert)
+              (与 lhs_v1_origin_v5_boundary.py 的 boundary 采样上界完全一致)
+            - proximity_p = clip(1 - val / u_bound, 0, 1)
+              val=0 → proximity=1 (纯 boundary, 完全敲除)
+              val=u_bound → proximity=0 (过表达端)
+            boundary_proximity = mean(proximity_p) 跨所有突变参数
+            越高 → 越接近 0 边界 → 越优先选择
+
+        权重通过 --al_target_weight 控制 (默认 0.4), boundary_weight = target_weight。
+        数据隔离: 仅用 _pool_P_real 和 _pool_mutant_names (候选池自带), 不访问测试集。
+        """
+        if self._pool_size == 0:
+            print("[al4pde_boundary] 候选池已空, 跳过本轮 AL")
+            return None
+
+        # Step 1: 计算轨迹形状感知特征 (与 diversity/maal 一致)
+        print(f"[al4pde_boundary] Step 1: 计算轨迹形状感知特征 (池: {self._pool_size})...")
+        pool_features = self._compute_pool_features_shape_aware(pl_module, dm, device)
+        train_features = self._compute_train_features_shape_aware(pl_module, dm, device)
+        pool_features, train_features = self._standardize_shape_features(pool_features, train_features)
+
+        # Step 2: 计算 diversity score (候选到训练集的最小距离)
+        print("[al4pde_boundary] Step 2: 计算 diversity score (min distance to train)...")
+        diversity_scores = self._compute_diversity_scores(pool_features, train_features)
+        diversity_scores = self._normalize_array(diversity_scores)
+
+        # Step 3: 计算 boundary proximity (0 值邻域接近度, 借鉴 v5_boundary)
+        print("[al4pde_boundary] Step 3: 计算 boundary proximity (0 值邻域接近度)...")
+        boundary_scores = self._compute_boundary_proximity_scores()
+        boundary_scores = self._normalize_array(boundary_scores)
+
+        # Step 4: 加权 acquisition
+        div_w = 1.0 - self.target_weight
+        bnd_w = self.target_weight
+        acquisition = div_w * diversity_scores + bnd_w * boundary_scores
+        print(f"[al4pde_boundary] Step 4: 加权 acquisition (diversity={div_w:.2f}, boundary={bnd_w:.2f}) | "
+              f"score range: {acquisition.min():.4f}~{acquisition.max():.4f}")
+
+        # Step 5: top_k 选取
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
+        sel_idx = np.argsort(acquisition)[-n_select:]
+        print(f"[al4pde_boundary] Step 5: top_k 选取 {n_select} 个样本")
+        return self._build_broadcast_from_pool(sel_idx, dm)
+
+    def _compute_boundary_proximity_scores(self, perturbation=0.1):
+        """计算候选池每个样本的 boundary proximity (借鉴 lhs_v1_origin_v5_boundary.py 0 值邻域采样)
+
+        对每个候选样本, 计算其突变参数接近 0 边界 (敲除边界) 的程度:
+        1. 从 _pool_mutant_names 提取父突变体名 (split '_LHS_')
+        2. 从 mutant_rules 获取父突变体的突变参数 (mutated_params)
+        3. 对每个突变参数, 按边界采样的上界公式计算接近度:
+           - val = pool_P_real[i, param_idx]  (候选值, 未归一化)
+           - center_val = mutant_rules[parent][param]  (父突变值, KO=0)
+           - ref_val = _defaults[param]  (默认值)
+           - zero_ko = (center_val == 0.0 and ref_val > 0.0)
+           - u_bound = ref_val * (1+pert)  if zero_ko else center_val * (1+pert)
+             (与 lhs_v1_origin_v5_boundary.py L1425-1432 完全一致)
+           - proximity_p = clip(1 - val / u_bound, 0, 1)
+        4. boundary_score = mean(proximity_p) 跨所有突变参数
+
+        数据隔离: 仅访问候选池自带信息 (_pool_P_real, _pool_mutant_names) 和
+                  全局静态查表数据 (mutant_rules, _defaults), 不访问测试集。
+
+        Args:
+            perturbation: 统一扰动幅度 (默认 0.1, v5_boundary 多数家族的保守估计;
+                          boundary 采样的上界 = val * (1+pert), pert 越大上界越宽容)
+
+        Returns:
+            scores: (N,) numpy array, 每个候选样本的 boundary proximity [0, 1]
+        """
+        scores = np.zeros(self._pool_size)
+        pool_P_real = self._pool_P_real.numpy() if hasattr(self._pool_P_real, 'numpy') else np.array(self._pool_P_real)
+
+        # 构建 param_name → index 映射 (PARAM_KEYS 顺序, 与 _pool_P_real 对齐)
+        param_to_idx = {k: i for i, k in enumerate(PARAM_KEYS)}
+
+        n_matched = 0      # 成功匹配到 mutant_rules 的候选数
+        n_boundary_high = 0  # boundary_score > 0.5 的候选数 (接近 0 边界)
+
+        for i in range(self._pool_size):
+            name = str(self._pool_mutant_names[i])
+            # 候选池名格式: "73_cdc20_ts_LHS_T001" → 父突变体 "73_cdc20_ts"
+            parent_name = name.split('_LHS_')[0]
+
+            if parent_name not in mutant_rules:
+                scores[i] = 0.5  # 默认中性值 (无突变规则, 如 WT 或未匹配)
+                continue
+
+            rules = mutant_rules[parent_name]
+            mutated_params = list(rules.keys())
+
+            proximities = []
+            for p_name in mutated_params:
+                if p_name not in param_to_idx:
+                    continue  # 跳过非参数键 (如 is_mutant_104, 在 PARAM_KEYS 中被排除)
+
+                p_idx = param_to_idx[p_name]
+                val = float(pool_P_real[i, p_idx])
+                center_val = float(rules[p_name])
+                ref_val = float(_defaults.get(p_name, 0.0))
+
+                # 严格对齐 lhs_v1_origin_v5_boundary.py L1422-1432 的 boundary 采样上界
+                zero_ko = (center_val == 0.0 and ref_val > 0.0)
+                if zero_ko:
+                    # KO 突变: 用默认值作为上界参考 (覆盖 0 到过表达)
+                    u_bound = ref_val * (1.0 + perturbation)
+                else:
+                    # 非 KO 突变: 覆盖从完全敲除 (0) 到过表达 (1+pert)
+                    u_bound = center_val * (1.0 + perturbation)
+
+                if u_bound <= 1e-12:
+                    # 极端情况: 父突变值和默认值都为 0, 用 val 本身衡量
+                    proximity = 1.0 if val < 1e-12 else 0.0
+                else:
+                    proximity = float(np.clip(1.0 - val / u_bound, 0.0, 1.0))
+
+                proximities.append(proximity)
+
+            if proximities:
+                scores[i] = float(np.mean(proximities))
+                n_matched += 1
+                if scores[i] > 0.5:
+                    n_boundary_high += 1
+            else:
+                scores[i] = 0.5  # 默认中性值
+
+        print(f"[al4pde_boundary] boundary proximity: matched {n_matched}/{self._pool_size} 候选 | "
+              f"high(>0.5): {n_boundary_high} | "
+              f"score range: {scores.min():.4f}~{scores.max():.4f}, mean={scores.mean():.4f}")
+        return scores
+
+    def _al4pde_mass_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """
+        al4pde MASS: 借鉴 data/mass_dataset_generator.py 的"通路→机制→严重程度"分层采样思想,
+        将其从"数据生成阶段"迁移到"AL 选择阶段": 优先选择生物学上高频、机制典型的候选样本。
+
+        acquisition = (1 - mass_weight) * diversity + mass_weight * mass_priority
+        - diversity: 候选到训练集的最小欧氏距离 (轨迹形状感知特征: MASS pattern + 全变量统计 + 参数),
+          防止选样冗余
+        - mass_priority: 生物学分层优先级 [0,1], 每个候选按其扰动参数的"通路频率 × 机制频率"打分
+            * 通路频率: 参数所属绑定组对应通路的 high/medium/low 频率 (6/3/1), 取参数最高频通路
+            * 机制频率: 由候选参数相对 WT 默认值的扰动模式推断机制类 (loss/gain/partial),
+              权重取自 Chen 2004 操作实例统计 (KO/GAL-OE/ts)
+          越高 → 越像生物学高频、机制典型的突变 → 越优先选择
+
+        权重通过 --al_mass_weight 控制 (默认 0.5), diversity 权重 = 1 - mass_weight。
+        数据隔离: 仅用 _pool_P_real / _pool_mutant_names (候选池自带) + 静态生物学先验表, 不访问测试集。
+        """
+        if self._pool_size == 0:
+            print("[al4pde_mass] 候选池已空, 跳过本轮 AL")
+            return None
+
+        # Step 1: 计算轨迹形状感知特征 (与 diversity/maal/boundary 一致)
+        print(f"[al4pde_mass] Step 1: 计算轨迹形状感知特征 (池: {self._pool_size})...")
+        pool_features = self._compute_pool_features_shape_aware(pl_module, dm, device)
+        train_features = self._compute_train_features_shape_aware(pl_module, dm, device)
+        pool_features, train_features = self._standardize_shape_features(pool_features, train_features)
+
+        # Step 2: 计算 diversity score (候选到训练集的最小距离)
+        print("[al4pde_mass] Step 2: 计算 diversity score (min distance to train)...")
+        diversity_scores = self._compute_diversity_scores(pool_features, train_features)
+        diversity_scores = self._normalize_array(diversity_scores)
+
+        # Step 3: 计算 MASS 生物学分层优先级 (通路频率 × 机制频率)
+        print("[al4pde_mass] Step 3: 计算 MASS 生物学分层优先级 (通路频率 × 机制频率)...")
+        mass_scores = self._compute_mass_priority_scores()
+        mass_scores = self._normalize_array(mass_scores)
+
+        # Step 4: 加权 acquisition
+        div_w = 1.0 - self.mass_weight
+        mass_w = self.mass_weight
+        acquisition = div_w * diversity_scores + mass_w * mass_scores
+        print(f"[al4pde_mass] Step 4: 加权 acquisition (diversity={div_w:.2f}, mass={mass_w:.2f}) | "
+              f"score range: {acquisition.min():.4f}~{acquisition.max():.4f}")
+
+        # Step 5: top_k 选取
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
+        sel_idx = np.argsort(acquisition)[-n_select:]
+        print(f"[al4pde_mass] Step 5: top_k 选取 {n_select} 个样本")
+        return self._build_broadcast_from_pool(sel_idx, dm)
+
+    def _compute_mass_priority_scores(self):
+        """计算候选池每个样本的 MASS 生物学分层优先级 (借鉴 mass_dataset_generator.py)。
+
+        向量化实现:
+          1. 收集 MASS 相关参数 (在 _MASS_PARAM_PATHWAY_FREQ 中的参数) 的列索引、通路频率、WT 默认值
+          2. 对每个候选样本, 找出相对 WT 默认值被扰动的参数 (|val-default| > rel_tol*max(|default|,eps))
+          3. 对每个扰动参数按扰动模式推断粗机制类, 取归一化机制频率:
+             - loss  (val≈0, default>0)      → KO
+             - gain  (val>default*(1+tol))   → GAL-OE
+             - partial (其余扰动, 部分残余)   → ts
+          4. contrib = (pathway_freq/6) * mech_prob; score = mean(contrib) 跨所有扰动参数 (无扰动 → 0)
+
+        数据隔离: 仅访问 _pool_P_real + 静态先验表, 不访问测试集。
+        """
+        pool_P_real = self._pool_P_real.numpy() if hasattr(self._pool_P_real, 'numpy') else np.array(self._pool_P_real)
+        param_to_idx = {k: i for i, k in enumerate(PARAM_KEYS)}
+
+        # 机制权重归一化 (转为概率)
+        mech_total = sum(_MASS_MECH_WEIGHTS.values())
+        ko_p = _MASS_MECH_WEIGHTS['KO'] / mech_total
+        oe_p = _MASS_MECH_WEIGHTS['GAL-OE'] / mech_total
+        ts_p = _MASS_MECH_WEIGHTS['ts'] / mech_total
+        rel_tol = 0.05  # 相对容差: |val-default| > 5%*max(|default|,eps) 视为扰动
+
+        # 收集 MASS 相关参数的列索引 / 通路频率 / 默认值
+        cols, pw_freqs, defs = [], [], []
+        for p_name, pw in _MASS_PARAM_PATHWAY_FREQ.items():
+            if p_name in param_to_idx:
+                cols.append(param_to_idx[p_name])
+                pw_freqs.append(pw / 6.0)      # 通路频率归一化到 [0,1]
+                defs.append(float(_defaults.get(p_name, 0.0)))
+        if not cols:
+            return np.full(self._pool_size, 0.5)
+        cols = np.asarray(cols)
+        pw_freqs = np.asarray(pw_freqs)
+        defs = np.asarray(defs)
+
+        P = pool_P_real[:, cols]                              # (N, K)
+        perturbed = np.abs(P - defs) > (rel_tol * np.maximum(np.abs(defs), 1e-9))
+        loss = (P <= 1e-9) & (defs > 1e-9)
+        gain = P > defs * (1.0 + rel_tol)
+        partial = perturbed & (~loss) & (~gain)
+        mech = loss * ko_p + gain * oe_p + partial * ts_p     # (N, K)
+        contrib = (pw_freqs[None, :] * mech) * perturbed      # (N, K); 未扰动位为 0
+        n_pert = perturbed.sum(axis=1)
+        scores = contrib.sum(axis=1) / np.maximum(n_pert, 1)  # mean over perturbed params
+
+        n_scored = int((n_pert > 0).sum())
+        print(f"[al4pde_mass] mass priority: scored {n_scored}/{self._pool_size} 候选 | "
+              f"range: {scores.min():.4f}~{scores.max():.4f}, mean={scores.mean():.4f}")
+        return scores
 
     # ====== al4pde 框架辅助方法 ======
     def _compute_pool_features_spatial_mean(self, pl_module, dm, device, batch_size=200):
@@ -2449,6 +3202,139 @@ class ActiveLearningCallback(pl.Callback):
                 feat = preds.mean(dim=2).cpu()
                 features.append(feat)
         pl_module.train()
+        return torch.cat(features, dim=0)
+
+    # ====== 轨迹形状感知特征 (改进版: 替代 spatial_mean) ======
+    # 用户洞察: 参数微小差异可能导致曲线形状剧变 (ODE 非线性 + Goldbeter-Koshland 项),
+    # diversity 不能只看参数距离或轨迹均值, 需结合 mass pattern (增长曲线形状) 综合考量。
+    # 特征组成 (各组独立 z-score 标准化, 用 train 统计量, 防止量纲主导):
+    #   1. MASS 轨迹降采样 (32 点): 捕捉增长模式 (指数/线性/GAL诱导阶跃等 Pattern)
+    #   2. MASS 一阶差分统计 (3 维): mean/std/max, 区分增长模式 (线性=std小, 指数=std大)
+    #   3. 全变量轨迹统计 (39×4=156 维): mean/std/max/min, 捕捉整体形状
+    #   4. 参数空间 (141 维): 归一化参数, 辅助参数层多样性
+    # 总维度: 32 + 3 + 156 + 141 = 332
+    _SHAPE_FEAT_GROUP_SIZES = [32, 3, 39, 39, 39, 39, 141]
+
+    # ====== v2.2 方案 A: 分组特征权重 (al4pde_diversity/maal/boundary 共用) ======
+    # 背景: v2.0/v2.1 实验显示 diversity 在 lhs_test 上 Rel L2=0.099 (最佳) 但 real_mutants
+    #   上 0.361 (次差), 典型过拟合到 LHS 形状分布。形状特征 (尤其 MASS 32 维) 主导了
+    #   MaxDist 选择, 导致选出的样本形状独特但参数空间覆盖不足。
+    # 改进: z-score 标准化后对各组施加权重, 增强参数空间多样性敏感度:
+    #   - 参数向量 (141 维) ×2.5: 让 MaxDist 更关注参数空间覆盖
+    #   - MASS 轨迹降采样 (32 维) ×0.5: 降低形状特征对选择的过度主导
+    #   - 其他组 (差分统计/全变量统计) 权重保持 1.0
+    # 注意: 权重在 z-score 标准化之后施加, 不影响 mean/std 统计量的计算。
+    _SHAPE_FEAT_GROUP_WEIGHTS = [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5]
+
+    def _extract_shape_features(self, preds, params):
+        """从模型预测轨迹和参数中提取形状感知特征 (raw, 未标准化)
+
+        Args:
+            preds: (B, 39, T) 模型预测轨迹
+            params: (B, 141) 归一化参数
+        Returns:
+            features: (B, 332) raw 特征 (拼接, 未标准化)
+        """
+        B, V, T = preds.shape
+        groups = []
+
+        # 1. MASS 轨迹降采样 (变量 0, 用户关键洞察: mass pattern 决定曲线类别)
+        mass_traj = preds[:, 0, :]  # (B, T)
+        mass_ds = F.interpolate(
+            mass_traj.unsqueeze(1), size=32, mode='linear', align_corners=False
+        ).squeeze(1)  # (B, 32)
+        groups.append(mass_ds)
+
+        # 2. MASS 一阶差分统计 (区分指数/线性/阶跃增长)
+        mass_diff = mass_traj[:, 1:] - mass_traj[:, :-1]  # (B, T-1)
+        groups.append(torch.stack([
+            mass_diff.mean(dim=1),     # 平均增长率
+            mass_diff.std(dim=1),      # 增长率波动 (线性≈0, 指数>0)
+            mass_diff.max(dim=1)[0],   # 最大增长 (捕捉 GAL 诱导阶跃)
+        ], dim=1))  # (B, 3)
+
+        # 3. 全变量轨迹统计 (捕捉整体形状, 不仅是均值)
+        groups.append(preds.mean(dim=2))     # (B, 39)
+        groups.append(preds.std(dim=2))      # (B, 39)
+        groups.append(preds.max(dim=2)[0])   # (B, 39)
+        groups.append(preds.min(dim=2)[0])   # (B, 39)
+
+        # 4. 参数空间特征 (辅助: 参数层多样性, 已归一化)
+        groups.append(params)  # (B, 141)
+
+        return torch.cat(groups, dim=1)  # (B, 332)
+
+    def _standardize_shape_features(self, pool_feat, train_feat):
+        """用 train 统计量对 pool+train 特征做分组 z-score 标准化 + 分组权重
+
+        各组独立标准化, 防止高方差组 (如参数) 主导距离。
+        用 train 的 mean/std (而非 pool) 避免候选池分布偏移影响标准化基准。
+
+        v2.2 方案 A: 标准化后施加 _SHAPE_FEAT_GROUP_WEIGHTS 权重,
+        增强参数空间 (141 维) 敏感度 ×2.5, 降低 MASS 曲线 (32 维) 权重 ×0.5,
+        缓解 diversity 过拟合到 LHS 形状分布的问题。
+
+        Args:
+            pool_feat: (N, 332) raw pool 特征
+            train_feat: (M, 332) raw train 特征
+        Returns:
+            pool_std, train_std: 标准化+加权后的特征
+        """
+        assert pool_feat.shape[1] == sum(self._SHAPE_FEAT_GROUP_SIZES)
+        assert len(self._SHAPE_FEAT_GROUP_SIZES) == len(self._SHAPE_FEAT_GROUP_WEIGHTS)
+        idx = 0
+        pool_parts, train_parts = [], []
+        for size, weight in zip(self._SHAPE_FEAT_GROUP_SIZES, self._SHAPE_FEAT_GROUP_WEIGHTS):
+            train_g = train_feat[:, idx:idx + size]
+            mean = train_g.mean(dim=0, keepdim=True)
+            std = train_g.std(dim=0, keepdim=True)
+            # z-score 标准化后施加分组权重 (v2.2 方案 A)
+            pool_std_g = (pool_feat[:, idx:idx + size] - mean) / (std + 1e-8)
+            train_std_g = (train_g - mean) / (std + 1e-8)
+            pool_parts.append(pool_std_g * weight)
+            train_parts.append(train_std_g * weight)
+            idx += size
+        return torch.cat(pool_parts, dim=1), torch.cat(train_parts, dim=1)
+
+    def _compute_pool_features_shape_aware(self, pl_module, dm, device, batch_size=200):
+        """返回候选池的轨迹形状感知特征 (raw, 未标准化)
+
+        改进: 优先用 ODE 预计算缓存 (真实轨迹), 无缓存时回退到模型预测。
+        """
+        if self._pool_shape_features_cached is not None:
+            # ODE 预计算缓存 (初始化时已仿真, 真实轨迹)
+            return self._pool_shape_features_cached
+
+        # 回退: 模型预测 (适用于未预计算的策略, 如调试)
+        print("[al4pde] 警告: 无 ODE 预计算缓存, 回退到模型预测 (不推荐)")
+        pl_module.eval()
+        features = []
+        with torch.no_grad():
+            for i in range(0, self._pool_size, batch_size):
+                end_idx = min(i + batch_size, self._pool_size)
+                X_batch = self._get_pool_X_batch(slice(i, end_idx)).to(device)
+                P_batch = self._pool_P[i:end_idx].to(device)
+                preds = pl_module.forward_ic_time(X_batch, P_batch)
+                feat = self._extract_shape_features(preds, P_batch).cpu()
+                features.append(feat)
+        pl_module.train()
+        return torch.cat(features, dim=0)
+
+    def _compute_train_features_shape_aware(self, pl_module, dm, device, batch_size=200):
+        """从训练集真实 Y 轨迹提取形状特征 (raw, 未标准化)
+
+        改进: 训练集已有真实轨迹 (数据集中的 Y), 直接用, 不需要模型预测。
+        """
+        _, train_P, train_Y = dm.train_dataset_lhs.tensors
+        n_train = len(train_P)
+        features = []
+        for i in range(0, n_train, batch_size):
+            end_idx = min(i + batch_size, n_train)
+            Y_batch = train_Y[i:end_idx]      # (B, 39, T) 真实轨迹 (归一化空间)
+            P_batch = train_P[i:end_idx]      # (B, 141) 归一化参数
+            # Y 是归一化的, 但形状特征在分组 z-score 后与归一化无关
+            feat = self._extract_shape_features(Y_batch, P_batch).cpu()
+            features.append(feat)
         return torch.cat(features, dim=0)
 
     def _bmdal_max_dist_select(self, pool_features, train_features, n_select):
@@ -2575,6 +3461,158 @@ class ActiveLearningCallback(pl.Callback):
         print(f"[MAAL] Top-5 家族覆盖度: {top_families}")
         return priorities
 
+    def _compute_train_family_uncertainty(self, pl_module, dm, device, n_mc_samples=5, max_train_subset=2000):
+        """对训练集做 MC dropout, 按家族分组计算平均不确定性 (完全不访问测试集)
+
+        数据隔离原则: 仅使用 dm.train_dataset_lhs, 不访问 dm.test_dataset_real。
+
+        Args:
+            pl_module: Lightning 模型
+            dm: 数据模块
+            device: 计算设备
+            n_mc_samples: MC 采样次数 (默认 5)
+            max_train_subset: 训练集子集上限 (加速, 默认 2000)
+
+        Returns:
+            family_uncertainty: {family_name: mean_uncertainty}
+        """
+        train_X, train_P, _ = dm.train_dataset_lhs.tensors
+        n_train = len(train_P)
+
+        # 获取训练集 mutant_names (通过 dm._train_idx_lhs 映射)
+        if hasattr(dm, '_mutant_names') and hasattr(dm, '_train_idx_lhs'):
+            train_names = [str(dm._mutant_names[i]) for i in dm._train_idx_lhs]
+        else:
+            train_names = [f"Train_{i}" for i in range(n_train)]
+
+        # 采样训练集子集 (加速 MC dropout)
+        if n_train > max_train_subset:
+            subset_idx = np.random.choice(n_train, max_train_subset, replace=False)
+            train_X_sub = train_X[subset_idx]
+            train_P_sub = train_P[subset_idx]
+            train_names_sub = [train_names[i] for i in subset_idx]
+        else:
+            train_X_sub = train_X
+            train_P_sub = train_P
+            train_names_sub = train_names
+
+        # MC dropout: 对参数加噪声 forward K 次, 计算预测方差
+        pl_module.eval()
+        batch_size = 500
+        all_unc = []
+        with torch.no_grad():
+            for i in range(0, len(train_P_sub), batch_size):
+                end_idx = min(i + batch_size, len(train_P_sub))
+                X_batch = train_X_sub[i:end_idx].to(device)
+                P_batch = train_P_sub[i:end_idx].to(device)
+
+                preds_list = []
+                for _ in range(n_mc_samples):
+                    noise = torch.randn_like(P_batch) * 0.02
+                    P_perturbed = P_batch + noise
+                    preds = pl_module.forward_ic_time(X_batch, P_perturbed)
+                    preds_list.append(preds)
+
+                preds_stack = torch.stack(preds_list, dim=0)
+                variance = torch.var(preds_stack, dim=0)
+                uncertainty = variance.mean(dim=(1, 2))
+                all_unc.append(uncertainty.cpu().numpy())
+        pl_module.train()
+        uncertainties = np.concatenate(all_unc)
+
+        # 按家族分组计算平均不确定性
+        family_unc_list = {}
+        for i, name in enumerate(train_names_sub):
+            family = str(name).split('_LHS_')[0]
+            if family not in family_unc_list:
+                family_unc_list[family] = []
+            family_unc_list[family].append(uncertainties[i])
+
+        family_uncertainty = {f: float(np.mean(v)) for f, v in family_unc_list.items()}
+
+        print(f"[MAAL] 训练集家族不确定性: {len(family_uncertainty)} 个家族 | "
+              f"unc range: {min(family_uncertainty.values()):.4f}~{max(family_uncertainty.values()):.4f} | "
+              f"子集大小: {len(train_P_sub)}/{n_train}")
+        return family_uncertainty
+
+    def _map_family_priority_train_based(self, family_uncertainty, dm):
+        """将训练集家族不确定性映射到候选池样本的 target_priority (完全基于训练集, 零泄露)
+
+        target_priority = 0.5*同家族不确定性百分位 + 0.3*候选到训练集同家族参数距离 + 0.2*家族覆盖度
+
+        数据隔离: 不访问 dm.test_dataset_real, 仅用 dm.train_dataset_lhs。
+        - 维度1 (0.5): 训练集中同家族样本的 MC dropout 不确定性 (模型对该家族不自信 → 优先)
+        - 维度2 (0.3): 候选样本到训练集同家族参数中心的距离 (越远 → 训练集覆盖不足 → 优先)
+        - 维度3 (0.2): 候选池中同家族样本数 (越少 → 覆盖不足 → 优先)
+
+        Args:
+            family_uncertainty: {family_name: mean_uncertainty} 来自训练集
+            dm: 数据模块 (仅用 train_dataset_lhs)
+
+        Returns:
+            priorities: (N,) numpy array, 每个候选样本的 target_priority
+        """
+        priorities = np.zeros(self._pool_size)
+
+        # 1. 不确定性百分位排名 [0, 1]
+        unc_values = np.array(list(family_uncertainty.values()))
+        unc_percentile = {}
+        for name, unc in family_uncertainty.items():
+            unc_percentile[name] = float((unc_values <= unc).mean())
+
+        # 2. 家族覆盖度统计 (候选池中每个家族的样本数)
+        family_counts = {}
+        for name in self._pool_mutant_names:
+            family = str(name).split('_LHS_')[0]
+            family_counts[family] = family_counts.get(family, 0) + 1
+        max_family_count = max(family_counts.values()) if family_counts else 1
+
+        # 3. 训练集参数按家族分组 (用于参数距离计算) — 完全来自训练集
+        train_P_np = dm.train_dataset_lhs.tensors[1].cpu().numpy()
+        if hasattr(dm, '_mutant_names') and hasattr(dm, '_train_idx_lhs'):
+            train_names = [str(dm._mutant_names[i]) for i in dm._train_idx_lhs]
+        else:
+            train_names = [f"Train_{i}" for i in range(len(train_P_np))]
+
+        train_family_params = {}
+        for i, name in enumerate(train_names):
+            family = str(name).split('_LHS_')[0]
+            if family not in train_family_params:
+                train_family_params[family] = []
+            train_family_params[family].append(train_P_np[i])
+        # 每个家族取平均参数向量 (代表该家族的参数中心)
+        train_family_center = {f: np.mean(params, axis=0) for f, params in train_family_params.items()}
+
+        # 候选池参数 (归一化空间)
+        pool_P_np = self._pool_P.cpu().numpy() if hasattr(self._pool_P, 'cpu') else np.array(self._pool_P)
+
+        for i, name in enumerate(self._pool_mutant_names):
+            family = str(name).split('_LHS_')[0]
+
+            # 维度 1: 同家族训练集不确定性百分位 [0, 1] (不确定性越高 → priority 越高)
+            base_priority = unc_percentile.get(family, 0.5)  # 默认中性值
+
+            # 维度 2: 候选到训练集同家族参数中心的距离 [0, 1] (距离越远 → 覆盖不足 → priority 越高)
+            distance_factor = 0.5  # 默认值 (训练集中无该家族时)
+            if family in train_family_center:
+                cand_p = pool_P_np[i]
+                train_center = train_family_center[family]
+                dist = np.linalg.norm(cand_p - train_center)
+                # dist/(1+dist): dist 越大越接近 1, 鼓励探索训练集未覆盖的参数区域
+                distance_factor = dist / (1.0 + dist)
+
+            # 维度 3: 家族覆盖度 [0, 1] (候选池中样本越少 → priority 越高)
+            family_count = family_counts.get(family, 1)
+            coverage_factor = 1.0 - (family_count / max_family_count)
+
+            # 综合 priority: 0.5*不确定性 + 0.3*参数距离 + 0.2*覆盖度
+            priorities[i] = 0.5 * base_priority + 0.3 * distance_factor + 0.2 * coverage_factor
+
+        print(f"[MAAL] target_priority 训练集版: 0.5*同家族MC不确定性 + 0.3*参数距离 + 0.2*覆盖度")
+        print(f"[MAAL] priority range: {priorities.min():.4f}~{priorities.max():.4f}, "
+              f"mean={priorities.mean():.4f}")
+        return priorities
+
     def _normalize_array(self, arr):
         """归一化数组到 [0, 1]"""
         arr = np.asarray(arr, dtype=np.float64)
@@ -2584,27 +3622,80 @@ class ActiveLearningCallback(pl.Callback):
             return np.zeros_like(arr)
         return (arr - min_val) / (max_val - min_val)
 
-    def _build_broadcast_from_pool(self, sel_idx):
-        """从候选池选样本后构建 broadcast_data (统一接口)
+    def _build_broadcast_from_pool(self, sel_idx, dm):
+        """从候选池选样本后构建 broadcast_data (参数候选池版)
 
-        选中样本从候选池移除, 返回的 X/P/Y 用于 on_train_epoch_end 的训练集扩容。
-        注意: Y 用候选池的真实轨迹 (从 v5 加载), 而非模型预测。
-
-        内存优化: al4pde 路径下 self._pool_X 和 self._pool_Y 均为 None,
-        X 通过 _get_pool_X_batch 从 Y_IC 动态构造, Y 通过 _load_full_Y_from_disk 按需加载。
+        al4pde 原始项目机制: 选中参数后 ODE 仿真生成真实轨迹, 再加入训练集。
+        1. 从候选池提取选中样本的未归一化参数
+        2. 调用 solve_single_mutant_bridge ODE 仿真生成轨迹
+        3. 动态浓度剔除 (超训练集 max×2 视为 monster)
+        4. 归一化 Y/P, 从 Y_ic 构造 X
+        5. 从候选池移除已选样本
         """
         sel_idx = np.array(sel_idx, dtype=np.int64)
-        # 选中的样本 (X 从 Y_IC 动态构造, P 直接索引, Y 从磁盘按需加载)
-        sel_X = self._get_pool_X_batch(sel_idx).clone()
-        sel_P = self._pool_P[sel_idx].clone()
-        if self._pool_Y is not None:
-            sel_Y = self._pool_Y[sel_idx].clone()
-        else:
-            # 内存优化路径: 从磁盘按需加载完整 Y
-            print(f"[al4pde] 从磁盘按需加载 {len(sel_idx)} 个样本的完整 Y...")
-            sel_Y = self._load_full_Y_from_disk(sel_idx)
+        n_sel = len(sel_idx)
 
-        # 从候选池移除已选样本
+        # 从候选池提取选中样本的参数
+        sel_P_real = self._pool_P_real[sel_idx].numpy()   # (N, 141) 未归一化
+        sel_names = self._pool_mutant_names[sel_idx]
+
+        # ODE 仿真
+        print(f"[al4pde] ODE 仿真生成 {n_sel} 个选中样本的轨迹...")
+        sim_results = [None] * n_sel
+        with ProcessPoolExecutor(max_workers=32) as executor:
+            futures = {i: executor.submit(solve_single_mutant_bridge,
+                                          str(sel_names[i]), sel_P_real[i])
+                       for i in range(n_sel)}
+            done = 0
+            for i, f in futures.items():
+                try:
+                    sim_results[i] = f.result(timeout=SIM_TIMEOUT + 30)
+                except FutureTimeoutError:
+                    print(f"  ⚠️ 选中样本 {i} ({sel_names[i]}) 进程级超时,跳过")
+                    sim_results[i] = None
+                done += 1
+                if done % max(1, n_sel // 10) == 0 or done == n_sel:
+                    print(f"  ODE 仿真进度: {done}/{n_sel} ({100*done//n_sel}%)")
+
+        # 动态浓度剔除 (阈值参考 real mutants, 复用 _physics_validate_and_prune 的阈值逻辑)
+        Y_real_norm = dm.test_dataset_real.tensors[2].cpu()
+        std_y_cpu = dm.std_y.cpu()
+        mean_y_cpu = dm.mean_y.cpu()
+        Y_real_raw = Y_real_norm * std_y_cpu + mean_y_cpu
+        real_envelope = Y_real_raw.max(dim=-1)[0].max(dim=0)[0].numpy()
+        dynamic_thresholds = np.maximum(real_envelope * 2.0, 2.0)
+
+        valid_positions = []
+        valid_Y_real = []
+        valid_P_real = []
+        valid_names = []
+        valid_labels = []
+
+        for i in range(n_sel):
+            res = sim_results[i]
+            if res is None:
+                continue
+            _, y_uniform, p_vec, pattern_label = res
+
+            # 浓度剔除: 任一变量超过 real mutants max×2 视为 monster
+            lhs_max_vals = np.max(y_uniform, axis=1)
+            is_monster = any(lhs_max_vals[v] > dynamic_thresholds[v]
+                             for v in range(1, 39))
+            if is_monster:
+                continue
+
+            valid_positions.append(i)
+            valid_Y_real.append(y_uniform)
+            valid_P_real.append(p_vec)
+            valid_names.append(str(sel_names[i]))
+            valid_labels.append(pattern_label)
+
+        # 在移除前获取通过验证的样本的 X (从候选池 Y_ic 构造, 已归一化)
+        if valid_positions:
+            valid_sel_idx = sel_idx[valid_positions]
+            X_tensor = self._get_pool_X_batch(valid_sel_idx).clone()  # (M, 39, 2, T)
+
+        # 从候选池移除已选样本 (无论是否通过验证)
         mask = np.ones(self._pool_size, dtype=bool)
         mask[sel_idx] = False
         if self._pool_X is not None:
@@ -2616,9 +3707,46 @@ class ActiveLearningCallback(pl.Callback):
             self._pool_Y_ic = self._pool_Y_ic[mask]
         if self._pool_mutant_names is not None:
             self._pool_mutant_names = self._pool_mutant_names[mask]
+        if self._pool_P_real is not None:
+            self._pool_P_real = self._pool_P_real[mask]
+        if self._pool_shape_features_cached is not None:
+            self._pool_shape_features_cached = self._pool_shape_features_cached[mask]
         if self._al4pde_pool_idx is not None:
             self._al4pde_pool_idx = self._al4pde_pool_idx[mask]
         self._pool_size = mask.sum()
 
-        print(f"[al4pde] 候选池剩余: {self._pool_size} 样本")
-        return {'X': sel_X, 'P': sel_P, 'Y': sel_Y}
+        if not valid_Y_real:
+            print(f"[al4pde] 所有 {n_sel} 个选中样本均未通过物理验证, 本轮无样本加入训练集")
+            print(f"[al4pde] 候选池剩余: {self._pool_size} 样本")
+            return None
+
+        # 归一化 Y (仿真输出为真实值空间, 需归一化以匹配训练集)
+        mean_y = dm.mean_y  # (1, 39, 1)
+        std_y = dm.std_y    # (1, 39, 1)
+        p_mean = dm.p_mean  # (1, 141)
+        p_std = dm.p_std    # (1, 141)
+
+        Y_list = []
+        for y_real in valid_Y_real:
+            y_t = torch.tensor(y_real, dtype=torch.float32)  # (39, 500)
+            y_norm = (y_t - mean_y.squeeze(0)) / std_y.squeeze(0)
+            Y_list.append(y_norm)
+
+        P_list = []
+        for p_real in valid_P_real:
+            p_t = torch.tensor(p_real, dtype=torch.float32)  # (141,)
+            p_norm = (p_t - p_mean.squeeze(0)) / p_std.squeeze(0)
+            p_norm = torch.nan_to_num(p_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+            P_list.append(p_norm)
+
+        print(f"[al4pde] 仿真完成: {len(valid_Y_real)}/{n_sel} 通过验证 | "
+              f"候选池剩余: {self._pool_size}")
+
+        return {
+            'X': X_tensor,
+            'Y': torch.stack(Y_list),
+            'P': torch.stack(P_list),
+            'names': valid_names,
+            'labels': valid_labels,
+            'sample_plots': {}
+        }

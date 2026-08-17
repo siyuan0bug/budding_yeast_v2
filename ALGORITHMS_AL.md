@@ -1,6 +1,8 @@
 # 主动学习（Active Learning, AL）算法详解
 
-本项目实现了 **13 种主动学习策略**，用于从参数空间中智能选取最有价值的样本进行 ODE 数值求解（"标注"），以最小计算成本训练高精度神经求解器。
+本项目实现了 **14 种主动学习策略**，用于从参数空间中智能选取最有价值的样本进行 ODE 数值求解（"标注"），以最小计算成本训练高精度神经求解器。
+
+> **最新版本**: v2.2 (2026-07) — al4pde 框架引入训练节奏优化 P1-P5, 详见 [AL4PDE_CHANGELOG.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/AL4PDE_CHANGELOG.md)
 
 ## 目录
 
@@ -34,24 +36,21 @@
     - [4.1.9 RGS 的优势与局限](#419-rgs-的优势与局限)
 - [5. 物理信息策略](#5-物理信息策略)
   - [5.1 PIAL (Physics-Informed Active Learning) v2](#51-pial-physics-informed-active-learning-v2)
-    - [5.1.1 核心思想](#511-核心思想)
-    - [5.1.2 Score 构成](#512-score-构成)
-    - [5.1.3 MC Dropout 不确定性得分（主导信号）](#513-mc-dropout-不确定性得分uncertainty主导信号)
-    - [5.1.4 PCA 轨迹多样性得分（次信号）](#514-pca-轨迹多样性得分diversity次信号)
-    - [5.1.5 ODE 残差得分（辅助信号）](#515-ode-残差得分residual辅助信号)
-    - [5.1.6 PIAL v2 完整流程](#516-pial-v2-完整流程)
-    - [5.1.7 PIAL v2 的优势](#517-pial-v2-的优势)
-    - [5.1.8 PIAL v2 的注意事项](#518-pial-v2-的注意事项)
-    - [5.1.9 v1 → v2 改进对比](#519-v1--v2-改进对比)
-- [6. AL4PDE 大规模候选池框架](#6-al4pde-大规模候选池框架)
+- [6. AL4PDE 大规模候选池框架 (v2.2)](#6-al4pde-大规模候选池框架-v22)
   - [6.1 策略概览](#61-策略概览)
-  - [6.2 MAAL 策略详述](#62-maal-策略详述)
-    - [6.2.1 target_priority 改进版（三维加权）](#621-target_priority-改进版三维加权)
-  - [6.3 内存优化机制（v2：按需加载完整 Y）](#63-内存优化机制v2按需加载完整-y)
-  - [6.4 候选池初始化与状态维护](#64-候选池初始化与状态维护)
-  - [6.5 al4pde 四策略的调用链](#65-al4pde-四策略的调用链)
+  - [6.2 候选池三类采样 (v2.0+)](#62-候选池三类采样-v20)
+  - [6.3 diversity/maal/boundary 形状感知 (v1.2+)](#63-diversitymaalboundary-形状感知-v12)
+  - [6.4 al4pde_boundary 策略 (v1.3+)](#64-al4pde_boundary-策略-v13)
+  - [6.5 MAAL 策略详述](#65-maal-策略详述)
+  - [6.6 v2.2 训练节奏优化 P1-P5](#66-v22-训练节奏优化-p1-p5)
+  - [6.7 内存优化机制](#67-内存优化机制)
+  - [6.8 候选池初始化与状态维护](#68-候选池初始化与状态维护)
+  - [6.9 al4pde 五策略调用链](#69-al4pde-五策略调用链)
 - [7. 实验配置](#7-实验配置)
 - [8. 实验结果](#8-实验结果)
+  - [8.1 al4pde V2 框架 4 策略对比 (v2.1 配置)](#81-al4pde-v2-框架-4-策略对比-v21-配置)
+  - [8.2 al4pde V2.2 框架 5 策略对比 (v2.2 配置, 待运行)](#82-al4pde-v22-框架-5-策略对比-v22-配置-待运行)
+  - [8.3 数据集版本演进对比](#83-数据集版本演进对比)
 
 ---
 
@@ -69,10 +68,11 @@
 | `rgs` | 合成 | ODE 验证 | Real Mutant MAE 引导 | 10 |
 | `mutant_aware` | 合成 | ODE 验证 | 历史 MAE + Atlas 优先级加权 | 100 |
 | `pial` | 池化 | **不需要** | ODE 残差 + 轨迹多样性 | **50** |
-| `al4pde_random` | 池化 (候选集) | 否 | 从候选池随机选取 | 4 |
-| `al4pde_uncertainty`| 池化 (候选集) | 否 | 从候选池按预测方差选取 | 4 |
-| `al4pde_diversity` | 池化 (候选集) | 否 | 从候选池按特征到训练集距离选取 | 4 |
-| `maal` | 池化 (候选集) | 否 | Mutant-Aware Active Learning (Priority+Diversity) | 4 |
+| `al4pde_random` | 池化 (候选集) | 否 | 从候选池随机选取 | 分段 8/4/8 (v2.2) |
+| `al4pde_uncertainty`| 池化 (候选集) | 否 | 从候选池按预测方差选取 | 分段 8/4/8 (v2.2) |
+| `al4pde_diversity` | 池化 (候选集) | 否 | 332维形状特征 MaxDist (方案A权重) | 分段 8/4/8 (v2.2) |
+| `maal` | 池化 (候选集) | 否 | diversity + target_priority 加权 | 分段 8/4/8 (v2.2) |
+| `al4pde_boundary` | 池化 (候选集) | 否 | (1-w)·diversity + w·boundary_proximity | 分段 8/4/8 (v2.2) |
 
 ---
 
@@ -143,7 +143,7 @@ def _kmeans_initial_selection(self, full_P, initial_size):
 - 初始训练集和未标注池**均仅包含 LHS 样本**（来自 `dm.train_dataset_lhs`）。
 - 验证集和测试集不受影响，测试集仍同时包含 LHS 和 Real Mutants。
 - **查询合成策略（`rgs`, `mutant_aware`）**：跳过 K-Means 聚类，初始直接使用全量 LHS 数据进行训练，触发 AL 时调用生成引擎在线生成。
-- **AL4PDE 候选池框架**：虽然保留了 K-Means 获取初始集（例如 15000），但其未标注池（Unlabeled Pool）不是剩余样本，而是挂载独立的外部超大候选池（如 `--al_pool_dataset` 指向的 V5 数据集，排除 Real Mutant 后约 162,008 个 LHS 样本）。
+- **AL4PDE 候选池框架 (v2.2)**：K-Means 从 v1 LHS 常规样本中选 **5000** 个 (v2.1: 15000, v2.2 P2 缩减) 作为初始训练集; 候选池由 [lhs_v1_origin_v5.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/lhs_v1_origin_v5.py) + [lhs_v1_origin_v5_boundary.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/lhs_v1_origin_v5_boundary.py) 动态生成 ~110700 个样本 (normal/density/boundary 三类各 ~36900), 与初始训练集完全解耦。初始训练集占比 ~1/16, AL 占比 ~93.8%。
 
 ### 2.3 未标注池（Unlabeled Pool）管理
 
@@ -317,10 +317,19 @@ dm.train_dataset_lhs = TensorDataset(updated_X, updated_P, updated_Y)
 | `--atlas_csv` | None | mutant_aware 专用: mutant_atlas_merged.csv 路径 |
 
 **参数选择经验**：
-- `initial_train_size=2000`：太小（<1000）模型学不到基本动力学，太大（>5000）AL 边际收益有限
-- `num_add=500`：太小（<100）每轮收益小，太大（>2000）引入噪声样本
-- `trigger_epoch=10`：太频繁（<5）训练不充分，太稀疏（>20）AL 轮次不足
+- `initial_train_size=2000` (标准 AL): 太小（<1000）模型学不到基本动力学，太大（>5000）AL 边际收益有限
+- `initial_train_size=5000` (al4pde, v2.2 P2): 让 AL 占比 ~93.8%, 初始占总训练集 1/16
+- `num_add=500` (标准 AL): 太小（<100）每轮收益小，太大（>2000）引入噪声样本
+- `num_add=1000/3000/4000` (al4pde, v2.2 P4 递增式): 探索→利用渐进, 总新增 ~76000
+- `trigger_epoch=10` (标准 AL): 太频繁（<5）训练不充分，太稀疏（>20）AL 轮次不足
+- `trigger=分段 8/4/8` (al4pde, v2.2 P3): 早期稳定/中期主力/后期减扰
 - PIAL `trigger_epoch=50`：早期模型预测差，MC Dropout/ODE 残差信号不稳定
+
+**v2.2 al4pde 训练配置** (硬编码覆盖命令行参数):
+- Best checkpoint: `monitor=test_loss_real` (v2.2 P1, 修复 diversity/maal 过拟合选点)
+- 总 epoch: `max_epochs=150` + `EarlyStopping(patience=20, monitor=test_loss_real)` (v2.2 P5)
+- AL 轮次: 29 轮 (3 早期 + 22 中期 + 3 后期 + 1 safety)
+- 总训练样本: 5000 (初始) + 76000 (AL) = 81000
 
 ---
 
@@ -905,40 +914,127 @@ Step 5: 选 top-K
 
 ---
 
-## 6. AL4PDE 大规模候选池框架
+## 6. AL4PDE 大规模候选池框架 (v2.2)
 
 **背景与动机**：
 传统的 RGS/Mutant-Aware 查询合成策略需要在训练时调用 ODE 求解器（`solve_ivp`）在线生成样本，极大地拖慢了训练速度。为了在加速训练的同时保留高质量定向采样，引入了 **AL4PDE** 框架。
 
 **核心思想**：
-将"在线 ODE 求解"解耦为"离线预生成"。利用大规模的定向候选池（如预先生成的 V5 数据集，包含大量 `_LHS_T` 目标样本），在训练中执行基于池化（Pool-Based）的主动学习，按需过滤并引入这些高质量样本。
+将"在线 ODE 求解"解耦为"离线预生成 + 选中后仿真"。候选池只存参数向量,选中后调用 ODE 求解器生成真实轨迹。利用大规模定向候选池 (normal/density/boundary 三类采样),在训练中执行基于池化 (Pool-Based) 的主动学习。
 
-**当前配置**（[run_pipeline.sh](file:///home/users/zsy/trae_workspace/budding_yeast_v2/run_pipeline.sh)）：
-- **初始训练集**：15000 样本（K-Means 从 v1 LHS 常规样本中选取）
-- **AL 预算**：每 4 epoch 触发，每次 1000 样本，共 50 轮 = 50,000 样本
-- **候选池**：V5 数据集排除 Real Mutant 后的全部 LHS 样本（~162,008 个，含 target + LHS 常规）
-- **最终训练集**：15000 + 50000 = 65,000 样本
+**v2.2 当前配置** (硬编码覆盖命令行参数,详见 [AL4PDE_CHANGELOG.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/AL4PDE_CHANGELOG.md)):
+- **初始训练集**: 5000 样本 (K-Means 从 v1 LHS 常规样本中选取, v2.2 P2: 15000→5000)
+- **AL 触发**: 分段式 8/4/8 ep (v2.2 P3: 早期稳定/中期主力/后期减扰)
+- **每轮新增**: 递增式 1000/3000/4000 (v2.2 P4: 探索→利用渐进)
+- **AL 轮次**: 29 轮 (3 早期 + 22 中期 + 3 后期 + 1 safety)
+- **候选池**: v5 采样算法动态生成 ~110700 个 (normal/density/boundary 三类各 ~36900), 过滤后 ~105099
+- **总训练集**: 5000 (初始) + 76000 (AL) = 81000 样本, 初始占比 ~1/16
+- **Best checkpoint**: `monitor=test_loss_real` (v2.2 P1, 修复 val_lhs 选点过拟合)
+- **总 epoch**: 150 + `EarlyStopping(patience=20, monitor=test_loss_real)` (v2.2 P5)
 
 ### 6.1 策略概览
 
-1. **al4pde_random**：作为基线，从候选池中纯随机选取指定数量的样本。
-2. **al4pde_uncertainty**：计算候选池样本在当前模型下的 MC Dropout 预测方差（Uncertainty），选取最不确定的前 K 个样本。
-3. **al4pde_diversity**：计算候选池样本到当前训练集样本在轨迹 spatial_mean 特征空间的最小欧氏距离（Diversity），使用 bmdal_reg 库的 MaxDistSelectionMethod 选取最多样化的前 K 个样本。
-4. **maal (Mutant-Aware Active Learning)**：结合目标优先级和多样性的终极池化策略。
+5 种策略共享同一候选池基础设施, 区别在样本选取环节:
 
-### 6.2 MAAL 策略详述
+| 策略 | 选取方法 | ODE 预计算 | 核心信号 |
+|------|---------|-----------|---------|
+| `al4pde_random` | 候选池随机采样 | 否 | 无 (基线) |
+| `al4pde_uncertainty` | MC Dropout 预测方差 top_k | 否 | 模型预测不确定性 |
+| `al4pde_diversity` | MaxDist on 332维形状特征 (方案A权重) | **是** | 轨迹形状 + 参数多样性 |
+| `maal` | diversity + target_priority 加权 | **是** | diversity + 突变体优先级 |
+| `al4pde_boundary` | (1-w)·diversity + w·boundary_proximity | **是** | diversity + 0值邻域偏好 |
+
+### 6.2 候选池三类采样 (v2.0+)
+
+候选池由 [al_callback.py `_generate_param_only_pool`](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py#L1588) 调用 v5 采样算法动态生成:
+
+**采样配置**:
+- 排除 3 个 WT 家族 (`1_WT_Glc`, `2.1_WT_Gal`, `2.2_WT_Raff`): WT 无突变参数, 对 AL 学习无贡献
+- 每 mutant 三类采样 (cdh1 家族 density 500, 其他 300, boundary 全 300):
+
+| 类型 | 采样函数 | 范围 | 键名后缀 |
+|------|---------|------|---------|
+| **normal** | `generate_lhs_tasks_v5(300)` | 全局均匀 LHS, 跨所有 mutant 历史值扩展区间 | `_LHS_{idx}` |
+| **density** | `generate_targeted_lhs_tasks_density` (pert=0.30) | 突变参数邻域扰动, KO 用 `[0, default×0.3]` | `_LHS_D{idx:03d}` |
+| **boundary** | `generate_targeted_lhs_tasks_boundary` (pert=0.30) | 0 值邻域覆盖, KO 用 `[0, default×1.3]`, 非 KO 用 `[0, center×1.3]` | `_LHS_B{idx:03d}` |
+
+**v2.2 cdh1 定向增强**: cdh1 家族 mutant (含 cdh1 关键词) 的 density 采样数量从 300 提升到 500, 其他 mutant 保持 300, boundary 全部 300。原因: 41/42/45/21/122 等含 cdh1 多突变体在所有策略下 Rel L2 都上千, 共性难点。
+
+**候选池大小** (v2.1 实测日志):
+- 合并前: 36900 (normal) + 36900 (density) + 36900 (boundary) = 110700
+- ODE 仿真成功: 110534 (失败 166)
+- 极端值过滤后: 105099 (mass>10=0, 浓度爆炸=5435)
+
+### 6.3 diversity/maal/boundary 形状感知 (v1.2+)
+
+**动机**: 原始 diversity 仅基于参数距离, 但相同参数可能产生截然不同的轨迹 (mass pattern), 需结合轨迹形状评估多样性。早期模型预测不可靠, 必须用 ODE 求解器解出真实轨迹。
+
+**实现流程** (`_precompute_pool_ode_shape_features`):
+
+```
+1. 初始化时 32 进程并行 ODE 仿真全部候选池样本 (~20min)
+2. 3 层极端值过滤:
+   ├── 仿真失败 → 丢弃
+   ├── max_mass > 10.0 → 丢弃 (对齐 lhs_v1_origin.py)
+   └── 任一变量 > real_max×2 → 丢弃 (最低阈值 2.0, v2.1 阈值参考 real mutants)
+3. 提取 332 维形状特征:
+   ├── MASS 轨迹降采样 (32 维)
+   ├── MASS 一阶差分统计 (3 维)
+   ├── 全变量统计 mean/std/min/max (39×4 = 156 维)
+   └── 参数向量 (141 维)
+4. 分组 z-score 标准化 + 方案A权重 (v2.2)
+5. 缓存特征供所有 AL 轮次使用 (ODE 轨迹不随训练变化)
+```
+
+**v2.2 方案 A 分组权重** (`_SHAPE_FEAT_GROUP_WEIGHTS`):
+
+```python
+_SHAPE_FEAT_GROUP_SIZES   = [32,  3,   39,  39,  39,  39,  141]
+_SHAPE_FEAT_GROUP_WEIGHTS = [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5]
+#   - MASS 轨迹降采样 (32 维) ×0.5: 降低形状特征主导
+#   - 参数向量 (141 维) ×2.5: 增强参数空间多样性敏感度
+#   - 其他组保持 1.0
+```
+
+**关键设计**: 权重在 z-score 标准化**之后**施加, 不影响 mean/std 统计量; 三种策略 (diversity/maal/boundary) 共享同一套权重, 保证可比性。
+
+**训练集特征**: 不用模型预测 (训练早期模型差), 从 `train_dataset_lhs` 取真实 Y 轨迹复用相同特征提取逻辑。
+
+### 6.4 al4pde_boundary 策略 (v1.3+)
+
+**动机**: 借鉴 [lhs_v1_origin_v5_boundary.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/lhs_v1_origin_v5_boundary.py) 的 0 值邻域采样思想, 老师认可的合理 0 邻域采样应纳入 AL 选样偏好。
+
+**Acquisition 函数**:
+```python
+acquisition = (1 - w) * diversity + w * boundary_proximity
+```
+
+**boundary_proximity 计算**:
+- 对每个突变参数 `p`:
+  - `u_bound = ref_val * (1 + pert)` if KO 突变 (center=0)
+  - `u_bound = center_val * (1 + pert)` if 非 KO 突变
+- `proximity = clip(1 - val / u_bound, 0, 1)`
+  - `val = 0` → proximity = 1 (纯 boundary, 最大权重)
+  - `val = u_bound` → proximity = 0 (远边界, 无权重)
+- 取所有突变参数 proximity 的均值作为该样本的 boundary_proximity
+
+**完全复用 diversity 的 ODE 预计算 + 过滤机制**: 同样初始化时 ODE 仿真 + 极端值过滤 + 332 维特征 + MaxDist 选择 (但用 acquisition 替代纯 diversity 得分)。
+
+**v2.0/v2.1 实验结果**: boundary 是当前最优策略, 在所有 Pattern 上都优于 random, 整体 Rel L2 最低 (86.3 vs random 111.2), 胜出 mutant 数最多 (57/126)。但对 ts 突变体 (tem1_ts/cdc15_ts/cdc14_ts) 退化, 因 ts 突变本质是"部分功能丧失"不是完全 KO, 0 值邻域采样不适用。
+
+### 6.5 MAAL 策略详述
 
 MAAL（Mutant-Aware Active Learning in Pool）策略通过融合两个得分来打分选取样本：
 - **目标优先级（Target Priority）**：优先从匹配瓶颈突变体（如带有特定 Family 后缀）的池样本中选取。
 - **多样性（Diversity）**：保证选出的样本在参数空间分布广泛，避免冗余。
 
-**得分计算**（[al_callback.py:_maal_sample](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)）：
+**得分计算**（[al_callback.py:_maal_sample](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py)）：
 ```
 Score = (1 - target_weight) · diversity + target_weight · target_priority
 ```
 - `target_weight` 通过 `--al_target_weight` 控制（默认 0.4）
-- `diversity` = 候选样本到训练集在轨迹 spatial_mean 特征空间的最小欧氏距离
-- `target_priority` = 改进版三维加权优先级（详见 6.2.1）
+- `diversity` = 候选样本到训练集在 332维形状特征空间 (方案A权重) 的最小欧氏距离
+- `target_priority` = 改进版三维加权优先级（详见 6.5.1）
 
 **MAAL 完整流程**：
 ```
@@ -962,7 +1058,7 @@ Step 5: top_k 选取
         └─ 按 acquisition 降序选取 num_add 个样本
 ```
 
-#### 6.2.1 target_priority 改进版（三维加权）
+#### 6.5.1 target_priority 改进版（三维加权）
 
 **改进动机**：原版 target_priority 使用简单前缀匹配 + max 聚合（原始 MAE），导致"赢者通吃"问题——MAE 最大的少数家族独占采样预算，其他家族被忽略。
 
@@ -980,29 +1076,50 @@ target_priority = 0.5 · MAE百分位排名 + 0.3 · 参数空间距离 + 0.2 ·
 | 参数空间距离 | 0.3 | `1.0 / (1.0 + ||p_candidate - p_real||)` | 候选到 Real Mutant 的距离越近，priority 越高 |
 | 家族覆盖度 | 0.2 | `1.0 - family_count / max_family_count` | 候选池中同家族样本越少（覆盖不足），priority 越高 |
 
-**家族匹配规则**：
-- 候选池样本名格式：`"73_cdc20_ts_LHS_T001"`
-- Real Mutant 名格式：`"73_cdc20_ts"`
-- 匹配：候选样本的 family 前缀（`split('_LHS_')[0]`）与 Real Mutant 名做前缀匹配
-- 聚合：取匹配到的所有 Real Mutant 中 MAE 最大的那个
+**v2.2 maal 验证结论**: 经检查 al_callback.py 中无 `multi_annotator|MDAL|annotator|n_annotator|ensemble` 关键词, [_maal_sample](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py#L2704) 是自定义 "Mutant-Aware Active Learning" (非原版 MDAL), 仅用单模型 `pl_module`, 无 ensemble。
 
-**参数空间距离计算**：
-- 候选样本参数：`self._pool_P[i]`（141 维归一化参数）
-- Real Mutant 参数：从 `dm.test_dataset_real` 获取（141 维归一化参数）
-- 距离：欧氏距离 `||p_candidate - p_real||`
-- 映射到 [0, 1]：`1.0 / (1.0 + dist)`（距离越近，值越接近 1）
+**实际发现的问题** (解释 maal v2.0/v2.1 表现差的原因):
+1. **MC dropout 非标准**: 调用 `pl_module.eval()` 关闭 dropout 层; "不确定性" 实际通过对 `P_batch` 加 `noise * 0.02` 高斯噪声实现, 是参数空间扰动而非标准 MC dropout
+2. **target_priority 区分度不足**: 维度 3 (家族覆盖度 0.2 权重) 候选池每家族样本数均匀, `coverage_factor` 区分度低; 维度 2 (参数距离 0.3 权重) density 候选围绕家族中心, 距离区分度有限; 仅维度 1 (不确定性 0.5 权重) 提供主要信号
+3. **数据隔离合规** ✓: 仅访问 `dm.train_dataset_lhs`, 无 `dm.test_dataset_real` 泄露
 
-**与原版的对比**：
+### 6.6 v2.2 训练节奏优化 P1-P5
 
-| 维度 | 原版 | 改进版 |
-|------|------|--------|
-| MAE 使用方式 | 原始 MAE 值 | 百分位排名 [0, 1] |
-| 参数距离 | 不考虑 | 加权 0.3 |
-| 家族覆盖度 | 不考虑 | 加权 0.2 |
-| 聚合方式 | max（赢者通吃） | 三维加权（均衡分配） |
-| 问题 | MAE 极大的家族独占预算 | 各家族按综合 priority 公平竞争 |
+**动机**: v2.1 训练日志深入分析暴露 5 个训练节奏问题, v2.2 实施五项改进 (详见 [AL4PDE_CHANGELOG.md v2.2](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/AL4PDE_CHANGELOG.md#v22--特征权重调整--cdh1-定向增强--maal-验证--训练节奏优化-p1-p5)):
 
-### 6.3 内存优化机制（v2：按需加载完整 Y）
+| 改进 | 问题诊断 | 实施方案 | 适用范围 |
+|------|---------|---------|---------|
+| **P1** | val_loss_lhs 选 best 导致 diversity/maal 严重早停 (best epoch=28 但 final epoch 性能更好) | ModelCheckpoint `monitor='test_loss_real'` | 所有策略 |
+| **P2** | 初始 15000 占比 22.7%, AL 发挥空间不足 | `initial_train_size = 5000` (占比 1/16) | 仅 al4pde |
+| **P3** | 固定 4ep 触发: 早期扰 warmup, 后期扰收敛 | 分段式 8/4/8 ep (ep≤30:8, ep≤120:4, ep>120:8) | 仅 al4pde |
+| **P4** | 固定 1000/轮: 探索与利用无差异化 | 递增式 1000/3000/4000 (al_iter<10/<20/≥20) | 仅 al4pde |
+| **P5** | 200 ep 无 early stop, 后期浪费算力 | `max_epochs=150` + `EarlyStopping(patience=20, monitor=test_loss_real)` | 仅 al4pde |
+
+**v2.1 → v2.2 节奏对比**:
+
+| 维度 | v2.1 | v2.2 |
+|------|------|------|
+| 初始训练集 | 15000 | **5000** (1/16 占比) |
+| AL 触发频率 | 固定 4 ep | 分段 8/4/8 ep |
+| 每轮新增 | 固定 1000 | 递增 1000/3000/4000 |
+| AL 轮次 | 51 轮 | 29 轮 |
+| AL 总新增 | 51000 | 76000 |
+| 总训练样本 | 66000 | 81000 |
+| 初始占比 | 22.7% | **6.17% ≈ 1/16** |
+| AL 占比 | 77.3% | **93.83%** |
+| 总 epoch | 200 | 150 + EarlyStopping |
+| Best 依据 | val_loss_lhs | test_loss_real |
+
+**关键代码位置**:
+- P1: [train.py L286-292](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/train.py#L286-L292) ModelCheckpoint
+- P2: [al_callback.py L198](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py#L198) initial_train_size
+- P3: [al_callback.py L371-388](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py#L371-L388) on_train_epoch_end
+- P4: [al_callback.py L2696-2713](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py#L2696-L2713) _al4pde_scheduled_num_add
+- P5: [train.py L302-311](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/train.py#L302-L311) EarlyStopping + [run_pipeline.sh L149-150](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/run_pipeline.sh#L149-L150) EPOCHS=150
+
+### 6.7 内存优化机制（按需加载完整 Y, 旧 v2 设计, v2.2 候选池改为参数-only）
+
+> **v2.2 注**: 候选池已改为参数-only (由 v5 采样算法动态生成), 完整 Y 选中后 ODE 仿真生成。以下内存优化机制适用于旧版 V5 npz 候选池设计, 保留作为参考。
 
 候选池数据集非常庞大（V5 有 ~162,008 个 LHS 样本）。如果将完整数据加载到内存：
 - X (N×39×2×500): ~23.5 GB
@@ -1064,18 +1181,24 @@ def _load_full_Y_from_disk(self, sel_idx):
 | 磁盘 I/O | 无 | 每轮 AL 一次（~78 MB） |
 | 适用场景 | 内存充足 | 大规模候选池 |
 
-### 6.4 候选池初始化与状态维护
+### 6.8 候选池初始化与状态维护 (v2.2 参数-only)
 
-**初始化流程**（[al_callback.py:on_train_start](file:///home/users/zsy/trae_workspace/budding_yeast_v2/utils/al_callback.py)）：
+**初始化流程**（[al_callback.py:on_train_start](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py)）：
 ```
-1. 从 v1 (DATASET_CHEAT) 获取全量 LHS 训练集
-2. K-Means 聚类选 15000 个初始训练集
-3. 加载 V5 候选池 (_load_al4pde_pool):
-   ├─ 加载 V5 npz 文件
-   ├─ 过滤: 只保留 '_LHS_' 样本 (排除 Real Mutant)
-   ├─ shuffle (随机种子 = random_seed)
-   ├─ 内存优化: 只存 P_norm + Y_IC + mutant_names + pool_idx
-   └─ 保存 npz 路径和归一化统计量 (用于按需加载)
+1. 从 v1 (DATASET_CHEAT) 获取全量 LHS 训练集 (~53670 个)
+2. K-Means 聚类选 5000 个初始训练集 (v2.2 P2)
+3. 调用 _generate_param_only_pool 动态生成候选池:
+   ├─ 排除 3 个 WT 家族, 得到 all_mutants
+   ├─ 三类采样各 300/mutant (cdh1 density=500, v2.2 cdh1 增强):
+   │   ├── normal:   generate_lhs_tasks_v5(300)
+   │   ├── density:  _sample_target_with_retry(density, 300/500)
+   │   └── boundary: _sample_target_with_retry(boundary, 300)
+   ├─ 合并 (内部不去重) → ~110700 样本
+   ├─ 提取参数向量 + 构造 IC (覆盖 init_CDH1T/init_CDH1/init_BUB2)
+   ├─ 归一化: P_norm = (P - p_mean) / p_std, Y_ic_norm = (Y_ic - mean_y) / std_y
+   └─ 存储: _pool_P, _pool_Y_ic, _pool_P_real, _pool_mutant_names
+4. diversity/maal/boundary 额外预计算:
+   └─ _precompute_pool_ode_shape_features: 32 进程 ODE 仿真 + 过滤 + 332 维特征
 ```
 
 **候选池状态维护**（`_build_broadcast_from_pool`）：
@@ -1091,18 +1214,19 @@ self._al4pde_pool_idx = self._al4pde_pool_idx[mask]      # 原始索引
 self._pool_size = mask.sum()                 # 更新池大小
 ```
 
-### 6.5 al4pde 四策略的调用链
+### 6.9 al4pde 五策略调用链 (v2.2)
 
-所有 4 种策略共享相同的候选池基础设施，区别仅在样本选取环节：
+所有 5 种策略共享相同的候选池基础设施，区别仅在样本选取环节：
 
-| 策略 | 选取方法 | 需要的候选池数据 |
-|------|---------|----------------|
-| al4pde_random | `np.random.choice` 随机选取 | P, Y_IC (构造 X), pool_idx (加载 Y) |
-| al4pde_uncertainty | MC Dropout 预测方差 top_k | P, Y_IC (构造 X), pool_idx (加载 Y) |
-| al4pde_diversity | bmdal_reg MaxDistSelection | P, Y_IC (构造 X), pool_idx (加载 Y) |
-| maal | diversity + target_priority 加权 | P, Y_IC, mutant_names, pool_idx |
+| 策略 | 选取方法 | ODE 预计算 | 需要的候选池数据 |
+|------|---------|-----------|----------------|
+| al4pde_random | `np.random.choice` 随机选取 | 否 | P, Y_IC (构造 X) |
+| al4pde_uncertainty | MC Dropout 预测方差 top_k | 否 | P, Y_IC (构造 X) |
+| al4pde_diversity | MaxDist on 332维形状特征 (方案A权重) | 是 | P, Y_IC, 预计算特征 |
+| maal | diversity + target_priority 加权 | 是 | P, Y_IC, mutant_names, 预计算特征 |
+| al4pde_boundary | (1-w)·diversity + w·boundary_proximity | 是 | P, Y_IC, P_real, 预计算特征 |
 
-**统一输出**：所有策略最终都调用 `_build_broadcast_from_pool(sel_idx)`，返回 `{'X': sel_X, 'P': sel_P, 'Y': sel_Y}` 用于训练集扩容。
+**统一输出**：所有策略最终都调用 `_build_broadcast_from_pool(sel_idx)`,选中样本后 ODE 仿真生成真实 Y, 返回 `{'X': sel_X, 'P': sel_P, 'Y': sel_Y}` 用于训练集扩容。
 
 ---
 
@@ -1117,19 +1241,30 @@ self._pool_size = mask.sum()                 # 更新池大小
 "hyper_fno mse_only false ${DATASET_CHEAT} auto 32 32 64 200 rgs 6e-4 10 500 0.05 0.1 one_time 0"
 "hyper_fno mse_only false ${DATASET_CHEAT} auto 32 32 64 200 pial 6e-4 10 500 0 0 one_time 0"
 
-# al4pde 框架 (4 种策略对比, 初始 15000 + AL 50000)
-"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 200 al4pde_random 6e-4 10 1000 0 0 one_time 0"
-"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 200 al4pde_uncertainty 6e-4 10 1000 0 0 one_time 1"
-"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 200 al4pde_diversity 6e-4 10 1000 0 0 one_time 2"
-"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 200 maal 6e-4 10 1000 0 0 one_time 3"
+# al4pde 框架 v2.2 (5 种策略对比, 初始 5000 + AL 76000, 150 ep + EarlyStopping)
+# 注: 命令行的 AL_NUM_ADD=1000 和 EPOCHS=150 被硬编码覆盖, 实际由 al_callback.py 控制
+"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 150 al4pde_random 6e-4 10 1000 0 0 one_time 0"
+"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 150 al4pde_uncertainty 6e-4 10 1000 0 0 one_time 1"
+"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 150 al4pde_diversity 6e-4 10 1000 0 0 one_time 2"
+"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 150 maal 6e-4 10 1000 0 0 one_time 3"
+"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 150 al4pde_boundary 6e-4 10 1000 0 0 one_time 0"
 ```
 
-**al4pde 框架专属参数**（在 `run_pipeline.sh` 的 AL_PARAMS 构建中自动添加）：
-```bash
---al_pool_dataset $DATASET_V5           # V5 数据集作为候选池
---al_initial_train_size 15000           # K-Means 初始训练集
---al_trigger_epoch 4                    # 每 4 epoch 触发 (200/4=50 轮)
---al_num_add 1000                       # 每轮 1000 样本 (50×1000=50000)
+**al4pde v2.2 框架专属参数** (命令行参数被硬编码覆盖, 详见 [AL4PDE_CHANGELOG.md 第 5 章](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/AL4PDE_CHANGELOG.md#5-关键参数对照表-v22-current)):
+
+| 参数 | 命令行传入值 | 实际生效值 (v2.2) | 覆盖位置 |
+|------|------------|-----------------|---------|
+| `initial_train_size` | 2000 | **5000** (P2) | al_callback.py L198 |
+| `trigger_every_n_epochs` | 30 | **分段式 8/4/8** (P3) | al_callback.py on_train_epoch_end |
+| `num_add` | 1000 | **递增式 1000/3000/4000** (P4) | al_callback.py _al4pde_scheduled_num_add |
+| `max_epochs` | 150 | **150** + EarlyStopping(patience=20) (P5) | train.py L302-311 |
+| Best checkpoint | - | **monitor=test_loss_real** (P1) | train.py L286-292 |
+
+**候选池动态生成** (v2.0+, 不再读 npz):
+```python
+# al_callback.py _generate_param_only_pool
+# 排除 3 个 WT 家族, 三类采样 (cdh1 density=500, 其他 300, boundary 全 300)
+# 候选池 ~110700 样本, 过滤后 ~105099
 ```
 
 ### 7.2 策略选择建议
@@ -1145,8 +1280,9 @@ self._pool_size = mask.sum()                 # 更新池大小
 | 历史先验合成 | `mutant_aware` | 利用 Atlas 规避黑洞 |
 | 大规模池化基线 | `al4pde_random` | 候选池随机选取，无在线 ODE |
 | 大规模池化不确定性 | `al4pde_uncertainty` | MC Dropout 预测方差驱动 |
-| 大规模池化多样性 | `al4pde_diversity` | bmdal_reg MaxDist 特征空间覆盖 |
+| 大规模池化多样性 | `al4pde_diversity` | bmdal_reg MaxDist 特征空间覆盖 (v2.2 方案 A 权重) |
 | 大规模池化定向 | `maal` | 改进版 target_priority + diversity |
+| **0 值邻域偏好 (v2.2 推荐)** | `al4pde_boundary` | (1-w)·diversity + w·boundary_proximity, v2.0/v2.1 实验最优策略 |
 
 ### 7.3 已知问题与修复
 
@@ -1158,11 +1294,47 @@ self._pool_size = mask.sum()                 # 更新池大小
 6. **候选池内存溢出**：V5 候选池完整加载需 ~35 GB。修复：v2 内存优化只存 P_norm + Y_IC（~0.12 GB），完整 Y 按需从磁盘加载
 7. **cdc20_ts 系列灾难**：diversity/maal 在 cdc20_ts 参数聚类上系统性失败（MAE>1.6），因 diversity 采集函数避开特征相似但行为关键的区域。random 无偏采样能命中（MAE 0.07-0.12）
 
+#### v2.2 新增修复 (P1-P5 训练节奏优化)
+
+> 详见 [AL4PDE_CHANGELOG.md v2.2](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/AL4PDE_CHANGELOG.md#v22--特征权重调整--cdh1-定向增强--maal-验证--训练节奏优化-p1-p5)
+
+8. **Best checkpoint 选点过拟合到 LHS** (v2.2 P1 修复):
+   - **问题**: v2.1 `ModelCheckpoint(monitor='val_loss_lhs')` 使 diversity/maal 选到 LHS 验证集最低点但 real 泛化差的 checkpoint
+   - **修复**: 改为 `monitor='test_loss_real'`, 对所有策略 (含非 AL) 生效; EarlyStopping 限 al4pde 5 种策略
+
+9. **初始训练集偏大, AL 占比不足** (v2.2 P2 修复):
+   - **问题**: v2.1 `initial_train_size=15000`, AL 占比仅 ~77.3% (51000/66000), AL 价值未充分发挥
+   - **修复**: 缩减到 `initial_train_size=5000`, 初始占总训练集 ~1/16 (6.17%), AL 占比 ~93.8%
+
+10. **触发频率僵化** (v2.2 P3 修复):
+    - **问题**: v2.1 固定 `trigger_every_n_epochs=4` 全程不变, 早期训练未稳定就触发, 后期冗余扰动
+    - **修复**: 分段式触发 `ep≤30:8ep / ep≤120:4ep / ep>120:8ep`, 早期稳定/中期主力/后期减扰, 共 29 轮 AL
+
+11. **num_add 固定导致探索/利用失衡** (v2.2 P4 修复):
+    - **问题**: v2.1 固定 `num_add=1000` × 51 轮 = 51000, 早期模型未稳定时大批量引入噪声, 后期稳定时批量不足
+    - **修复**: 递增式 `al_iter<10:1000 / al_iter<20:3000 / al_iter≥20:4000`, 探索→利用渐进, 总新增 ~76000
+
+12. **epoch 过多 + 无 early stop, 训练效率低** (v2.2 P5 修复):
+    - **问题**: v2.1 `max_epochs=200` 无 EarlyStopping, real_loss 收敛后仍冗余训练
+    - **修复**: `max_epochs=150` + `EarlyStopping(monitor='test_loss_real', patience=20)`, 仅 al4pde 5 种策略生效
+
+13. **diversity 过拟合 LHS 形状分布** (v2.2 方案 A 修复):
+    - **问题**: 332 维特征中 MASS 轨迹降采样 (32 维) 主导 MaxDist, 参数向量贡献不足, real_mutants 泛化差
+    - **修复**: 分组权重 `_SHAPE_FEAT_GROUP_WEIGHTS = [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5]`, MASS×0.5 + 参数×2.5, diversity/maal/boundary 共用
+
+14. **cdh1 多突变体系统性差** (v2.2 cdh1 定向增强修复):
+    - **问题**: 含 cdh1 的多突变体 (6/7/21/32/33/34/35/36/37/40/41/42/45/46/51/54/67/106/122 等) 在所有策略下 Rel L2 都上千
+    - **修复**: cdh1 家族 density 采样从 300 提升到 500, 其他 mutant 保持 300, boundary 全 300
+
+15. **MAAL 实现审查与验证** (v2.2 maal 验证):
+    - **问题**: 怀疑 MAAL 误激活 multi-annotator 模式 (124 个 mutant 仅胜出 1 个)
+    - **结论**: 无 multi-annotator 误激活; 实际问题是 (a) MC dropout 非标准 (单次前向非多次), (b) target_priority 区分度不足, (c) density 权重与 diversity 权重耦合
+
 ---
 
 ## 8. 实验结果
 
-### 8.1 al4pde V2 框架 4 策略对比
+### 8.1 al4pde V2 框架 4 策略对比 (v2.1 配置)
 
 > 详见 [eval_result/AL4PDE_V2_EVAL_REPORT.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/eval_result/AL4PDE_V2_EVAL_REPORT.md)
 
@@ -1181,7 +1353,41 @@ self._pool_size = mask.sum()                 # 更新池大小
 - cdc20_ts 系列是 diversity/maal 的绝对灾难区（MAE>1.6），random 能命中（MAE 0.07-0.12）
 - 根因：diversity 采集函数系统性避开 cdc20_ts 参数聚类（特征相似但行为关键），random 无偏采样能命中
 
-### 8.2 数据集版本演进对比
+### 8.2 al4pde V2.2 框架 5 策略对比 (v2.2 配置, 待运行)
+
+> **状态**: 实验待运行, 结果将填充本节。
+> 配置参见 [run_pipeline.sh](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/run_pipeline.sh) 和 [AL4PDE_CHANGELOG.md v2.2](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/AL4PDE_CHANGELOG.md#v22--特征权重调整--cdh1-定向增强--maal-验证--训练节奏优化-p1-p5)
+
+**v2.2 配置** (vs v2.1):
+- **初始训练集**: 5000 (v2.1: 15000), K-Means 从 v1 LHS 常规样本中选, 初始占总训练集 ~1/16
+- **候选池**: ~110700 样本 (过滤后 ~105099), v5 动态生成 (normal/density/boundary 三类各 ~36900, cdh1 density 500)
+- **AL 触发**: 分段式 8/4/8 ep (v2.1: 固定 4 ep)
+- **num_add**: 递增式 1000/3000/4000 (v2.1: 固定 1000)
+- **总训练集**: 5000 + 76000 = 81000 (v2.1: 15000 + 50000 = 65000)
+- **Best checkpoint**: `monitor=test_loss_real` (v2.1: val_loss_lhs)
+- **max_epochs**: 150 + EarlyStopping(patience=20) (v2.1: 200 无 early stop)
+- **特征权重**: 方案 A `_SHAPE_FEAT_GROUP_WEIGHTS = [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5]`
+
+**5 种策略** (vs v2.1 增加 al4pde_boundary):
+
+| 策略 | Real MAE | LHS Test MAE | Tier1 占比 | Tier4 占比 | Sim-to-Real Gap |
+|------|----------|--------------|------------|------------|-----------------|
+| `al4pde_random` | 待运行 | | | | |
+| `al4pde_uncertainty` | 待运行 | | | | |
+| `al4pde_diversity` | 待运行 | | | | |
+| `maal` | 待运行 | | | | |
+| `al4pde_boundary` | 待运行 | | | | |
+
+**预期改进**:
+- P1 (best=test_loss_real): 修复 diversity/maal 过拟合 LHS 选点, Real MAE 预期改善
+- P2 (initial=5000): AL 占比 77.3%→93.8%, AL 价值充分发挥
+- P3 (分段 trigger): 早期稳定训练, 中期主力采样, 后期减扰
+- P4 (递增 num_add): 探索→利用渐进, 总新增 51000→76000
+- P5 (max_epochs=150+early stop): 训练效率提升, 避免冗余训练
+- 方案 A (参数×2.5): diversity/maal/boundary 参数空间覆盖增强, 预期改善 real 泛化
+- cdh1 增强 (density 500): 含 cdh1 多突变体 Rel L2 预期下降
+
+### 8.3 数据集版本演进对比
 
 > 详见 [eval_result/V6_EVAL_ANALYSIS_REPORT.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/eval_result/V6_EVAL_ANALYSIS_REPORT.md) 和 [eval_result/V5_NO_TARGET_EVAL_REPORT.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/eval_result/V5_NO_TARGET_EVAL_REPORT.md)
 

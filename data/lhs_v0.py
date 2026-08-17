@@ -5,6 +5,7 @@ from scipy.stats import qmc
 import concurrent.futures
 import time
 import os
+import signal
 import warnings
 
 warnings.filterwarnings("ignore") 
@@ -259,42 +260,48 @@ def simulate_mutant(mutant_name, param_overrides, tf=SIM_TF, num_steps=SIM_STEPS
     t0, loop_count = 0, 0
     start_cpu_time = time.time()
     
-    def eqns_with_timeout(t, y, p_args):
-        if time.time() - start_cpu_time > SIM_TIMEOUT:
-            raise TimeoutError("Fortran ODE Stiff Deadlock Intercepted!")
-        return eqns(t, y, p_args)
+    # SIGALRM 硬超时兜底：原 eqns_with_timeout 的 time.time() 检查在 BDF 卡于
+    # Fortran/C 层时无法执行；SIGALRM 信号能中断系统调用与步长缩减循环。
+    # finally 必须取消 alarm，否则会误杀 ProcessPoolExecutor 复用 worker 的下一个 task。
+    def _sigalrm_handler(signum, frame):
+        raise TimeoutError("ODE BDF Timeout (SIGALRM)")
+    _old_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
+    signal.alarm(max(1, int(SIM_TIMEOUT)))
+    try:
+        while t0 < tf and loop_count < 300:
+            loop_count += 1
+            sol = solve_ivp(eqns, [t0, tf], y0, args=(p,), method='BDF',
+                            events=[event1, event2, event3, event4],
+                            rtol=1e-4, atol=1e-6)
 
-    while t0 < tf and loop_count < 300: 
-        loop_count += 1
-        sol = solve_ivp(eqns_with_timeout, [t0, tf], y0, args=(p,), method='BDF', 
-                        events=[event1, event2, event3, event4], 
-                        rtol=1e-4, atol=1e-6)
-        
-        t_raw.extend(sol.t[1:])
-        y_raw.extend(sol.y.T[1:])
-        
-        if sol.status == 1:
-            t0, y0 = sol.t[-1], sol.y[:, -1].copy()
-            ie = next((i+1 for i, te in enumerate(sol.t_events) if len(te) > 0 and np.isclose(te[-1], t0)), -1)
+            t_raw.extend(sol.t[1:])
+            y_raw.extend(sol.y.T[1:])
 
-            if ie != -1: event_history.append(ie)
-            
-            if ie == 1:
-                bud_at_div.append(y0[nBUD]); mass_at_div.append(y0[nMASS])
-                y0[nBUD] = y0[nSPN] = 0
-                kg = np.log(2) / p['mdt']
-                y0[nMASS] = abs(1 + np.exp(-kg * ((1.026 / kg) - 32)) - 1) * y0[nMASS]
-                y0[nlte1] = 0.1; y0[nCLB2] -= 1e-6  
-            elif ie == 2:
-                y0[nORI] = 0; y0[nCLB5] -= 1e-6  
-            elif ie == 3:
-                y0[nVi20] = p['Vi20_active']; y0[nBUB2] = p['BUB2_active']; y0[nORI] += 1e-6
-            elif ie == 4:
-                y0[nVi20] = 0.01; y0[nlte1] = 1.0; 
-                y0[nBUB2] = param_overrides.get('init_BUB2', 0.2) 
-                y0[nSPN] += 1e-6   
-        else:
-            break
+            if sol.status == 1:
+                t0, y0 = sol.t[-1], sol.y[:, -1].copy()
+                ie = next((i+1 for i, te in enumerate(sol.t_events) if len(te) > 0 and np.isclose(te[-1], t0)), -1)
+
+                if ie != -1: event_history.append(ie)
+
+                if ie == 1:
+                    bud_at_div.append(y0[nBUD]); mass_at_div.append(y0[nMASS])
+                    y0[nBUD] = y0[nSPN] = 0
+                    kg = np.log(2) / p['mdt']
+                    y0[nMASS] = abs(1 + np.exp(-kg * ((1.026 / kg) - 32)) - 1) * y0[nMASS]
+                    y0[nlte1] = 0.1; y0[nCLB2] -= 1e-6
+                elif ie == 2:
+                    y0[nORI] = 0; y0[nCLB5] -= 1e-6
+                elif ie == 3:
+                    y0[nVi20] = p['Vi20_active']; y0[nBUB2] = p['BUB2_active']; y0[nORI] += 1e-6
+                elif ie == 4:
+                    y0[nVi20] = 0.01; y0[nlte1] = 1.0;
+                    y0[nBUB2] = param_overrides.get('init_BUB2', 0.2)
+                    y0[nSPN] += 1e-6
+            else:
+                break
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, _old_handler)
 
     t_raw, y_raw = np.array(t_raw), np.array(y_raw).T 
     interpolator = interp1d(t_raw, y_raw, kind='linear', axis=1, fill_value="extrapolate")

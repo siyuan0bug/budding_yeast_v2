@@ -63,7 +63,7 @@ all_tasks.update(generate_targeted_lhs_tasks(V6_EXPANSION_FAMILIES))  # ④ P0-P
   - `event2`: `CLB2 + CLB5 - 0.2`（方向 -1）→ 触发 ORI 复位
   - `event3`: `ORI - 1.0`（方向 +1）→ 触发 Vi20/BUB2 激活
   - `event4`: `SPN - 1.0`（方向 +1）→ 触发后期事件
-- **超时保护**: `SIM_TIMEOUT = 5.0s`（防 Fortran 死锁）
+- **超时保护**: `SIM_TIMEOUT = 5.0s`，通过 SIGALRM 硬超时兜底（详见 11.4.2 节）。原 `eqns_with_timeout` 的 Python 层 `time.time()` 检查在 BDF 卡于 Fortran 层时无效，SIGALRM 信号能中断系统调用，确保单个病态样本不会拖死整个进程池
 - **并行**:
   - V0: `ProcessPoolExecutor(max_workers=os.cpu_count())`（使用全部核心）
   - V1 及之后: `ProcessPoolExecutor(max_workers=cpu_count//4)`（绅士模式，留 3/4 核给 GPU）
@@ -740,6 +740,16 @@ PYTHONPATH=/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeas
 
 > **维护规则**: 每次对数据生成代码做改进（新增家族、调整采样参数、修改采样逻辑等），必须在此追加一条记录。
 
+### [2026-07-17] ODE BDF 死锁修复 — SIGALRM 硬超时兜底
+**文件**: `lhs_v0.py`, `lhs_v1.py`, `lhs_v1_origin.py`, `lhs_v1_origin_no_filter.py`, `lhs_v1_origin_guaranteed.py`, `lhs_v1_origin_v2.py` ~ `lhs_v1_origin_v6.py`（共 10 个）
+**改动**:
+- 在 `simulate_mutant` 函数内引入 SIGALRM 硬超时兜底，替代原 `eqns_with_timeout` 的 Python 层 `time.time()` 检查
+- 模式: `signal.alarm(SIM_TIMEOUT)` + `try/finally` 确保 `alarm(0)` 取消与 `_old_handler` 恢复
+- `test_lhs_filter_analysis.py` 无需修改（通过 `from lhs_v1_origin import simulate_mutant` 间接获得保护）
+**原因**: 病态 LHS 参数导致 BDF 求解器在 Fortran 层陷入步长无限缩减循环，Python 层超时检查永不执行，`future.result(timeout=)` 只计数不杀 worker，16 个 worker 陆续耗尽后 `as_completed` 永久阻塞
+**效果**: 病态样本 5 秒后被 SIGALRM 中断丢弃，worker 释放继续处理下一个 task；正常样本（<3 秒）零影响
+**详见**: 11.4.2 节
+
 ### [2026-07-14] 文档同步更新 — 去重算法统一 + lhs_v1.py bug 记录
 **文件**: `DATASET_GENERATION_GUIDE.md`
 **改动**:
@@ -876,11 +886,45 @@ export NUMEXPR_NUM_THREADS=1
 
 **lhs_v1.py 遗留 bug**: 该文件虽内联了新去重函数，但 `generate_lhs_tasks` 中 `real_mutant_full` 变量未构建，直接运行会 `NameError`。其他脚本均已正确构建。
 
-### 11.4 BLAS 死锁问题
+### 11.4 死锁问题
 
-**症状**: `ProcessPoolExecutor` + `fork` 启动子进程时，OpenBLAS 线程池的锁状态不一致导致所有进程 0% CPU 死锁。
+数据生成管线存在两类死锁，需分别修复：
 
-**修复**: 在运行脚本中设置 `OMP_NUM_THREADS=1` 等环境变量，禁用 OpenBLAS 多线程。
+#### 11.4.1 BLAS 线程死锁
+
+**症状**: `ProcessPoolExecutor` + `fork` 启动子进程时，OpenBLAS 线程池的锁状态不一致导致所有进程 0% CPU 死锁（`wchan=futex_wait_queue`）。
+
+**修复**: 在 `run_lhs_batch.sh` 中设置 `OMP_NUM_THREADS=1` 等环境变量，禁用 OpenBLAS 多线程。
+
+#### 11.4.2 ODE BDF 求解器死锁
+
+**症状**: 病态 LHS 参数导致 `solve_ivp(method='BDF')` 在 Fortran/C 层陷入步长无限缩减循环。原 `eqns_with_timeout` 的 `time.time()` 检查在 BDF 卡于 Fortran 层时**永不执行**（Python 字节码无法调度），`future.result(timeout=)` 也只计数不杀 worker，最终 16 个 worker 全部耗尽，`as_completed` 永久阻塞。
+
+**修复**: 在 10 个 lhs 脚本（`lhs_v0.py`, `lhs_v1.py`, `lhs_v1_origin.py`, `lhs_v1_origin_no_filter.py`, `lhs_v1_origin_guaranteed.py`, `lhs_v1_origin_v2.py` ~ `lhs_v1_origin_v6.py`）的 `simulate_mutant` 函数内引入 SIGALRM 硬超时兜底：
+
+```python
+def _sigalrm_handler(signum, frame):
+    raise TimeoutError("ODE BDF Timeout (SIGALRM)")
+_old_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
+signal.alarm(max(1, int(SIM_TIMEOUT)))
+try:
+    while t0 < tf and loop_count < 300:
+        sol = solve_ivp(...)  # BDF 求解
+        ...
+finally:
+    signal.alarm(0)                          # 必须取消 alarm，否则误杀 worker 复用的下一个 task
+    signal.signal(signal.SIGALRM, _old_handler)  # 恢复默认 handler，避免污染 worker 后续 task
+```
+
+**关键点**:
+- SIGALRM 是 Unix 信号，能中断 Fortran/C 层的系统调用与步长缩减循环，而 Python 层的 `time.time()` 检查做不到
+- `signal.alarm(0)` 与恢复 `_old_handler` 必须放在 `finally`，保证 `ProcessPoolExecutor` worker 复用时不被污染
+- `test_lhs_filter_analysis.py` 无需修改：它 `from lhs_v1_origin import simulate_mutant`，已通过 import 间接获得保护（fork 时子进程继承已修复的模块）
+
+**影响评估**:
+- 正常样本（0.1–3 秒完成）：零影响，SIGALRM 不会触发，`finally` 取消闹钟
+- 病态样本（>5 秒）：从"死锁卡死整个进程池"变为"5 秒后丢弃，worker 释放继续下一个 task"。这些样本本就是参数空间病态点（BDF 步长无限缩减），即使强行算出轨迹也不可信，丢弃是正确行为
+- 数据质量：只会提升不会下降
 
 ### 11.5 Sim-to-Real Gap 缓解策略
 
@@ -905,6 +949,7 @@ export NUMEXPR_NUM_THREADS=1
 - [x] 修复 `real_vs_lhs_csv.py` 正则 bug
 - [x] 修复 BLAS 死锁问题（`run_lhs_batch.sh` 添加环境变量）
 - [x] 完整记录 10 个数据生成脚本的去重防泄漏逻辑（本文档第三章）
+- [x] 修复 ODE BDF 求解器死锁 — SIGALRM 硬超时兜底（2026-07-17，详见 11.4.2 节）
 - [x] 统一去重算法：V1/V1_origin/guaranteed/no_filter 升级为 rtol=0.08 + 全局跨检查（2026-07-14）
 - [ ] 修复 `lhs_v1.py` 的 `real_mutant_full` 未构建 bug（添加 `real_mutant_full = build_real_mutant_full(mutant_rules, defaults)`）
 - [ ] 更新 `test_lhs_filter_analysis.py` 去重逻辑以匹配新算法（rtol=0.08 + 全局跨检查）
@@ -915,4 +960,4 @@ export NUMEXPR_NUM_THREADS=1
 
 ---
 
-**文档结束** | 最后更新: 2026-07-14 | 维护人: zsy
+**文档结束** | 最后更新: 2026-07-17 | 维护人: zsy

@@ -44,11 +44,16 @@ class YeastDataModule(pl.LightningDataModule):
         self.adj_matrix = None
 
         self.fixed_samples_for_plot = None
+        self.is_mass_dataset = False
 
     def prepare_data(self):
         pass
 
     def setup(self, stage=None):
+        # v2.3: setup 幂等 —— al4pde 外层重训会多次 trainer.fit(datamodule=...),
+        # 若每次都重建数据集会抹掉 AL 追加的样本; 故仅首次真正构建。
+        if getattr(self, '_setup_done', False):
+            return
         raw_data, param_conds, mutant_names, num_params, pattern_labels = load_yeast_dataset_universal(self.dataset_path)
         self.pattern_labels = pattern_labels  # 🌟 新增：保存形态标签供 eval.py 使用
 
@@ -71,10 +76,30 @@ class YeastDataModule(pl.LightningDataModule):
 
         num_mutants, num_vars, T_STEPS = Y.shape
 
+        # ================================================================
+        #  数据集类型识别 (LHS 家族数据集 vs MASS 数据集)
+        #  - LHS 数据集: 合成样本名含 '_LHS_' 前缀 (如 3_cln1_cln2_KO_LHS_083),
+        #    按"母体家族"分层划分 (下方两级分层)。
+        #  - MASS 数据集 (mass_dataset_generator.py 生成): 合成样本名以 'MASS_' 开头
+        #    (如 MASS_00001), 无 '_LHS_' 家族结构; 真实突变体仍以原名保留 (如 1_WT_Glc)。
+        #    此时跳过家族分层, 仅按 Pattern 做宏观 train/val/test 划分。
+        #  两类数据集都严格将 real mutants 全部划入测试集 (test_real), 避免数据泄露;
+        #  归一化统计量也只用合成样本 (lhs_indices)。
+        # ================================================================
         lhs_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' in str(name)]
         real_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' not in str(name)]
 
-        print(f"📊 [数据划分成功] 提取到 LHS 训练样本: {len(lhs_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
+        # 无任何 '_LHS_' 样本但存在 'MASS_' 前缀样本 → 判定为 MASS 数据集,
+        # 用 'MASS_' 前缀区分合成训练样本与 real mutants (复用下游 lhs_indices 变量名)。
+        self.is_mass_dataset = (len(lhs_indices) == 0) and any(
+            str(name).startswith('MASS_') for name in mutant_names)
+        if self.is_mass_dataset:
+            lhs_indices = [i for i, name in enumerate(mutant_names) if str(name).startswith('MASS_')]
+            real_indices = [i for i, name in enumerate(mutant_names) if not str(name).startswith('MASS_')]
+            print(f"📊 [MASS 数据集] 合成训练样本(MASS_*): {len(lhs_indices)} 个 | "
+                  f"真实测试突变体: {len(real_indices)} 个 (跳过 LHS 家族分层, 仅按 Pattern 宏观划分)")
+        else:
+            print(f"📊 [数据划分成功] 提取到 LHS 训练样本: {len(lhs_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
 
         if len(real_indices) == 0:
             print("⚠️ 警告: 未在数据集中发现任何真实评估样本！自动切出最后 10 个样本作为测试集。")
@@ -90,11 +115,16 @@ class YeastDataModule(pl.LightningDataModule):
         np.random.seed(self.seed)
 
         # 第一级：按突变体家族分组（提取 _LHS_ 前的前缀）
+        # MASS 数据集无家族结构 → 跳过家族分层: 将全部 MASS 合成样本归为单一分组 'MASS',
+        # 后续仍按 Pattern 子组做宏观 train/val/test 划分 (保留 Pattern 分层 + 孤本保护)。
         family_groups = {}
-        for idx in lhs_indices:
-            name = str(mutant_names[idx])
-            family = name.split('_LHS_')[0] if '_LHS_' in name else name
-            family_groups.setdefault(family, []).append(idx)
+        if self.is_mass_dataset:
+            family_groups['MASS'] = list(lhs_indices)
+        else:
+            for idx in lhs_indices:
+                name = str(mutant_names[idx])
+                family = name.split('_LHS_')[0] if '_LHS_' in name else name
+                family_groups.setdefault(family, []).append(idx)
 
         train_idx_lhs = []
         val_idx_lhs = []
@@ -226,6 +256,7 @@ class YeastDataModule(pl.LightningDataModule):
         self._val_idx_lhs = val_idx_lhs
         self._test_idx_lhs = test_idx_lhs
         self._test_idx_real = test_idx_real
+        self._setup_done = True
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset_lhs, batch_size=self.batch_size_lhs,

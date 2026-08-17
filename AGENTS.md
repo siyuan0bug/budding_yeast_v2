@@ -132,7 +132,14 @@ budding_yeast_v2/
 ├── data/
 │   ├── yeast_datamodule.py             # ⭐ DataModule：加载/划分/归一化/画图样本
 │   ├── dataset_utils.py                # npz 加载器
-│   └── lhs_v1_origin.py                # ⭐ ODE 真值引擎（solve_ivp + LHS 采样 + 事件重置）
+│   ├── lhs_v1_origin.py                # ⭐ ODE 真值引擎（solve_ivp + LHS 采样 + 事件重置）
+│   ├── lhs_v1_origin_v2.py ~ v6.py     # v2-v6 数据集生成器（v5 被 al_callback 用于候选池采样）
+│   ├── lhs_v1_origin_no_filter.py      # 无过滤版 LHS 采样
+│   ├── lhs_v1_origin_guaranteed.py     # 保底采样版（强制生成目标数量）
+│   ├── lhs_v0.py                       # v0 基线采样器（无 target 定向）
+│   ├── lhs_v1.py                       # v1 采样器（基础 LHS + 等价碰撞拦截）
+│   ├── test_lhs_filter_analysis.py     # LHS 采样过滤阶段损失分析工具
+│   └── DATASET_GENERATION_GUIDE.md     # 数据集生成完整指南（含死锁防护说明）
 └── utils/
     ├── al_callback.py                  # ⭐ 主动学习回调（13 种策略：池化/查询合成/al4pde 框架）
     ├── losses.py                       # 损失注册表 + curriculum 权重
@@ -198,12 +205,13 @@ budding_yeast_v2/
 
 ## 7. 数据流水线
 
-### 7.1 数据生成（lhs_v1_origin.py）
+### 7.1 数据生成（lhs_v1_origin.py + v5 算法）
 - `eqns(t, y, p)`：39 维 ODE 右端函数（出芽酵母细胞周期模型，~140 个参数）。
-- `simulate_mutant(name, param_overrides)`：用 `scipy.integrate.solve_ivp` 积分，处理 4 个 terminal events（见第 9 节），返回 `(name, y_uniform, bio_label, pattern_label)`。
+- `simulate_mutant(name, param_overrides)`：用 `scipy.integrate.solve_ivp`（BDF）积分，处理 4 个 terminal events（见第 9 节），返回 `(name, y_uniform, bio_label, pattern_label)`。**内嵌 SIGALRM 硬超时兜底**（`SIM_TIMEOUT=5.0s`），防止病态参数导致 BDF 求解器卡死在 Fortran 层（见 12.9）。
 - `generate_lhs_tasks(n)` / `generate_local_lhs_tasks(target_mutants, perturbation)`：LHS 采样生成参数组合。
 - `mutant_rules`：突变体规则字典（参数覆盖）。
 - `get_default_params()`：默认参数，`PARAM_KEYS = sorted([k for k in _defaults.keys() if k != 'is_mutant_104'])` 得到 141 维。
+- **v5 采样算法**（[lhs_v1_origin_v5.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/lhs_v1_origin_v5.py)）：`generate_lhs_tasks_v5`（普通 LHS）+ `generate_targeted_lhs_tasks`（target 定向 LHS），被 `al_callback._generate_param_only_pool` 调用生成 al4pde/maal 候选池参数（每个非纯 WT 突变体 1000 普通 + 1000 target = 2000 样本，再与 126 个 Real Mutant 去重）。⚠️ **采样种子基于 `int(time.time()*1000)%2**32`**（3 处：lines 582/753/1377），导致每次运行候选池不同——diversity 与 maal 即使代码相同，也可能因种子差异一个幸运通过、另一个撞到病态参数卡死。
 
 ### 7.2 归一化方案（详见 [normalization_scheme.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/normalization_scheme.md)）
 | 数据 | 算法 | 统计量来源 |
@@ -313,8 +321,14 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 - **配置**：初始训练集 15000（v1 LHS 常规样本 K-Means）+ AL 50000（每 4 epoch 触发，50 轮 × 1000 样本）= 总 65000。
 - **候选池**：v5 数据集排除 126 Real Mutant 后的 ~162,008 样本（含 54,619 target `_LHS_T` + 107,389 普通 LHS `_LHS_`）。
 - **内存优化**：候选池只加载 `P_norm` + `Y_IC` + `mutant_names` 到内存（~0.12GB），完整 `Y` 按需从磁盘加载（`_load_full_Y_from_disk`），避免 12GB 常驻内存。
-- **MAAL target_priority**（`_map_family_priority`）：3D 加权 `0.5×MAE百分位排名 + 0.3×参数空间距离 + 0.2×家族覆盖度`，需 `--al_target_weight`（默认 0.4）。
+- **MAAL target_priority**（`_map_family_priority_train_based`）：3D 加权 `0.5×MAE百分位排名 + 0.3×参数空间距离 + 0.2×家族覆盖度`，需 `--al_target_weight`（默认 0.4）。
 - **关键参数**：`--al_pool_dataset`（v5 路径）、`--al_initial_train_size 15000`、`--al_target_weight 0.4`。
+- **ODE 仿真防护**（[al_callback.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py)）：al4pde_diversity/maal 在初始化时调用 `_precompute_pool_ode_shape_features` 对 ~135,700 个候选池样本并行 ODE 仿真（32 worker `ProcessPoolExecutor`），三层防卡死：
+  1. **SIGALRM 硬超时**（在 `simulate_mutant` 内，5s 触发 `TimeoutError`，详见 12.9）
+  2. **`f.result(timeout=SIM_TIMEOUT+30)`** 进程级兜底（35s，`except FutureTimeoutError` 跳过该样本）—— 因为 SIGALRM 在极少数 Fortran 死锁下可能仍无法中断，需 future 层兜底
+  3. **`solve_single_mutant_bridge` try/except** 捕获所有异常返回 None
+- **ODE 仿真进度显示**：3 处 ProcessPoolExecutor 收集循环（候选池预计算 / 物理验证 / 选中样本仿真）均用 `done % max(1, N//10) == 0 or done == N` 打印 ~10 行进度（`ODE 仿真进度: x/N (xx%)`），避免长时间无输出难以判断是否卡死。
+- **`_train_idx_lhs` / `_mutant_names` 同步**（详见 12.10）：AL 初始化替换 `dm.train_dataset_lhs` 为 15000 子集时，必须同步 `dm._train_idx_lhs = dm._train_idx_lhs[selected_idx]`；AL 触发新增候选池样本时，必须追加 `dm._mutant_names` 和 `dm._train_idx_lhs`。否则 `_map_family_priority_train_based` 用 42661 长度的索引取 15000 长度的名字数组会 `IndexError: index 15000 is out of bounds for axis 0 with size 15000`。
 - **实验结论**（详见 [eval_result/AL4PDE_V2_EVAL_REPORT.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/eval_result/AL4PDE_V2_EVAL_REPORT.md)）：V2 配置（65000 样本）比 V1 配置（15000 样本）Real MAE 改善 49-61%；4 策略中 **random 最优**（Real MAE 0.0976），diversity 最差（0.2725）；cdc20_ts 系列是 diversity/maal 的灾难区（MAE>1.6），random 能命中（MAE 0.07-0.12）。
 
 ---
@@ -357,6 +371,37 @@ v1 的三个致命问题（`lambda_phys=1.0` 灾难性恶化、`lambda_penalty=1
 ### 12.8 注入 PYTHONPATH
 直接 `python train.py`（非通过 shell 脚本）时，若从仓库根目录运行，仍需 `export PYTHONPATH=$(pwd)/..:$PYTHONPATH`，否则 `budding_yeast_v2.` 导入失败。
 
+### 12.9 ODE BDF 死锁防护（三层超时）
+**问题**：`solve_ivp(method='BDF')` 在病态参数下会卡在 Fortran/C 层的步长缩减循环，Python 层的 `time.time()` 检查无法执行（GIL 被持有），导致 `ProcessPoolExecutor` 的 worker 永久挂起。maal 实验曾因此卡死 5 小时。
+
+**修复**（已应用到 10 个 lhs 脚本 + `al_callback.py`）：
+1. **SIGALRM 硬超时**（`lhs_v1_origin.simulate_mutant` 内）：`signal.alarm(SIM_TIMEOUT=5)` → 5s 后内核发信号中断系统调用 → `raise TimeoutError`。`finally` 块必须 `signal.alarm(0)` 取消，否则会误杀 `ProcessPoolExecutor` 复用 worker 的下一个 task。
+2. **`f.result(timeout=SIM_TIMEOUT+30)`** 进程级兜底（`al_callback.py` 3 处）：35s future 超时 → `except FutureTimeoutError` 跳过该样本。因为 SIGALRM 在极少数 Fortran 死锁下可能仍无法中断，需 future 层兜底。
+3. **`solve_single_mutant_bridge` try/except**：捕获所有异常返回 None，上层过滤掉 None。
+
+**注意事项**：
+- `from concurrent.futures import TimeoutError as FutureTimeoutError` —— 必须别名，避免与 Python 内置 `TimeoutError`（SIGALRM 抛出的）混淆。
+- 正常样本（<3s）零影响；病态样本 5s 被中断丢弃，日志会打印 `⚠️ 候选池样本 i 进程级超时,跳过`。
+- **进程状态判断**：`R+` = Running（健康），`S+`/`D+` = 可能卡死。用 `ps -o pid,stat,wchan:30,cmd -p <pid>` 查看。
+
+### 12.10 AL 训练集同步 `_train_idx_lhs` / `_mutant_names`
+**问题**：`YeastDataModule.setup()` 设置 `self._train_idx_lhs = train_idx_lhs`（42661 长度）和 `self._mutant_names`（全量名字）。AL 初始化（[al_callback.py L277-286](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py)）将 `dm.train_dataset_lhs` 替换为 15000 子集，但若不同步 `dm._train_idx_lhs`，后续 `_map_family_priority_train_based` 执行 `train_names = [dm._mutant_names[i] for i in dm._train_idx_lhs]` 会用 42661 长度的索引取 15000 长度的 `train_P_np`，导致 `IndexError: index 15000 is out of bounds for axis 0 with size 15000`。
+
+**修复**：
+- AL 初始化（L282-286）：`dm._train_idx_lhs = np.asarray(dm._train_idx_lhs)[selected_idx]`
+- AL 触发新增样本（L414-425）：`dm._mutant_names` 追加新名字，`dm._train_idx_lhs` 追加新索引（`np.arange(n_existing, n_existing+len(new_names))`）
+
+修改 AL 初始化或新增样本逻辑时，必须同步更新这两个属性，否则 IndexError 会在第一轮 AL 触发时出现。
+
+### 12.11 al4pde 候选池随机种子（不可复现）
+**问题**：`lhs_v1_origin_v5.py` 的 `generate_lhs_tasks_v5` / `generate_targeted_lhs_tasks` 用 `seed=int(time.time()*1000)%2**32`（3 处：L582/L753/L1377），导致每次运行生成的候选池参数不同。diversity 和 maal 共享完全相同的 `_generate_param_only_pool` 代码，但可能因种子差异一个幸运通过、另一个撞到病态参数卡死 5 小时。
+
+**影响**：
+- 同一策略不同 seed 的实验结果可能差异较大（候选池样本不同）
+- 无法精确复现 AL 实验结果
+
+**应对**：当前不做强制修复（time-based seed 有助于探索参数空间），但需在分析实验差异时考虑此因素。若需严格复现，需把 seed 改为固定值或从 `--al_pool_seed` 传入。
+
 ---
 
 ## 13. 扩展指南
@@ -396,4 +441,7 @@ v1 的三个致命问题（`lambda_phys=1.0` 灾难性恶化、`lambda_penalty=1
 - 关键参数与设计决策在代码中有详细 docstring，修改前先读注释。
 - `VARIABLE_NAMES`（39 项）与 `CORE_9_INDICES`（9 个核心变量索引）在多处复用，保持一致。
 - `.gitignore` 已忽略 `*.npz *.npy *.csv *.png` 及各类结果目录——不要提交数据/产物文件。
-- 参考文档：[normalization_scheme.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/normalization_scheme.md)（归一化方案对比）、[总结.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/总结.md)（v2 cheat 数据集说明）。
+- 参考文档：
+  - [DATASET_GENERATION_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/DATASET_GENERATION_GUIDE.md)（数据集生成完整指南：v0-v6 演进、target 定向采样、BLAS/BDF 死锁修复、SIGALRM 硬超时兜底）
+  - [normalization_scheme.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/normalization_scheme.md)（归一化方案对比）
+  - [总结.md](file:///home/users/zsy/trae_workspace/budding_yeast_v2/总结.md)（v2 cheat 数据集说明）。

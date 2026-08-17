@@ -1,0 +1,1742 @@
+import numpy as np
+from scipy.integrate import solve_ivp
+from scipy.interpolate import interp1d
+from scipy.stats import qmc
+import concurrent.futures
+import time
+import os
+import signal
+import warnings
+
+warnings.filterwarnings("ignore") # 忽略 ODE 求解中常见的除零或精度警告
+
+# ======================================================================
+# V5_boundary 版本变更说明 (基于 V5)
+# ----------------------------------------------------------------------
+# 目标：将所有家族的 target 采样类型统一更改为 boundary 模式（0 值邻域
+# 采样策略），完全废弃 density 采样方式。保持 V5 扩展家族配置 (mutant 列表、
+# num_per_mutant、perturbation) 完全不变，仅修改采样逻辑。
+#
+# 与 V5 的关系：V5_boundary 是 V5 的 boundary 变体，扩展家族配置 (mutant
+# 列表、num_per_mutant、perturbation 数值) 与 V5 完全一致，差异仅在 mode
+# 字段：V5 部分 density / 部分 boundary (带 boundary_params)，V5_boundary
+# 全部统一为 boundary (无 boundary_params)。
+#
+# 主要变更：
+# 1. DEFAULT_TARGET_FAMILIES / V5_EXPANSION_FAMILIES 所有家族 mode 统一
+#    改为 'boundary'，并移除 boundary_params / anchor_params 等字段
+# 2. generate_targeted_lhs_tasks 的连续参数采样逻辑重写：
+#    所有突变连续参数的采样范围统一为 [0, center_val * (1 + pert)]，
+#    覆盖从完全敲除 (0) 到过表达 (1+pert) 的全范围，强制 0 值邻域覆盖
+# 3. CDH1 boundary 采样方案：
+#    - 物理意义：活性 (init_CDH1) = 总数 (init_CDH1T) × 比例
+#    - 边界覆盖：新增 (0.0, 0.0) 完全敲除对，与现有 cdh1_pairs 池混合采样
+#    - 既保留强绑定生物学约束，又显式覆盖 (0,0) 边界
+# 4. BUB2 boundary 采样方案：
+#    - 物理意义：浓度 (init_BUB2) 与活性 (BUB2_active) 同频缩放
+#    - 边界覆盖：在原有 [0, 1.5] LHS 系数基础上，强制保证小邻域 0 边界覆盖
+#      (coeff 上限保持 1.5, LHS 在 [0, 1.5] 天然覆盖 0；额外混合 (0,0) 对)
+# 5. 离散参数 (mdt, ESP1T, is_mutant_104, Tem1T, Cdc15T) 维持原采样方式
+#    不应用 boundary 采样
+# 6. 与 V5 其他功能模块完全兼容，仅修改 target 采样相关逻辑
+# ======================================================================
+
+# ==========================================
+# 去重防泄漏算法（v6 版内联实现）
+# ==========================================
+DEDUP_RTOL = 0.08  # 近重复剔除相对阈值（与 analyze_samples.py 严格一致）
+
+
+def build_real_mutant_full(mutant_rules, defaults):
+    """构建全部 real mutant 的完整参数向量 {name: full_dict}。"""
+    real_mutant_full = {}
+    for rm_name, rm_rules in mutant_rules.items():
+        rm_full = dict(defaults)
+        rm_full.update(rm_rules)
+        real_mutant_full[rm_name] = rm_full
+    return real_mutant_full
+
+
+def build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, mutated_set):
+    """预筛：哪些 real mutant 可能被当前家族样本接近。"""
+    candidates = []
+    for rm_name, rm_full in real_mutant_full.items():
+        is_cand = True
+        for rp, rv in mutant_rules[rm_name].items():
+            if rp in mutated_set:
+                continue
+            d = defaults.get(rp, 0.0)
+            ea = max(1e-6, d * DEDUP_RTOL) if d == 0.0 else 1e-6
+            if not np.isclose(d, rv, rtol=DEDUP_RTOL, atol=ea):
+                is_cand = False
+                break
+        if is_cand:
+            candidates.append((rm_name, rm_full))
+    return candidates
+
+
+def is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+    """近母体检查：所有突变参数在母体值 8% 以内 → 返回 True（应丢弃）。
+    零值参数(KO)用 max(1e-6, default*0.08) 作 atol。"""
+    for p_name in mutated_params:
+        orig = original_rules[p_name]
+        eff_atol = max(1e-6, defaults.get(p_name, 0.0) * DEDUP_RTOL) if orig == 0.0 else 1e-6
+        if not np.isclose(sample_dict[p_name], orig, rtol=DEDUP_RTOL, atol=eff_atol):
+            return False
+    return True
+
+
+def is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+    """全局跨 real+WT 检查：接近任一 real mutant → 返回 True（应丢弃）。"""
+    for rm_name, rm_full in cross_check_candidates:
+        near_this = True
+        for p_name in mutated_params:
+            rv = rm_full[p_name]
+            ea = max(1e-6, defaults.get(p_name, 0.0) * DEDUP_RTOL) if rv == 0.0 else 1e-6
+            if not np.isclose(sample_dict[p_name], rv, rtol=DEDUP_RTOL, atol=ea):
+                near_this = False
+                break
+        if near_this:
+            return True
+    return False
+
+# ==========================================
+# 0. 全局配置参数
+# ==========================================
+SIM_TF = int(os.environ.get("SIM_TF", 210))       # 模拟总时长 (min)
+SIM_STEPS = int(os.environ.get("SIM_STEPS", 500)) # 采样总步数
+NUM_LHS_SAMPLES = 1000  # LHS 采样数量
+SIM_TIMEOUT = 5.0 # 单个细胞求解超时阈值 (秒)
+
+# v5_boundary 数据集输出目录 (V5_boundary: V5 扩展家族配置不变, target 采样统一为 boundary 0 值邻域模式)
+OUTPUT_DIR = "/home/users/zsy/mydata/budding_yeast"
+DATASET_NAME = f"lhs_cheat_origin_v5_boundary_{SIM_TF}min_{SIM_STEPS}steps_dual_labels.npz"
+DATASET_PATH = os.path.join(OUTPUT_DIR, DATASET_NAME)
+
+# ==========================================
+# 🌟 严格离散保护名单 (全自动拦截器)
+# ==========================================
+DISCRETE_STRICT_PARAMS = [
+    'init_CDH1T', 'init_CDH1', 
+    'mdt', 'BUB2_active', 'init_BUB2', 'is_mutant_104', 'ESP1T'
+]
+
+# ==========================================
+# 1. 变量映射与基础设定
+# ==========================================
+(nMASS, nCLN2, nCLB2, nCLB5, nSIC1, nCDC6, nC2, nC5, nF2, nF5, nSIC1P, nC2P, nC5P, 
+ nCDC6P, nF2P, nF5P, nSWI5T, nSWI5, nIEP, nCDC20T, nCDC20, nCDH1T, nCDH1, nCDC14T, 
+ nCDC14, nNET1T, nNET1, nRENT, nTEM1, nCDC15, nPPX, nPDS1, nESP1, nORI, nBUD, nSPN, 
+ nVi20, nlte1, nBUB2) = range(39)
+
+def initial_conds():
+    y0 = np.zeros(39)
+    y0[nMASS]  = 1.2060194; y0[nCLN2]  = 0.0652511; y0[nCLB2]  = 0.1469227; y0[nCLB5]  = 0.0518041
+    y0[nSIC1]  = 0.0228776; y0[nCDC6]  = 0.1075804; y0[nC2]    = 0.2384047; y0[nC5]    = 0.0700814
+    y0[nF2]    = 0.2360586; y0[nF5]    = 7.24514e-5;y0[nSIC1P] = 0.0064101; y0[nC2P]   = 0.0240340
+    y0[nC5P]   = 0.0068783; y0[nCDC6P] = 0.0154863; y0[nF2P]   = 0.0273938; y0[nF5P]   = 7.90633e-6
+    y0[nSWI5T] = 0.9764602; y0[nSWI5]  = 0.9561624; y0[nIEP]   = 0.1015391; y0[nCDC20T]= 1.9163399
+    y0[nCDC20] = 0.4442965; y0[nCDH1T] = 1.0;       y0[nCDH1]  = 0.9304992; y0[nCDC14T]= 2.0
+    y0[nCDC14] = 0.4683439; y0[nNET1T] = 2.7999999; y0[nNET1]  = 0.0186456; y0[nRENT]  = 1.0495476
+    y0[nTEM1]  = 0.9038969; y0[nCDC15] = 0.6565329; y0[nPPX]   = 0.1231788; y0[nPDS1]  = 0.0256123
+    y0[nESP1]  = 0.3013133; y0[nORI]   = 0.0009094; y0[nBUD]   = 0.0084734; y0[nSPN]   = 0.0305621
+    y0[nVi20]  = 0.0099999; y0[nlte1]  = 0.1000000; y0[nBUB2]  = 0.2000000
+    return y0
+
+def get_default_params():
+    return {
+        'B0':0.054, 'C0':0.4, 'Dn3':1.0, 'Jn3':6.0, 'ksn2p':0.0, 'ksn2pp':0.15, 'kdn2':0.12,
+        'esbfn2':2.0, 'esbfn3':10.0, 'esbfb5':2.0, 'kasbf':0.38, 'kisbfp':0.6, 'kisbfpp':8.0, 'Jasbf':0.01, 'Jisbf':0.01,
+        'ksb2p':0.001, 'ksb2pp':0.04, 'kdb2p':0.003, 'kdb2pp':0.4, 'kdb2P':0.15, 'kamcm':1.0, 'kimcm':0.15, 'Jamcm':0.1, 'Jimcm':0.1,
+        'ksb5p':0.0008, 'ksb5pp':0.005, 'kdb5p':0.01, 'kdb5pp':0.16, 'ksc1p':0.012, 'ksc1pp':0.12, 'kd1c1':0.01, 'kd2c1':1.0, 'Jd2c1':0.05,
+        'ec1k2':0.03, 'ec1n2':0.06, 'ec1b5':0.1, 'ec1b2':0.45, 'ec1n3':0.3, 'kasb2':50.0, 'kdib2':0.05, 'kasb5':50.0, 'kdib5':0.06,
+        'kd3c1':1.0, 'kppc1':4.0, 'ksf6p':0.024, 'ksf6pp':0.12, 'ksf6ppp':0.004, 'kd1f6':0.01, 'kd2f6':1.0, 'Jd2f6':0.05,
+        'ef6k2':0.03, 'ef6n2':0.06, 'ef6b5':0.1, 'ef6b2':0.55, 'ef6n3':0.0, 'kasf2':15.0, 'kdif2':0.5, 'kasf5':0.01, 'kdif5':0.01,
+        'kd3f6':1.0, 'kppf6':4.0, 'ksswip':0.005, 'ksswipp':0.08, 'kdswi':0.08, 'kaswi':2.0, 'kiswi':0.05,
+        'kaiep':0.1, 'kiiep':0.15, 'Jaiep':0.1, 'Jiiep':0.1, 'ks20p':0.006, 'ks20pp':0.6, 'kd20':0.3, 'ka20p':0.05, 'ka20pp':0.2, 'ki20p':0.01, 'ki20pp':8.0,
+        'kscdh':0.01, 'kdcdh':0.01, 'kacdhp':0.01, 'kacdhpp':0.8, 'Jicdh':0.03, 'Jacdh':0.03, 'kicdhp':0.001, 'kicdhpp':0.08, 
+        'eicdhn2':0.4, 'eicdhn3':0.25, 'eicdhb5':8.0, 'eicdhb2':1.2, 'ks14':0.2, 'kd14':0.1, 'ksnet':0.084, 'kdnet':0.03,
+        'kasrent':200.0, 'kasrentp':1.0, 'kdirent':1.0, 'kdirentp':2.0, 'kppnetp':0.05, 'kppnetpp':3.0, 'kkpnetp':0.01, 'kkpnetpp':0.6,
+        'kspdsp':0.0, 'ks1pdspp':0.03, 'ks2pdspp':0.055, 'kd1pdsp':0.01, 'kd2pdspp':0.2, 'kd3pdspp':0.04, 'kasesp':50.0, 'kdiesp':0.5, 'ESP1T':1.0,
+        'ksppx':0.1, 'Jpds':0.04, 'kdppxp':0.17, 'kdppxpp':2.0, 'J20ppx':0.15, 'ksori':2.0, 'kdori':0.06, 'eorib5':0.9, 'eorib2':0.45,
+        'ksbud':0.2, 'kdbud':0.06, 'ebudn2':0.25, 'ebudn3':0.05, 'ebudb5':1.0, 'ksspn':0.1, 'kdspn':0.06, 'Jspn':0.14,
+        'Tem1T':1.0, 'jatem':0.1, 'Jitem':0.1, 'Cdc15T':1.0, 'ka15p':0.002, 'ka15pp':1.0, 'ka15P':0.001, 'ki15':0.5,
+        'mdt': 90.0, 'Vi20_active': 8.0, 'BUB2_active': 1.0  
+    }
+
+def GK(Va, Vi, Ja, Ji):
+    BB = Vi - Va + Ja * Vi + Ji * Va
+    return 2 * Ji * Va / (BB + np.sqrt(BB**2 - 4 * (Vi - Va) * Ji * Va))
+
+def eqns(t, y, p):
+    dydt = np.zeros(39)
+    MASS, CLN2, CLB2, CLB5, SIC1, CDC6, C2, C5, F2, F5, SIC1P, C2P, C5P, CDC6P, F2P, F5P, SWI5T, SWI5, IEP, CDC20T, CDC20, CDH1T, CDH1, CDC14T, CDC14, NET1T, NET1, RENT, TEM1, CDC15, PPX, PDS1, ESP1, ORI, BUD, SPN, Vi20, lte1, BUB2 = y
+    
+    kg = np.log(2) / p['mdt']
+    BCK2 = p['B0'] * MASS
+    CLN3 = p['C0'] * p['Dn3'] * MASS / (p['Jn3'] + p['Dn3'] * MASS)
+    SIC1T = SIC1 + C2 + C5 + SIC1P + C2P + C5P
+    CDC6T = CDC6 + F2 + F5 + CDC6P + F2P + F5P
+    RENTP = CDC14T - RENT - CDC14
+    NET1P = NET1T - NET1 - CDC14T + CDC14
+    PE = p['ESP1T'] - ESP1
+    
+    Vasbf = p['kasbf'] * (p['esbfn2']*CLN2 + p['esbfn3']*(CLN3+BCK2) + p['esbfb5']*CLB5)
+    Vdb2 = p['kdb2p'] + p['kdb2pp']*CDH1 + p['kdb2P']*CDC20
+    Vdb5 = p['kdb5p'] + p['kdb5pp']*CDC20
+    Vkpc1 = p['kd1c1'] + p['kd2c1']*(p['ec1n3']*CLN3 + p['ec1k2']*BCK2 + p['ec1n2']*CLN2 + p['ec1b2']*CLB2 + p['ec1b5']*CLB5)/(p['Jd2c1'] + SIC1T)
+    Vppc1 = p['kppc1']*CDC14
+    Vkpf6 = p['kd1f6'] + p['kd2f6']*(p['ef6n3']*CLN3 + p['ef6k2']*BCK2 + p['ef6n2']*CLN2 + p['ef6b2']*CLB2 + p['ef6b5']*CLB5)/(p['Jd2f6'] + CDC6T)
+    Vppf6 = p['kppf6']*CDC14
+    Vaiep = p['kaiep']*CLB2
+    Vacdh = p['kacdhp'] + p['kacdhpp']*CDC14
+    Vicdh = p['kicdhp'] + p['kicdhpp']*(p['eicdhn3']*CLN3 + p['eicdhn2']*CLN2 + p['eicdhb5']*CLB5 + p['eicdhb2']*CLB2)
+    Vppnet = p['kppnetp'] + p['kppnetpp']*PPX
+    Vkpnet = (p['kkpnetp'] + p['kkpnetpp']*CDC15)*MASS
+    Vdpds = p['kd1pdsp'] + p['kd2pdspp']*CDC20 + p['kd3pdspp']*CDH1
+    Vdppx = p['kdppxp'] + p['kdppxpp']*(p['J20ppx']+CDC20)*p['Jpds']/(p['Jpds']+PDS1)
+    
+    SBF = GK(Vasbf, p['kisbfp']+p['kisbfpp']*CLB2, p['Jasbf'], p['Jisbf'])
+    MCM1 = GK(p['kamcm']*CLB2, p['kimcm'], p['Jamcm'], p['Jimcm'])
+    actual_ksc1p = 0.012 * 3 if (p.get('is_mutant_104') and t >= 180.0) else p['ksc1p']
+    
+    dydt[0] = kg * MASS
+    dydt[1] = (p['ksn2p'] + p['ksn2pp']*SBF)*MASS - p['kdn2']*CLN2
+    dydt[2] = (p['ksb2p'] + p['ksb2pp']*MCM1)*MASS + (p['kd3c1']*C2P + p['kd3f6']*F2P) + (p['kdib2']*C2 + p['kdif2']*F2) - (Vdb2 + p['kasb2']*SIC1 + p['kasf2']*CDC6)*CLB2
+    dydt[3] = (p['ksb5p'] + p['ksb5pp']*SBF)*MASS + (p['kd3c1']*C5P + p['kd3f6']*F5P) + (p['kdib5']*C5 + p['kdif5']*F5) - (Vdb5 + p['kasb5']*SIC1 + p['kasf5']*CDC6)*CLB5
+    dydt[4] = (actual_ksc1p + p['ksc1pp']*SWI5) + (Vdb2*C2 + Vdb5*C5) + (p['kdib2']*C2 + p['kdib5']*C5) + Vppc1*SIC1P - (p['kasb2']*CLB2 + p['kasb5']*CLB5 + Vkpc1)*SIC1
+    dydt[5] = (p['ksf6p'] + p['ksf6pp']*SWI5 + p['ksf6ppp']*SBF) + (Vdb2*F2 + Vdb5*F5) + (p['kdif2']*F2 + p['kdif5']*F5) + Vppf6*CDC6P - (p['kasf2']*CLB2 + p['kasf5']*CLB5 + Vkpf6)*CDC6
+    dydt[6] = p['kasb2']*CLB2*SIC1 + Vppc1*C2P - (p['kdib2'] + Vdb2 + Vkpc1)*C2
+    dydt[7] = p['kasb5']*CLB5*SIC1 + Vppc1*C5P - (p['kdib5'] + Vdb5 + Vkpc1)*C5
+    dydt[8] = p['kasf2']*CLB2*CDC6 + Vppf6*F2P - (p['kdif2'] + Vdb2 + Vkpf6)*F2
+    dydt[9] = p['kasf5']*CLB5*CDC6 + Vppf6*F5P - (p['kdif5'] + Vdb5 + Vkpf6)*F5
+    dydt[10] = Vkpc1*SIC1 - (Vppc1 + p['kd3c1'])*SIC1P + Vdb2*C2P + Vdb5*C5P
+    dydt[11] = Vkpc1*C2 - (Vppc1 + p['kd3c1'] + Vdb2)*C2P
+    dydt[12] = Vkpc1*C5 - (Vppc1 + p['kd3c1'] + Vdb5)*C5P
+    dydt[13] = Vkpf6*CDC6 - (Vppf6 + p['kd3f6'])*CDC6P + Vdb2*F2P + Vdb5*F5P
+    dydt[14] = Vkpf6*F2 - (Vppf6 + p['kd3f6'] + Vdb2)*F2P
+    dydt[15] = Vkpf6*F5 - (Vppf6 + p['kd3f6'] + Vdb5)*F5P
+    dydt[16] = p['ksswip'] + p['ksswipp']*MCM1 - p['kdswi']*SWI5T
+    dydt[17] = p['ksswip'] + p['ksswipp']*MCM1 + p['kaswi']*CDC14*(SWI5T - SWI5) - (p['kiswi']*CLB2 + p['kdswi'])*SWI5
+    dydt[18] = Vaiep*(1 - IEP)/(p['Jaiep'] + 1 - IEP) - p['kiiep']*IEP/(p['Jiiep'] + IEP)
+    dydt[19] = (p['ks20p'] + p['ks20pp']*MCM1) - p['kd20']*CDC20T
+    dydt[20] = (p['ka20p'] + p['ka20pp']*IEP)*(CDC20T - CDC20) - (Vi20 + p['kd20'])*CDC20
+    dydt[21] = p['kscdh'] - p['kdcdh']*CDH1T
+    dydt[22] = p['kscdh'] - p['kdcdh']*CDH1 + Vacdh*(CDH1T - CDH1)/(p['Jacdh'] + CDH1T - CDH1) - Vicdh*CDH1/(p['Jicdh'] + CDH1)
+    dydt[23] = p['ks14'] - p['kd14']*CDC14T
+    dydt[24] = (p['kdirent']*RENT + p['kdirentp']*RENTP) - (p['kasrent']*NET1 + p['kasrentp']*NET1P)*CDC14 + p['ks14'] - p['kd14']*CDC14 + p['kdnet']*(RENT + RENTP)
+    dydt[25] = p['ksnet'] - p['kdnet']*NET1T
+    dydt[26] = p['kdirent']*RENT - p['kasrent']*NET1*CDC14 + Vppnet*NET1P - Vkpnet*NET1 + p['ksnet'] - p['kdnet']*NET1 + p['kd14']*RENT
+    dydt[27] = -p['kdirent']*RENT + p['kasrent']*NET1*CDC14 + Vppnet*RENTP - Vkpnet*RENT - (p['kd14'] + p['kdnet'])*RENT
+    dydt[28] = lte1*(p['Tem1T'] - TEM1)/(p['jatem'] + p['Tem1T'] - TEM1) - BUB2*TEM1/(p['Jitem'] + TEM1)
+    dydt[29] = (p['ka15p']*(p['Tem1T'] - TEM1) + p['ka15pp']*TEM1 + p['ka15P']*CDC14)*(p['Cdc15T'] - CDC15) - p['ki15']*CDC15
+    dydt[30] = p['ksppx'] - Vdppx*PPX
+    dydt[31] = (p['kspdsp'] + p['ks1pdspp']*SBF + p['ks2pdspp']*MCM1) + p['kdiesp']*PE - (Vdpds + p['kasesp']*ESP1)*PDS1
+    dydt[32] = -p['kasesp']*PDS1*ESP1 + (p['kdiesp'] + Vdpds)*PE
+    dydt[33] = p['ksori']*(p['eorib5']*CLB5 + p['eorib2']*CLB2) - p['kdori']*ORI
+    dydt[34] = p['ksbud']*(p['ebudn2']*CLN2 + p['ebudn3']*CLN3 + p['ebudb5']*CLB5) - p['kdbud']*BUD
+    dydt[35] = p['ksspn']*CLB2/(p['Jspn'] + CLB2) - p['kdspn']*SPN
+    dydt[36:39] = 0 
+    return dydt
+
+# ==========================================
+# 2. 离散事件与双重打标系统 
+# ==========================================
+def event1(t, y, p): return y[nCLB2] - 0.3
+event1.terminal = True; event1.direction = -1
+
+def event2(t, y, p): return y[nCLB2] + y[nCLB5] - 0.2
+event2.terminal = True; event2.direction = -1
+
+def event3(t, y, p): return y[nORI] - 1.0
+event3.terminal = True; event3.direction = 1
+
+def event4(t, y, p): return y[nSPN] - 1.0
+event4.terminal = True; event4.direction = 1
+
+def analyze_cell_viability_unified(event_history, bud_at_div, mass_at_div, max_mass, max_clb2):
+    if max_mass > 10.0:
+        return "Inviable: G1 Arrest" if max_clb2 < 0.2 else "Inviable: M-phase Arrest"
+            
+    if 1 not in event_history:
+        return "Inviable: G1 Arrest" if max_clb2 < 0.2 else "Inviable: M-phase Arrest"
+
+    div_indices = [i for i, e in enumerate(event_history) if e == 1]
+    last_div_idx = 0
+    for i, h_idx in enumerate(div_indices):
+        if bud_at_div[i] < 0.95: return "Inviable: Unbudded Division"
+        if mass_at_div[i] < 0.8: return "Inviable: Premature Division"
+            
+        cycle_events = event_history[last_div_idx:h_idx]
+        cleaned = []
+        for e in cycle_events:
+            if not cleaned or cleaned[-1] != e:
+                cleaned.append(e)
+                
+        if 3 not in cleaned or 4 not in cleaned: return "Inviable: Sequence Failure"
+        idx3, idx4 = cleaned.index(3), cleaned.index(4)
+        if idx3 > idx4: return "Inviable: Sequence Failure"
+        
+        if i > 0: 
+            if 2 not in cleaned: return "Inviable: Sequence Failure"
+            if cleaned.index(2) > idx3: return "Inviable: Sequence Failure"
+                
+        last_div_idx = h_idx + 1 
+    return "Viable"
+
+def analyze_mass_pattern(mass_curve):
+    diff = np.diff(mass_curve)
+    drop_indices = np.where(diff < -0.1)[0]
+    
+    valid_drops = 0
+    if len(drop_indices) > 0:
+        valid_drops = 1
+        last_drop = drop_indices[0]
+        for d in drop_indices[1:]:
+            if d - last_drop > 10: 
+                valid_drops += 1
+            last_drop = d
+            
+    if valid_drops >= 2: return "Pattern_A: Multi-Division (>=2)"
+    elif valid_drops == 1: return "Pattern_B: Single-Division (==1)"
+    else: return "Pattern_C: Exponential-Arrest (==0)"
+
+def build_discrete_pools(mutants_dict):
+    """自动扫描并构建单变量和成对变量的合法真值集合"""
+    defaults = get_default_params()
+    defaults.update({
+        'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 
+        'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False
+    })
+
+    single_pools = {p: set([defaults.get(p, 0.0)]) for p in DISCRETE_STRICT_PARAMS 
+                    if p not in ['init_CDH1T', 'init_CDH1', 'init_BUB2', 'BUB2_active']}
+    
+    cdh1_pairs = set([(defaults['init_CDH1T'], defaults['init_CDH1'])])
+    bub2_pairs = set([(defaults['init_BUB2'], defaults['BUB2_active'])])
+
+    for rules in mutants_dict.values():
+        for p in single_pools.keys():
+            if p in rules:
+                single_pools[p].add(rules[p])
+        
+        if 'init_CDH1T' in rules or 'init_CDH1' in rules:
+            val_T = rules.get('init_CDH1T', defaults['init_CDH1T'])
+            val_A = rules.get('init_CDH1', defaults['init_CDH1'])
+            cdh1_pairs.add((val_T, val_A))
+            
+        if 'init_BUB2' in rules or 'BUB2_active' in rules:
+            val_init = rules.get('init_BUB2', defaults['init_BUB2'])
+            val_act = rules.get('BUB2_active', defaults['BUB2_active'])
+            bub2_pairs.add((val_init, val_act))
+
+    single_pools = {p: list(v) for p, v in single_pools.items()}
+    return single_pools, list(cdh1_pairs), list(bub2_pairs)
+
+def simulate_mutant(mutant_name, param_overrides, tf=SIM_TF, num_steps=SIM_STEPS):
+    p = get_default_params()
+    y0 = initial_conds()
+    
+    for k, v in param_overrides.items():
+        if k == 'init_CDH1T': y0[nCDH1T] = v
+        elif k == 'init_CDH1': y0[nCDH1] = v
+        elif k == 'init_BUB2': y0[nBUB2] = v
+        else:
+            p[k] = v
+        
+    t_raw, y_raw = [0], [y0]
+    event_history = []
+    bud_at_div, mass_at_div = [], []
+
+    t0, loop_count = 0, 0
+    
+    # 1. 记录开始时间
+    start_cpu_time = time.time()
+    
+    # 2. SIGALRM 硬超时兜底：原 eqns_with_timeout 的 time.time() 检查在 BDF 卡于
+    #    Fortran/C 层时无法执行；SIGALRM 信号能中断系统调用与步长缩减循环。
+    #    finally 必须取消 alarm，否则会误杀 ProcessPoolExecutor 复用 worker 的下一个 task。
+    def _sigalrm_handler(signum, frame):
+        raise TimeoutError("ODE BDF Timeout (SIGALRM)")
+    _old_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
+    signal.alarm(max(1, int(SIM_TIMEOUT)))
+    try:
+        while t0 < tf and loop_count < 300:
+            loop_count += 1
+
+            # 3. 求解
+            sol = solve_ivp(eqns, [t0, tf], y0, args=(p,), method='BDF',
+                            events=[event1, event2, event3, event4],
+                            rtol=1e-4, atol=1e-6)
+
+            t_raw.extend(sol.t[1:])
+            y_raw.extend(sol.y.T[1:])
+
+            if sol.status == 1:
+                t0, y0 = sol.t[-1], sol.y[:, -1].copy()
+                ie = next((i+1 for i, te in enumerate(sol.t_events) if len(te) > 0 and np.isclose(te[-1], t0)), -1)
+
+                if ie != -1: event_history.append(ie)
+
+                if ie == 1:
+                    bud_at_div.append(y0[nBUD]); mass_at_div.append(y0[nMASS])
+                    y0[nBUD] = y0[nSPN] = 0
+                    kg = np.log(2) / p['mdt']
+                    y0[nMASS] = abs(1 + np.exp(-kg * ((1.026 / kg) - 32)) - 1) * y0[nMASS]
+                    y0[nlte1] = 0.1; y0[nCLB2] -= 1e-6
+                elif ie == 2:
+                    y0[nORI] = 0; y0[nCLB5] -= 1e-6
+                elif ie == 3:
+                    y0[nVi20] = p['Vi20_active']; y0[nBUB2] = p['BUB2_active']; y0[nORI] += 1e-6
+                elif ie == 4:
+                    y0[nVi20] = 0.01; y0[nlte1] = 1.0;
+                    # 🌟🌟🌟 核心修复：防止 BUB2 在有丝分裂后期发生基因诈尸 🌟🌟🌟
+                    y0[nBUB2] = param_overrides.get('init_BUB2', 0.2)
+                    y0[nSPN] += 1e-6
+            else:
+                break
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, _old_handler)
+
+    t_raw, y_raw = np.array(t_raw), np.array(y_raw).T 
+    interpolator = interp1d(t_raw, y_raw, kind='linear', axis=1, fill_value="extrapolate")
+    y_uniform = interpolator(np.linspace(0, tf, num_steps))
+
+    max_mass = np.max(y_uniform[nMASS])
+    
+    # 只有在模拟时长 <= 210min 时才执行 mass 限制拦截
+    if SIM_TF <= 210 and max_mass > 10.0:
+        return mutant_name, None, "Discarded_Mass", None
+
+    bio_label = analyze_cell_viability_unified(event_history, bud_at_div, mass_at_div, np.max(y_uniform[nMASS]), np.max(y_uniform[nCLB2]))
+    pattern_label = analyze_mass_pattern(y_uniform[nMASS])
+    
+    return mutant_name, y_uniform, bio_label, pattern_label
+
+# ==========================================
+# 3. 核心突变体规则字典
+# ==========================================
+mutant_rules = {
+    '1_WT_Glc': {},
+    '2.1_WT_Gal': {'mdt': 150.0},
+    '2.2_WT_Raff': {'mdt': 160.0},
+    '3_cln1_cln2_KO': {'ksn2pp': 0.0},
+    '4_GAL_CLN2_cln1_cln2_KO': {'ksn2p': 0.12, 'ksn2pp': 0.0, 'mdt': 150.0},
+    '5_cln1_cln2_sic1_KO': {'ksn2pp': 0.0, 'ksc1p': 0.0, 'ksc1pp': 0.0},
+    '6_cln1_cln2_cdh1_KO': {'ksn2pp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '7_GAL_CLN2_cln1_cln2_cdh1_KO': {'ksn2p': 0.12, 'ksn2pp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'mdt': 150.0},
+    '8_cln3_KO': {'C0': 0.0},
+    '9_GAL_CLN3': {'C0': 0.4 * 5, 'mdt': 150.0},
+    '10_bck2_KO': {'B0': 0.0},
+    '11_multi_BCK2': {'B0': 0.054 * 5},
+    '12_cln1_cln2_bck2_KO': {'ksn2pp': 0.0, 'B0': 0.0},
+    '13_cln3_bck2_KO': {'C0': 0.0, 'B0': 0.0},
+    '14_cln3_bck2_GAL_CLN2_cln1_cln2': {'C0': 0.0, 'B0': 0.0, 'ksn2p': 0.12, 'ksn2pp': 0.0, 'mdt': 150.0},
+    '15_cln3_bck2_multi_CLN2': {'C0': 0.0, 'B0': 0.0, 'ksn2pp': 0.15 * 5},
+    '16_cln3_bck2_sic1_KO': {'C0': 0.0, 'B0': 0.0, 'ksc1p': 0.0, 'ksc1pp': 0.0},
+    '17_cln1_cln3_KO': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0}, 
+    '18_cln1_cln3_GAL_CLN2': {'ksn2p': 0.12, 'ksn2pp': 0.0, 'C0': 0.0, 'mdt': 150.0},
+    '19_cln1_cln2_cln3_GAL_CLN3': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.4 * 5, 'mdt': 150.0},
+    '20_cln1_cln2_cln3_sic1': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'ksc1p': 0.0, 'ksc1pp': 0.0},
+    '21_cln1_cln2_cln3_cdh1': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '22_cln1_cln2_cln3_multi_CLB5': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'ksb5p': 0.0008 * 4, 'ksb5pp': 0.005 * 4},
+    '23_cln1_cln2_cln3_GAL_CLB5': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'ksb5p': 0.0008 * 15, 'mdt': 150.0},
+    '24_cln1_cln2_cln3_multi_BCK2': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'B0': 0.054 * 10},
+    '25_cln1_cln2_cln3_GAL_CLB2': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'ksb2p': 0.001 * 2, 'mdt': 150.0},
+    '26_cln1_cln2_cln3_apc_ts': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'C0': 0.0, 'kscdh': 0.0, 'ks20p': 0.0, 'ks20pp': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '27_sic1_KO': {'ksc1p': 0.0, 'ksc1pp': 0.0},
+    '28_GAL_SIC1': {'ksc1p': 0.012 * 10, 'mdt': 150.0},
+    '29_GAL_SIC1_db': {'ksc1p': 0.012 * 10, 'kd3c1': 0.0, 'mdt': 150.0},
+    '30_GAL_SIC1_cln1_cln2': {'ksc1p': 0.012 * 10, 'ksn2pp': 0.0, 'mdt': 150.0},
+    '31_GAL_SIC1_GAL_CLN2_cln1_cln2': {'ksc1p': 0.012 * 10, 'ksn2p': 0.12, 'ksn2pp': 0.0, 'mdt': 150.0},
+    '32_GAL_SIC1_cln1_cln2_cdh1': {'ksc1p': 0.12, 'ksc1pp': 0.12, 'ksn2pp': 0.0, 'kscdh': 0.0, 'mdt': 150.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '33_GAL_SIC1_GAL_CLN2_cdh1': {'ksc1p': 0.12, 'ksn2p': 0.12, 'ksn2pp': 0.0, 'kscdh': 0.0, 'mdt': 150.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '34_cdh1_KO': {'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '35_Cdh1_constitutively_active': {'kicdhpp': 0.0, 'kscdh': 0.01 * 3, 'mdt': 150.0},
+    '36_sic1_cdh1': {'ksc1p': 0.0, 'ksc1pp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '37_sic1_cdh1_GAL_CDC20': {'ksc1p': 0.0, 'ksc1pp': 0.0, 'kscdh': 0.0, 'ks20p': 10.0, 'mdt': 150.0},
+    '38_cdc6_42_49': {'ksf6p': 0.0, 'ksf6pp': 0.0, 'ksf6ppp': 0.0},
+    '39_sic1_cdc6_42_49': {'ksc1p': 0.0, 'ksc1pp': 0.0, 'ksf6p': 0.0, 'ksf6pp': 0.0, 'ksf6ppp': 0.0},
+    '40_cdh1_cdc6_42_49': {'ksf6p': 0.0, 'ksf6pp': 0.0, 'ksf6ppp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '41_sic1_cdc6_cdh1': {'ksc1p': 0.0, 'ksc1pp': 0.0, 'kscdh': 0.0, 'ksf6p': 0.0, 'ksf6pp': 0.0, 'ksf6ppp': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '42_sic1_cdc6_cdh1_GAL_CDC20': {'ksc1p': 0.0, 'ksc1pp': 0.0, 'ksf6p': 0.0, 'ksf6pp': 0.0, 'ksf6ppp': 0.0, 'kscdh': 0.0, 'ks20p': 4.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'mdt': 150.0},
+    '43_swi5_KO': {'ksswip': 0.0, 'ksswipp': 0.0},
+    '44_swi5_GAL_CLB2': {'ksswip': 0.0, 'ksswipp': 0.0, 'ksb2p': 0.12, 'mdt': 150.0},
+    '45_swi5_cdh1': {'ksswip': 0.0, 'ksswipp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '46_swi5_cdh1_GAL_SIC1': {'ksswip': 0.0, 'ksswipp': 0.0, 'kscdh': 0.0, 'ksc1p': 0.012 * 10, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'mdt': 150.0},
+    '47_clb1_clb2_KO': {'ksb2p': 0.0, 'ksb2pp': 0.0},
+    '48_CLB1_clb2': {'ksb2p': 0.001 * 0.33, 'ksb2pp': 0.04 * 0.33},
+    '49_GAL_CLB2': {'ksb2p': 0.12, 'mdt': 150.0},
+    '50_multi_GAL_CLB2': {'ksb2p': 0.96, 'mdt': 150.0},
+    '51_CLB1_clb2_cdh1': {'ksb2p': 0.001 * 0.33, 'ksb2pp': 0.04 * 0.33, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '52_CLB1_clb2_pds1': {'ksb2p': 0.001 * 0.33, 'ksb2pp': 0.04 * 0.33, 'ks1pdspp': 0.0, 'ks2pdspp': 0.0},
+    '53_GAL_CLB2_sic1': {'ksb2p': 0.12, 'ksc1p': 0.0, 'ksc1pp': 0.0, 'mdt': 150.0},
+    '54_GAL_CLB2_cdh1': {'ksb2p': 0.12, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'mdt': 150.0},
+    '55_CLB2_db': {'kdb2P': 0.0, 'kdb2pp': 0.03},
+    '56_CLB2_db_Gal': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'mdt': 150.0},
+    '57_CLB2_db_multi_SIC1': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksc1p': 0.012 * 10, 'ksc1pp': 0.12 * 10},
+    '58_CLB2_db_GAL_SIC1': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksc1p': 0.012 * 10, 'mdt': 150.0},
+    '59_CLB2_db_multi_CDC6': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksf6p': 0.024 * 5, 'ksf6pp': 0.12 * 5, 'ksf6ppp': 0.004 * 5},
+    '60_CLB2_db_clb5': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksb5p': 0.0, 'ksb5pp': 0.0},
+    '61.1_CLB2_db_clb5_Gal': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksb5p': 0.0, 'ksb5pp': 0.0, 'mdt': 150.0},
+    '61.2_CLB2_db_clb5_Raff': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksb5p': 0.0, 'ksb5pp': 0.0, 'mdt': 160.0},
+    '62_GAL_CLB2_db': {'kdb2P': 0.0, 'kdb2pp': 0.03, 'ksb2pp': 0.12, 'mdt': 150.0},
+    '63_clb5_clb6_KO': {'ksb5p': 0.0, 'ksb5pp': 0.0},
+    '64_cln1_cln2_clb5_clb6': {'ksn2p': 0.0, 'ksn2pp': 0.0, 'ksb5p': 0.0, 'ksb5pp': 0.0},
+    '65_GAL_CLB5': {'ksb5p': 0.0008 * 15, 'mdt': 150.0},
+    '66_GAL_CLB5_sic1': {'ksb5p': 0.0008 * 15, 'ksc1p': 0.0, 'ksc1pp': 0.0, 'mdt': 150.0},
+    '67_GAL_CLB5_cdh1': {'ksb5p': 0.0008 * 10, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'mdt': 150.0},
+    '68_CLB5_db': {'kdb5pp': 0.0},
+    '69_CLB5_db_sic1': {'kdb5pp': 0.0, 'ksc1p': 0.0, 'ksc1pp': 0.0},
+    '70_CLB5_db_pds1': {'kdb5pp': 0.0, 'ks1pdspp': 0.0, 'ks2pdspp': 0.0},
+    '71_CLB5_db_pds1_cdc20': {'kdb5pp': 0.0, 'ks1pdspp': 0.0, 'ks2pdspp': 0.0, 'ks20p': 0.0, 'ks20pp': 0.0},
+    '72_GAL_CLB5_db': {'ksb5p': 0.0008 * 15, 'kdb5pp': 0.0, 'mdt': 150.0},
+    '73_cdc20_ts': {'ks20p': 0.0, 'ks20pp': 0.0},
+    '74_cdc20_clb5': {'ks20p': 0.0, 'ks20pp': 0.0, 'ksb5p': 0.0, 'ksb5pp': 0.0}, 
+    '75_cdc20_pds1': {'ks20p': 0.0, 'ks20pp': 0.0, 'ks1pdspp': 0.0, 'ks2pdspp': 0.0},
+    '76_cdc20_pds1_clb5': {'ks20p': 0.0, 'ks20pp': 0.0, 'ksb5p': 0.0, 'ksb5pp': 0.0, 'ks1pdspp': 0.0, 'ks2pdspp': 0.0},
+    '77_GAL_CDC20': {'ks20p': 6.0, 'mdt': 150.0},
+    '78_cdc20_ts_mad2': {'ks20p': 0.0, 'ks20pp': 0.0, 'Vi20_active': 0.01},
+    '79_cdc20_ts_bub2': {'ks20p': 0.0, 'ks20pp': 0.0, 'BUB2_active': 0.0, 'init_BUB2': 0.0},
+    '80_pds1_KO': {'ks1pdspp': 0.0, 'ks2pdspp': 0.0},
+    '81_esp1_ts': {'kasesp': 0.1, 'kdiesp': 0.002},
+    '82_PDS1_db': {'kd2pdspp': 0.0, 'kd3pdspp': 0.0},
+    '83_GAL_PDS1_db': {'kspdsp': 0.1, 'kd2pdspp': 0.0, 'kd3pdspp': 0.0, 'mdt': 150.0},
+    '84_GAL_PDS1_db_esp1_ts': {'kspdsp': 0.1, 'kd2pdspp': 0.0, 'kd3pdspp': 0.0, 'kasesp': 0.1, 'kdiesp': 0.002, 'mdt': 150.0},
+    '85_GAL_ESP1_cdc20_ts': {'ks20p': 0.0, 'ks20pp': 0.0, 'ESP1T': 3.0, 'mdt': 150.0}, 
+    '86_tem1_KO': {'ka15pp': 0.002, 'Tem1T': 0.0},
+    '87_GAL_TEM1': {'Tem1T': 5.0, 'mdt': 150.0},
+    '88_tem1_ts_multi_CDC15': {'ka15pp': 0.002, 'Tem1T': 0.0, 'Cdc15T': 5.0},
+    '89_tem1_ts_GAL_CDC15': {'ka15pp': 0.002, 'Tem1T': 0.0, 'Cdc15T': 15.0, 'mdt': 150.0},
+    '90_tem1_net1_ts': {'ka15pp': 0.002, 'Tem1T': 0.0, 'kasrent': 10.0, 'kasrentp': 0.05},
+    '91_tem1_ts_multi_CDC14': {'ka15pp': 0.002, 'Tem1T': 0.0, 'ks14': 0.4},
+    '92_cdc15_KO': {'kkpnetpp': 0.0, 'Cdc15T': 0.0},
+    '93_multi_CDC15': {'Cdc15T': 5.0},
+    '94_cdc15_ts_multi_TEM1': {'kkpnetpp': 0.0, 'Cdc15T': 0.0, 'Tem1T': 5.0},
+    '95_cdc15_net1_ts': {'kkpnetpp': 0.0, 'kasrentp': 0.05, 'kasrent': 10.0},
+    '96_cdc15_ts_multi_CDC14': {'kkpnetpp': 0.0, 'ks14': 0.4},
+    '97_net1_ts': {'kasrentp': 0.05, 'kasrent': 10.0},
+    '98_GAL_NET1': {'ksnet': 0.084 * 5, 'mdt': 150.0},
+    '99_cdc14_ts': {'ks14': 0.0},
+    '100_GAL_CDC14': {'ks14': 0.2 * 4, 'mdt': 150.0},
+    '101_GAL_NET1_GAL_CDC14': {'ksnet': 0.084 * 3, 'ks14': 0.2 * 3, 'mdt': 150.0},
+    '102_net1_cdc20_ts': {'kasrentp': 0.05, 'kasrent': 10.0, 'ks20p': 0.0, 'ks20pp': 0.0},
+    '103_cdc14_ts_GAL_SIC1': {'ks14': 0.0, 'ksc1p': 0.012 * 10, 'mdt': 150.0},
+    '104_cdc14_ts_then_GAL_SIC1': {'ks14': 0.0, 'is_mutant_104': True, 'mdt': 150.0}, 
+    '105_cdc14_ts_sic1': {'ksc1p': 0.0, 'ksc1pp': 0.0, 'kppc1': 0.64, 'kppf6': 0.64, 'kaswi': 0.32, 'kacdhpp': 0.128},
+    '106_cdc14_ts_cdh1': {'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'kppc1': 1.2, 'kppf6': 1.2, 'kaswi': 0.6, 'kacdhpp': 0.13},
+    '107_cdc14_ts_GAL_CLN2': {'ksn2p': 0.12, 'ksn2pp': 0.0, 'kppc1': 0.8, 'kppf6': 0.8, 'kaswi': 0.4, 'kacdhpp': 0.16, 'mdt': 150.0},
+    '108_TAB6_1': {'kasrentp': 0.05, 'kasrent': 10.0},
+    '109_TAB6_1_cdc15': {'kasrentp': 0.05, 'kasrent': 10.0, 'kkpnetpp': 0.0},
+    '110_TAB6_1_clb5_clb6': {'kasrentp': 0.05, 'kasrent': 10.0, 'ksb5p': 0.0, 'ksb5pp': 0.0},
+    '111_TAB6_1_CLB1_clb2': {'kasrentp': 0.05, 'kasrent': 10.0, 'ksb2p': 0.001 * 0.33, 'ksb2pp': 0.04 * 0.33},
+    '112_mad2_KO': {'Vi20_active': 0.01},
+    '113_bub2_KO': {'BUB2_active': 0.0, 'init_BUB2': 0.0},
+    '114_mad2_bub2': {'Vi20_active': 0.01, 'BUB2_active': 0.0, 'init_BUB2': 0.0},
+    '115_APC_A': {'ka20pp': 0.0},
+    '116_APC_A_cdh1': {'ka20pp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '117_APC_A_cdh1_Gal': {'ka20pp': 0.0, 'kscdh': 0.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0, 'mdt': 150.0},
+    '118_APC_A_cdh1_multi_SIC1': {'ka20pp': 0.0, 'kscdh': 0.0, 'ksc1p': 0.012 * 15, 'ksc1pp': 0.12 * 15, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '119_APC_A_cdh1_GAL_SIC1': {'ka20pp': 0.0, 'kscdh': 0.0, 'ksc1p': 0.012 * 20, 'mdt': 150.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '120_APC_A_cdh1_multi_CDC6': {'ka20pp': 0.0, 'kscdh': 0.0, 'ksf6p': 0.024 * 10, 'ksf6pp': 0.12 * 10, 'ksf6ppp': 0.004 * 10, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '121_APC_A_cdh1_GAL_CDC6': {'ka20pp': 0.0, 'kscdh': 0.0, 'ksf6p': 0.024 * 15, 'mdt': 150.0, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '122_APC_A_cdh1_multi_CDC20': {'ka20pp': 0.0, 'kscdh': 0.0, 'ks20p': 0.006 * 25, 'ks20pp': 0.6 * 25, 'init_CDH1T': 0.0, 'init_CDH1': 0.0},
+    '123_APC_A_sic1': {'ka20pp': 0.0, 'ksc1p': 0.0, 'ksc1pp': 0.0},
+    '124_APC_A_GAL_CLB2': {'ka20pp': 0.0, 'ksb2p': 0.48, 'mdt': 150.0}
+}
+
+# ==========================================
+# 4. 【对齐版】基于图谱拓扑与硬掩码的靶向 LHS 采样引擎
+# ==========================================
+def generate_lhs_tasks(num_lhs_samples):
+    # 1. 前置扫描：提取离散物理池与严格成对绑定池
+    single_pools, cdh1_pairs, bub2_pairs = build_discrete_pools(mutant_rules)
+    
+    defaults = get_default_params()
+    defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
+
+    # 全局跨检查预计算：构建全部真实突变体的完整参数向量
+    real_mutant_full = build_real_mutant_full(mutant_rules, defaults)
+
+    # 建立历史突变值记忆池 (仅用于推导连续参数极值)
+    all_historical_values = {}
+    for rules in mutant_rules.values():
+        for p_name, p_val in rules.items():
+            if p_name not in all_historical_values:
+                all_historical_values[p_name] = set()
+            all_historical_values[p_name].add(p_val)
+
+    lhs_tasks_dict = {}
+    pure_wt_mutants = ['1_WT_Glc', '2.1_WT_Gal', '2.2_WT_Raff']
+    
+    for m_name, original_rules in mutant_rules.items():
+        if m_name in pure_wt_mutants:
+            continue
+            
+        mutated_params = list(original_rules.keys())
+        if not mutated_params:
+            continue
+
+        # 全局跨检查预筛：当前家族 mutated_params 下，哪些真实突变体可能被接近
+        # 若突变体 B 的非共享突变参数远离 default，则样本（该参数=default）不可能接近 B
+        _mutated_set = set(mutated_params)
+        cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
+
+        # 根据全局保护名单剥离连续与离散变量 (废弃字符串匹配)
+        strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
+        continuous_mutated = [p for p in mutated_params if p not in DISCRETE_STRICT_PARAMS]
+        
+        # 标志位：是否触发 BUB2 同频连续缩放机制
+        has_bub2 = any(p in ['BUB2_active', 'init_BUB2'] for p in strict_mutated)
+        
+        # 🌟 智能截断逻辑：仅改变离散参数时，防生成几百个完全相同的无意义克隆
+        if not continuous_mutated and not has_bub2:
+            max_comb = 1
+            if 'init_CDH1T' in strict_mutated or 'init_CDH1' in strict_mutated: max_comb *= len(cdh1_pairs)
+            for p in strict_mutated:
+                if p not in ['init_CDH1T', 'init_CDH1', 'init_BUB2', 'BUB2_active'] and p in single_pools:
+                    max_comb *= len(single_pools[p])
+            actual_samples = min(num_lhs_samples, max(1, max_comb - 1))
+        else:
+            actual_samples = num_lhs_samples
+            
+        if actual_samples <= 0:
+            continue
+            
+        # 扩大采样候选池，以补充由于 "Identical Bug 拦截" 而被舍弃的样本空缺
+        candidate_count = actual_samples * 10
+        
+        # 生成连续变量矩阵
+        continuous_samples = {}
+        if continuous_mutated:
+            sampler = qmc.LatinHypercube(d=len(continuous_mutated), seed=int(time.time()*1000)%2**32)
+            lhs_matrix = sampler.random(n=candidate_count)
+            
+            for i, p_name in enumerate(continuous_mutated):
+                hist_vals = sorted(list(all_historical_values.get(p_name, set())))
+                def_val = defaults.get(p_name, 0.0)
+                
+                all_known_vals = hist_vals + [def_val]
+                min_val, max_val = min(all_known_vals), max(all_known_vals)
+                
+                # 去除原轨道4靶向注入，回归标准区间放缩
+                l_bound = 0.0 if min_val <= 0 else min_val * 0.1
+                u_bound = 0.01 if max_val <= 0 else max_val * 1.5
+                if u_bound <= l_bound:
+                    u_bound = l_bound + 0.01
+                    
+                continuous_samples[p_name] = l_bound + lhs_matrix[:, i] * (u_bound - l_bound)
+                
+        # BUB2 同频缩放系数 [0.0 ~ 1.5]
+        if has_bub2:
+            bub2_coeffs = qmc.LatinHypercube(d=1).random(n=candidate_count).flatten() * 1.5
+            np.random.shuffle(bub2_coeffs)
+            
+        # 组装任务与 Bug 拦截过滤
+        valid_samples_collected = 0
+        seen_configs = set()
+        
+        for k in range(candidate_count):
+            if valid_samples_collected >= actual_samples:
+                break
+                
+            sample_dict = {}
+            
+            # 1. 填装连续参数
+            for p_name in continuous_mutated:
+                sample_dict[p_name] = continuous_samples[p_name][k]
+                
+            # 2. 填装严格离散与成对参数 (废弃 endswith('T')，使用 Tuple Pair 保障绑定)
+            sampled_cdh1, sampled_bub2 = False, False
+            for dp in strict_mutated:
+                if dp in ['init_CDH1T', 'init_CDH1']:
+                    if not sampled_cdh1:
+                        # CDH1: 取出强绑定元组，等价实现 "活性=总数*比例" 的生物学限制
+                        pair = cdh1_pairs[np.random.choice(len(cdh1_pairs))]
+                        sample_dict['init_CDH1T'] = pair[0]
+                        sample_dict['init_CDH1'] = pair[1]
+                        sampled_cdh1 = True
+                elif dp in ['init_BUB2', 'BUB2_active']:
+                    if not sampled_bub2:
+                        # BUB2: 取出绑定元组后，施加保留特性的同频连续缩放系数
+                        pair = bub2_pairs[np.random.choice(len(bub2_pairs))]
+                        coeff = bub2_coeffs[k]
+                        sample_dict['init_BUB2'] = pair[0] * coeff
+                        sample_dict['BUB2_active'] = pair[1] * coeff
+                        sampled_bub2 = True
+                else:
+                    sample_dict[dp] = np.random.choice(single_pools[dp])
+                    
+            # 3. 未被突变的参数继承默认值
+            for p, val in original_rules.items():
+                if p not in sample_dict:
+                    sample_dict[p] = val
+
+            # ==========================================
+            # 🛡️ 终极 Bug 修复：等价碰撞拦截器 (取代原微扰逻辑)
+            # ==========================================
+            # 近重复剔除：所有突变参数均在母体值 8% 以内视为数据泄漏
+            if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                continue
+
+            # 全局跨检查：拦截跨家系污染和 WT 污染
+            if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+                continue
+                
+            # 纯离散去重：防止像 mdt 这种少状态参数导致生成数百个完全一致的内部样本
+            if not continuous_mutated and not has_bub2:
+                config_tuple = tuple(sample_dict.get(p) for p in sorted(mutated_params))
+                if config_tuple in seen_configs:
+                    continue
+                seen_configs.add(config_tuple)
+
+            # 装配通过检验的合法样本
+            lhs_tasks_dict[f"{m_name}_LHS_{valid_samples_collected:03d}"] = sample_dict
+            valid_samples_collected += 1
+
+    print(f"📊 [LHS引擎] V1特性移植完毕，硬冲突拦截生效，共生成 {len(lhs_tasks_dict)} 个增强样本")
+    return lhs_tasks_dict
+
+# ==========================================
+# 4.5 【RGS专用】Real-Guided 局部密集采样引擎
+# ==========================================
+def generate_local_lhs_tasks(target_mutants, num_per_mutant=500, perturbation=0.3):
+    """
+    RGS (Real-Guided Sampling) 局部密集采样：
+    逻辑与 generate_lhs_tasks 完全一致（原汁原味），
+    唯一区别：连续参数的采样范围从 [0, max_val*1.5] 缩窄为
+    以该突变体自身突变参数值为中心的 center * (1 ± perturbation)。
+
+    只采样 mutant 发生突变的参数，未发生突变的参数不采样（继承原值）。
+
+    Args:
+        target_mutants: dict, {mutant_name: num_samples} 指定每个突变体要生成的样本数
+                       若为 None, 则对所有非 WT 突变体均匀采样
+        num_per_mutant: int, 当 target_mutants 为 None 时每个突变体的默认采样数
+        perturbation: float, 连续参数的相对扰动幅度 (0.1 = ±10%)
+    """
+    # ── 与 generate_lhs_tasks 完全一致的前置逻辑 ──
+    single_pools, cdh1_pairs, bub2_pairs = build_discrete_pools(mutant_rules)
+
+    defaults = get_default_params()
+    defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992,
+                     'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
+
+    # 全局跨检查预计算：构建全部真实突变体的完整参数向量
+    real_mutant_full = build_real_mutant_full(mutant_rules, defaults)
+
+    pure_wt_mutants = ['1_WT_Glc', '2.1_WT_Gal', '2.2_WT_Raff']
+
+    # 确定采样目标
+    if target_mutants is not None:
+        sampling_plan = target_mutants  # {name: num_samples}
+    else:
+        sampling_plan = {name: num_per_mutant for name in mutant_rules
+                        if name not in pure_wt_mutants}
+
+    lhs_tasks_dict = {}
+
+    for m_name, n_samples in sampling_plan.items():
+        if m_name not in mutant_rules:
+            continue
+        if m_name in pure_wt_mutants:
+            continue
+
+        original_rules = mutant_rules[m_name]
+        mutated_params = list(original_rules.keys())
+        if not mutated_params:
+            continue
+
+        # 全局跨检查预筛
+        _mutated_set = set(mutated_params)
+        cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
+
+        # ── 与 generate_lhs_tasks 完全一致的参数分类 ──
+        strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
+        continuous_mutated = [p for p in mutated_params if p not in DISCRETE_STRICT_PARAMS]
+        has_bub2 = any(p in ['BUB2_active', 'init_BUB2'] for p in strict_mutated)
+
+        # ── 与 generate_lhs_tasks 完全一致的智能截断逻辑 ──
+        if not continuous_mutated and not has_bub2:
+            max_comb = 1
+            if 'init_CDH1T' in strict_mutated or 'init_CDH1' in strict_mutated:
+                max_comb *= len(cdh1_pairs)
+            for p in strict_mutated:
+                if p not in ['init_CDH1T', 'init_CDH1', 'init_BUB2', 'BUB2_active'] and p in single_pools:
+                    max_comb *= len(single_pools[p])
+            actual_samples = min(n_samples, max(1, max_comb - 1))
+        else:
+            actual_samples = n_samples
+
+        if actual_samples <= 0:
+            continue
+
+        # 扩大候选池，补偿去重损失
+        candidate_count = actual_samples * 10
+
+        # ── ★ 唯一区别：连续参数的采样范围 ──
+        # generate_lhs_tasks: l_bound=0, u_bound=max_val*1.5 (全局范围)
+        # generate_local_lhs_tasks: l_bound=center*(1-perturbation), u_bound=center*(1+perturbation) (局部范围)
+        continuous_samples = {}
+        if continuous_mutated:
+            sampler = qmc.LatinHypercube(d=len(continuous_mutated),
+                                         seed=int(time.time() * 1000) % 2**32)
+            lhs_matrix = sampler.random(n=candidate_count)
+
+            for i, p_name in enumerate(continuous_mutated):
+                center_val = original_rules[p_name]
+                # 0值修复：KO突变体 center_val=0 时 center*(1±pert)=0 采样退化
+                # 改用默认值为参考：采样范围 [0, defaults[p_name]*perturbation]
+                ref_val = defaults.get(p_name, 0.0)
+                if center_val == 0.0 and ref_val > 0.0:
+                    l_bound = 0.0
+                    u_bound = ref_val * perturbation
+                else:
+                    l_bound = max(0.0, center_val * (1.0 - perturbation))
+                    u_bound = center_val * (1.0 + perturbation)
+                if u_bound <= l_bound:
+                    u_bound = l_bound + 1e-6
+                continuous_samples[p_name] = l_bound + lhs_matrix[:, i] * (u_bound - l_bound)
+
+        # ── 与 generate_lhs_tasks 完全一致的 BUB2 缩放 ──
+        if has_bub2:
+            bub2_coeffs = qmc.LatinHypercube(d=1).random(n=candidate_count).flatten() * 1.5
+            np.random.shuffle(bub2_coeffs)
+
+        # ── 与 generate_lhs_tasks 完全一致的组装与去重逻辑 ──
+        valid_samples_collected = 0
+        seen_configs = set()
+
+        for k in range(candidate_count):
+            if valid_samples_collected >= actual_samples:
+                break
+
+            sample_dict = {}
+
+            # 1. 填装连续参数
+            for p_name in continuous_mutated:
+                sample_dict[p_name] = continuous_samples[p_name][k]
+
+            # 2. 填装严格离散与成对参数（与 generate_lhs_tasks 完全一致）
+            sampled_cdh1, sampled_bub2 = False, False
+            for dp in strict_mutated:
+                if dp in ['init_CDH1T', 'init_CDH1']:
+                    if not sampled_cdh1:
+                        pair = cdh1_pairs[np.random.choice(len(cdh1_pairs))]
+                        sample_dict['init_CDH1T'] = pair[0]
+                        sample_dict['init_CDH1'] = pair[1]
+                        sampled_cdh1 = True
+                elif dp in ['init_BUB2', 'BUB2_active']:
+                    if not sampled_bub2:
+                        pair = bub2_pairs[np.random.choice(len(bub2_pairs))]
+                        coeff = bub2_coeffs[k]
+                        sample_dict['init_BUB2'] = pair[0] * coeff
+                        sample_dict['BUB2_active'] = pair[1] * coeff
+                        sampled_bub2 = True
+                else:
+                    sample_dict[dp] = np.random.choice(single_pools[dp])
+
+            # 3. 未被突变的参数继承原值
+            for p, val in original_rules.items():
+                if p not in sample_dict:
+                    sample_dict[p] = val
+
+            # ── 与 generate_lhs_tasks 完全一致的等价碰撞拦截器 ──
+            if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                continue
+
+            # 全局跨检查：拦截跨家系污染和 WT 污染
+            if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+                continue
+
+            # 纯离散去重
+            if not continuous_mutated and not has_bub2:
+                config_tuple = tuple(sample_dict.get(p) for p in sorted(mutated_params))
+                if config_tuple in seen_configs:
+                    continue
+                seen_configs.add(config_tuple)
+
+            lhs_tasks_dict[f"{m_name}_RGS_{valid_samples_collected:03d}"] = sample_dict
+            valid_samples_collected += 1
+
+    print(f"📊 [RGS局部采样] 扰动幅度={perturbation*100:.0f}% | 目标突变体={len(sampling_plan)} | 生成样本={len(lhs_tasks_dict)}")
+    return lhs_tasks_dict
+
+
+# ==========================================
+# 4.5 定向扩展采样引擎 (Targeted LHS for Sim-to-Real Gap)
+# ==========================================
+DEFAULT_TARGET_FAMILIES = {
+    # V5_boundary: 所有家族统一改为 boundary 模式 (0 值邻域采样)
+    # 移除 boundary_params / anchor_params, 由 generate_targeted_lhs_tasks 统一处理
+    'cdc20_ts': {
+        'mutants': [
+            '73_cdc20_ts', '78_cdc20_ts_mad2', '79_cdc20_ts_bub2',
+            '74_cdc20_clb5', '85_GAL_ESP1_cdc20_ts',
+            '71_CLB5_db_pds1_cdc20', '75_cdc20_pds1', '102_net1_cdc20_ts'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.1,
+        'mode': 'boundary'  # V5_boundary: density→boundary (原 boundary_params 已删除, 改用统一 0 邻域逻辑)
+    },
+    'CLB1_clb2': {
+        'mutants': [
+            '47_clb1_clb2_KO', '48_CLB1_clb2',
+            '51_CLB1_clb2_cdh1', '52_CLB1_clb2_pds1', '111_TAB6_1_CLB1_clb2'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.2,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+    'cdh1': {
+        'mutants': [
+            '41_sic1_cdc6_cdh1', '21_cln1_cln2_cln3_cdh1', '26_cln1_cln2_cln3_apc_ts',
+            '42_sic1_cdc6_cdh1_GAL_CDC20', '32_GAL_SIC1_cln1_cln2_cdh1',
+            '40_cdh1_cdc6_42_49', '122_APC_A_cdh1_multi_CDC20',
+            '106_cdc14_ts_cdh1', '36_sic1_cdh1', '34_cdh1_KO'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.1,
+        'mode': 'boundary'  # V5_boundary: anchor→boundary (CDH1 通过 cdh1_pairs+(0,0) 混合实现 boundary)
+    },
+    'low_lhs_count': {
+        'mutants': [
+            '88_tem1_ts_multi_CDC15',
+            '89_tem1_ts_GAL_CDC15',
+            '15_cln3_bck2_multi_CLN2',
+            '53_GAL_CLB2_sic1'
+        ],
+        'num_per_mutant': 300,
+        'perturbation': 0.1,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    }
+}
+
+
+# ==========================================
+# V3 扩展: V2 残留瓶颈定向采样 (基于 V2+none eval 分析)
+# ==========================================
+# V2+none 中仍有 26 个 MAE > 0.3 的残留瓶颈, 分 5 类:
+# 1. CLB2_db 家族 (5 个, MAE 均值 0.685) - V2 未采样
+# 2. cln 三突家族 (3 个, MAE 均值 0.617) - V2 未采样
+# 3. cdh1 已采样但仍差 (3 个, MAE 均值 0.480) - V2 anchor 邻域污染
+# 4. APC_A/tem1_KO/cdc15_KO (4 个, MAE 均值 0.55) - V2 未采样
+# 5. V2 新引入瓶颈 (7 个, V1→V2 恶化) - V2 boundary 邻域污染
+#
+# V3 策略 (V5_boundary 全部改为 boundary):
+# - V5_boundary: 所有家族统一为 boundary 模式 (0 值邻域采样)，废弃 density / boundary_params
+# - 离散参数 (Tem1T/Cdc15T) 仍由 single_pools 离散采样, 不受 boundary 影响
+V3_EXPANSION_FAMILIES = {
+    # 1. CLB2_db 家族 (V2 未采样, MAE 均值 0.685, 最大 1.84)
+    'CLB2_db_family': {
+        'mutants': [
+            '62_GAL_CLB2_db', '60_CLB2_db_clb5', '61.2_CLB2_db_clb5_Raff',
+            '55_CLB2_db', '56_CLB2_db_Gal', '61.1_CLB2_db_clb5_Gal',
+            '124_APC_A_GAL_CLB2'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.15,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+    # 2. cln 三突家族 (V2 未采样, MAE 均值 0.617)
+    'cln_triple': {
+        'mutants': [
+            '22_cln1_cln2_cln3_multi_CLB5', '20_cln1_cln2_cln3_sic1',
+            '23_cln1_cln2_cln3_GAL_CLB5', '64_cln1_cln2_clb5_clb6'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.15,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+    # 3. cdh1 已采样但仍差 (V2 anchor 邻域污染, V5_boundary 改用 boundary)
+    'cdh1_contamination_fix': {
+        'mutants': [
+            '116_APC_A_cdh1', '46_swi5_cdh1_GAL_SIC1', '117_APC_A_cdh1_Gal',
+            '6_cln1_cln2_cdh1_KO'
+        ],
+        'num_per_mutant': 800,  # V2 是 500, V3 翻倍 + boundary 模式
+        'perturbation': 0.1,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+    # 4. tem1_KO / cdc15_KO (V2 未采样, V5_boundary boundary 模式)
+    # 注: Tem1T / Cdc15T 是离散参数, 由 single_pools 采样, boundary 仅影响连续参数
+    'KO_family': {
+        'mutants': [
+            '86_tem1_KO', '92_cdc15_KO', '94_cdc15_ts_multi_TEM1'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.1,
+        'mode': 'boundary'  # V5_boundary: 移除 boundary_params, 改用统一 boundary 逻辑
+    },
+    # 5. V2 boundary 邻域污染修复 (V1→V2 恶化的突变体)
+    'contamination_fix': {
+        'mutants': [
+            '76_cdc20_pds1_clb5', '70_CLB5_db_pds1', '123_APC_A_sic1',
+            '66_GAL_CLB5_sic1', '39_sic1_cdc6_42_49', '69_CLB5_db_sic1',
+            '13_cln3_bck2_KO', '16_cln3_bck2_sic1_KO', '110_TAB6_1_clb5_clb6'
+        ],
+        'num_per_mutant': 800,
+        'perturbation': 0.08,  # 小扰动, 避免进一步污染
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    }
+}
+
+
+# ==========================================
+# V5 扩展: V4 残留瓶颈修复 + 新盲区覆盖 (基于 V4+none eval 逐突变体分析)
+# ==========================================
+# V4+none 仍有 9 个 MAE > 0.15 的残留瓶颈, 四类问题:
+# 1. CLB1_clb2_extended 失效 (3 个): boundary 模式不匹配, 48/52/111 MAE≈0.21
+# 2. cdc6 家族未覆盖 (1 个): 38_cdc6_42_49 恶化 +56% (0.164→0.256), 新瓶颈
+# 3. tem1_ts 残留 (3 个): 88/89 pert=0.08 不足, MAE 0.17-0.23
+# 4. 其他未覆盖 (2 个): 95/109 cdc15_net1_ts, 37 sic1_cdh1, 61.2/124 CLB2_db 边界
+#
+# V5 策略 (17 家族, ~81 突变体, ~53K 定向样本):
+# - 修复 P0: CLB1_clb2_extended boundary→density, pert 0.30→0.50, num 500→1000
+# - 新增 P1: cdc6_family (density, pert=0.15, num=600, 覆盖 38-42)
+# - 增强 P2: tem1_ts_family pert 0.08→0.12, num 800→1200
+# - 新增 P3: CLB2_db_clb5_Raff_family (density, pert=0.25, num=400) 专覆盖 61.2
+# - 新增 P4: APC_A_GAL_CLB2_family (density, pert=0.15, num=400) 专覆盖 124
+# - 新增 P5: cdc15_net1_ts_family (density, pert=0.10, num=400) 覆盖 95/109
+# - 新增 P6: sic1_cdh1_family (density, pert=0.12, num=400) 覆盖 36/37
+# - 保留: V4 其余 9 个家族 (已验证有效)
+#
+# 注: V5 完全替代 V4 的 V4_EXPANSION_FAMILIES (不调用 V4, 改调用 V5)
+#     V2 的 DEFAULT_TARGET_FAMILIES 保留不变 (cdc20_ts/cdh1/low_lhs_count 仍有效)
+#     V2 的 CLB1_clb2 家族会被 V5 的 CLB1_clb2_extended 覆盖 (键名相同, 后者 pert 更大)
+#     V4 的 CLB2_db_enhanced 仍包含 61.2/124, V5 新增专用家族后执行会覆盖键名 (pert 更大)
+V5_EXPANSION_FAMILIES = {
+    # ==========================================
+    # 一、修复类 (修复 V3 邻域污染)
+    # ==========================================
+
+    # [修复] KO_family: boundary → density, 去除 boundary_params
+    # V3 的 KO_family 用 boundary 模式将 Tem1T/Cdc15T 扩展到 0, 污染了 tem1_ts 家族
+    # V4 改用 density 模式 + 窄扰动 (0.05), 仅覆盖真正的 KO 突变体
+    'KO_family_fixed': {
+        'mutants': [
+            '86_tem1_KO',
+            '92_cdc15_KO',
+            '94_cdc15_ts_multi_TEM1'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.05,  # 从 0.10 降至 0.05 (窄扰动, 避免污染 tem1_ts)
+        'mode': 'boundary'  # V5_boundary: density→boundary (Tem1T/Cdc15T 离散由 single_pools 采样)
+        # 删除 boundary_params 配置 (不再扩展到 0 边界)
+    },
+
+    # ==========================================
+    # 二、新增家族 (覆盖盲区)
+    # ==========================================
+
+    # [增强] tem1_ts_family: V4 pert=0.08 不足, 88/89 仍残留 MAE>0.16
+    # V4 MAE: 88=0.1656, 89=0.2299 (仍为瓶颈), 90=0.0307 (已修复), 91=0.0249 (已修复)
+    # V5: pert 0.08→0.12, num 800→1200 (增大扰动 + 增加样本)
+    'tem1_ts_family': {
+        'mutants': [
+            '88_tem1_ts_multi_CDC15',
+            '89_tem1_ts_GAL_CDC15',
+            '90_tem1_net1_ts',
+            '91_tem1_ts_multi_CDC14'
+        ],
+        'num_per_mutant': 1200,  # 800 → 1200
+        'perturbation': 0.12,   # 0.08 → 0.12
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增] cdc14_ts_family: 覆盖全部 6 个 cdc14_ts 相关突变体 (V3 全部未覆盖)
+    # V3 MAE: 105=0.2880 (瓶颈), 107=0.3091 (瓶颈), 103=0.1475, 104=0.0888,
+    #         99=0.0801, 106_cdc14_ts_cdh1=0.0363
+    # density 模式 + pert=0.08
+    'cdc14_ts_family': {
+        'mutants': [
+            '99_cdc14_ts',
+            '103_cdc14_ts_GAL_SIC1',
+            '104_cdc14_ts_then_GAL_SIC1',
+            '105_cdc14_ts_sic1',
+            '106_cdc14_ts_cdh1',
+            '107_cdc14_ts_GAL_CLN2'
+        ],
+        'num_per_mutant': 800,
+        'perturbation': 0.08,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增] swi5_cdh1_family: 覆盖 43/44/45/46 (V3 全部未覆盖)
+    # V3 MAE: 44=0.2125, 45=0.3118 (瓶颈), 43=0.0413, 46=0.1235
+    # density 模式 + pert=0.12
+    'swi5_cdh1_family': {
+        'mutants': [
+            '43_swi5_KO',
+            '44_swi5_GAL_CLB2',
+            '45_swi5_cdh1',
+            '46_swi5_cdh1_GAL_SIC1'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.12,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增] cln1_cln2_KO_family: 覆盖 9 个 cln1_cln2 双 KO 突变体 (V3 全部未覆盖)
+    # V3 MAE: 5=0.2837, 7=0.2839, 12=0.2108 (瓶颈), 3=0.1058, 4=0.0422, 6=0.0427,
+    #         30=0.0876, 31=0.0461, 32=0.0302
+    # density 模式 + pert=0.12
+    'cln1_cln2_KO_family': {
+        'mutants': [
+            '3_cln1_cln2_KO',
+            '4_GAL_CLN2_cln1_cln2_KO',
+            '5_cln1_cln2_sic1_KO',
+            '6_cln1_cln2_cdh1_KO',
+            '7_GAL_CLN2_cln1_cln2_cdh1_KO',
+            '12_cln1_cln2_bck2_KO',
+            '30_GAL_SIC1_cln1_cln2',
+            '31_GAL_SIC1_GAL_CLN2_cln1_cln2',
+            '32_GAL_SIC1_cln1_cln2_cdh1'
+        ],
+        'num_per_mutant': 400,
+        'perturbation': 0.12,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增] sic1_KO_family: 覆盖 27/28/29 (V3 全部未覆盖)
+    # V3 MAE: 27=0.0783, 28=0.0175, 29=0.1839 (瓶颈)
+    # density 模式 + pert=0.10
+    'sic1_KO_family': {
+        'mutants': [
+            '27_sic1_KO',
+            '28_GAL_SIC1',
+            '29_GAL_SIC1_db'
+        ],
+        'num_per_mutant': 400,
+        'perturbation': 0.10,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增] GAL_CLB2_cdh1_family: 覆盖 33/51/54 (V3 全部未覆盖)
+    # V3 MAE: 33=0.1551, 51=0.0563, 54=0.3098 (瓶颈)
+    # density 模式 + pert=0.10
+    'GAL_CLB2_cdh1_family': {
+        'mutants': [
+            '33_GAL_SIC1_GAL_CLN2_cdh1',
+            '51_CLB1_clb2_cdh1',
+            '54_GAL_CLB2_cdh1'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.10,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # ==========================================
+    # 三、扩展类 (覆盖更多突变体)
+    # ==========================================
+
+    # [扩展] cln_triple: V3 的 4 个 → V4 的 11 个 (覆盖全部 cln1_cln2_cln3 突变体)
+    # V3 仅覆盖 22/20/23/64, 遗漏了 19/24/25/17/21/26/14 等
+    # V3 MAE: 19=0.2889 (瓶颈), 24=0.1976 (瓶颈), 25=0.1331, 17=0.1436
+    # density 模式 + pert=0.15 (与 V3 一致)
+    'cln_triple_extended': {
+        'mutants': [
+            # V3 原有 4 个
+            '20_cln1_cln2_cln3_sic1',
+            '22_cln1_cln2_cln3_multi_CLB5',
+            '23_cln1_cln2_cln3_GAL_CLB5',
+            '64_cln1_cln2_clb5_clb6',
+            # V4 新增 7 个 (V3 未覆盖)
+            '14_cln3_bck2_GAL_CLN2_cln1_cln2',
+            '17_cln1_cln3_KO',
+            '19_cln1_cln2_cln3_GAL_CLN3',
+            '21_cln1_cln2_cln3_cdh1',
+            '24_cln1_cln2_cln3_multi_BCK2',
+            '25_cln1_cln2_cln3_GAL_CLB2',
+            '26_cln1_cln2_cln3_apc_ts'
+        ],
+        'num_per_mutant': 500,
+        'perturbation': 0.15,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [修复] CLB1_clb2: V4 boundary 模式失效 (仅 -4.9%), V5 改用 density 模式
+    # V4 MAE: 48=0.2111, 52=0.2007, 111=0.2050 (均残留 MAE>0.2 瓶颈)
+    # V5: boundary→density, pert 0.30→0.50, num 500→1000 (大幅增强扰动)
+    # 根因: CLB1_clb2 突变体是 CLB1/CLB2 合成降至 33%, boundary 扩展到 0 引入不相关样本
+    'CLB1_clb2_extended': {
+        'mutants': [
+            '48_CLB1_clb2',
+            '51_CLB1_clb2_cdh1',
+            '52_CLB1_clb2_pds1',
+            '111_TAB6_1_CLB1_clb2'
+        ],
+        'num_per_mutant': 1000,  # 500 → 1000 (增加样本数)
+        'perturbation': 0.50,    # 0.30 → 0.50 (大幅增大扰动幅度)
+        'mode': 'boundary'  # V5_boundary: density→boundary (CLB1_clb2 通过统一 0 邻域逻辑采样)
+        # 删除 boundary_params (不再使用 boundary 模式)
+    },
+
+    # ==========================================
+    # 四、增强类 (提升采样强度)
+    # ==========================================
+
+    # [增强] CLB2_db_family: V4 的 10 个 → V5 的 8 个 (移除 61.2/124, 已有专用家族)
+    # V4 MAE: 57=0.1393, 58=0.1310, 59=0.1235, 62=0.0628 (均残留)
+    # density 模式 + pert=0.20 + num=800
+    # V5 移除 61.2 和 124 (由 CLB2_db_clb5_Raff_family 和 APC_A_GAL_CLB2_family 专用覆盖)
+    'CLB2_db_enhanced': {
+        'mutants': [
+            '55_CLB2_db',
+            '56_CLB2_db_Gal',
+            '60_CLB2_db_clb5',
+            '61.1_CLB2_db_clb5_Gal',
+            '62_GAL_CLB2_db',
+            '57_CLB2_db_multi_SIC1',
+            '58_CLB2_db_GAL_SIC1',
+            '59_CLB2_db_multi_CDC6'
+        ],
+        'num_per_mutant': 800,
+        'perturbation': 0.20,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # ==========================================
+    # 五、保留类 (V3 已验证有效, 配置不变)
+    # ==========================================
+
+    # [保留] cdh1_contamination_fix: V3 anchor 邻域污染修复 (density 模式)
+    # V3 MAE: 116=0.0204, 46=0.1235, 117=0.0211, 6=0.0427 (均已改善)
+    'cdh1_contamination_fix': {
+        'mutants': [
+            '116_APC_A_cdh1', '46_swi5_cdh1_GAL_SIC1', '117_APC_A_cdh1_Gal',
+            '6_cln1_cln2_cdh1_KO'
+        ],
+        'num_per_mutant': 800,
+        'perturbation': 0.1,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [保留] contamination_fix: V2 boundary 邻域污染修复 (density + 小扰动)
+    # V3 MAE: 76=0.0244, 70=0.0189, 123=0.0204, 66=0.0235, 39=0.1635, 69=0.0189,
+    #         13=0.3704, 16=0.3648, 110=0.0223
+    'contamination_fix': {
+        'mutants': [
+            '76_cdc20_pds1_clb5', '70_CLB5_db_pds1', '123_APC_A_sic1',
+            '66_GAL_CLB5_sic1', '39_sic1_cdc6_42_49', '69_CLB5_db_sic1',
+            '13_cln3_bck2_KO', '16_cln3_bck2_sic1_KO', '110_TAB6_1_clb5_clb6'
+        ],
+        'num_per_mutant': 800,
+        'perturbation': 0.08,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # ==========================================
+    # 六、V5 新增家族 (覆盖 V4 残留盲区)
+    # ==========================================
+
+    # [新增 P1] cdc6_family: 覆盖 38-42 五个 cdc6 突变体 (V4 完全未覆盖)
+    # V4 MAE: 38=0.2556 (新瓶颈, 恶化 +56%), 39=0.0448, 40=0.0419, 41=0.0265, 42=0.0419
+    # density 模式 + pert=0.15, 专覆盖 cdc6_42_49 温度敏感突变的局部参数空间
+    'cdc6_family': {
+        'mutants': [
+            '38_cdc6_42_49',
+            '39_sic1_cdc6_42_49',
+            '40_cdh1_cdc6_42_49',
+            '41_sic1_cdc6_cdh1',
+            '42_sic1_cdc6_cdh1_GAL_CDC20'
+        ],
+        'num_per_mutant': 600,
+        'perturbation': 0.15,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增 P3] CLB2_db_clb5_Raff_family: 专覆盖 61.2 (V4 pert=0.20 不足)
+    # V4 MAE: 61.2=0.1998 (残留瓶颈), 涉及 CLB2_db + clb5 + Raff 三参数
+    # density 模式 + pert=0.25 (大幅扰动), 专覆盖 61.2 的三参数组合空间
+    # 注: CLB2_db_enhanced 仍包含 61.2, 本家族后执行会覆盖键名 (pert 更大)
+    'CLB2_db_clb5_Raff_family': {
+        'mutants': [
+            '61.2_CLB2_db_clb5_Raff'
+        ],
+        'num_per_mutant': 400,
+        'perturbation': 0.25,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增 P4] APC_A_GAL_CLB2_family: 专覆盖 124 (V4 恶化 +8.3%)
+    # V4 MAE: 124=0.1798 (恶化, CLB2_db_enhanced 边界效应)
+    # density 模式 + pert=0.15, 专覆盖 APC_A + GAL_CLB2 双参数组合空间
+    # 注: CLB2_db_enhanced 仍包含 124, 本家族后执行会覆盖键名 (pert 更大)
+    'APC_A_GAL_CLB2_family': {
+        'mutants': [
+            '124_APC_A_GAL_CLB2'
+        ],
+        'num_per_mutant': 400,
+        'perturbation': 0.15,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增 P5] cdc15_net1_ts_family: 覆盖 95/109 (V4 未覆盖, 恶化 +20%)
+    # V4 MAE: 95=0.1658, 109=0.1658 (参数完全相同, 均恶化)
+    # density 模式 + pert=0.10, 专覆盖 cdc15_net1_ts 的参数空间
+    'cdc15_net1_ts_family': {
+        'mutants': [
+            '95_cdc15_net1_ts',
+            '109_TAB6_1_cdc15'
+        ],
+        'num_per_mutant': 400,
+        'perturbation': 0.10,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    },
+
+    # [新增 P6] sic1_cdh1_family: 覆盖 36/37 (V4 未覆盖, 37 恶化 +47%)
+    # V4 MAE: 36=0.0482, 37=0.1310 (恶化, sic1_cdh1 家族未覆盖)
+    # density 模式 + pert=0.12, 专覆盖 sic1_cdh1 双参数组合空间
+    'sic1_cdh1_family': {
+        'mutants': [
+            '36_sic1_cdh1',
+            '37_sic1_cdh1_GAL_CDC20'
+        ],
+        'num_per_mutant': 400,
+        'perturbation': 0.12,
+        'mode': 'boundary'  # V5_boundary: density→boundary
+    }
+}
+
+
+def generate_targeted_lhs_tasks(target_families=None, default_num_per_mutant=100,
+                                 default_perturbation=0.3):
+    """
+    定向扩展采样引擎：针对 Sim-to-Real Gap 的三大家族 + N_LHS 不足突变体
+    进行定向密集采样，补齐 LHS 训练分布的覆盖盲区。
+
+    与 generate_lhs_tasks 的区别：
+    - generate_lhs_tasks: 全局均匀采样，连续参数范围 [0, max_val*1.5]
+    - generate_targeted_lhs_tasks: 按家族配置定向采样
+
+    V5_boundary 统一采样模式 (mode='boundary')：
+    - 所有家族统一使用 boundary 模式 (0 值邻域采样)
+    - 连续参数采样范围统一为 [0, center_val * (1 + pert)]，覆盖从完全敲除 (0)
+      到过表达 (1+pert) 的全范围，强制 0 值邻域覆盖
+    - 废弃 density / anchor 模式，移除 boundary_params / anchor_params 字段
+
+    CDH1T/CDH1 强绑定约束（生物学：活性=总数×比例）：
+    - V5_boundary boundary 实现：在 cdh1_pairs 池基础上加入 (0.0, 0.0) 完全敲除对
+    - 混合采样策略保证 (0,0) 边界显式覆盖，同时保留生物学强绑定约束
+
+    BUB2 (init_BUB2/BUB2_active) 同频缩放约束：
+    - V5_boundary boundary 实现：在原有 [0, 1.5] LHS 系数 (天然覆盖 0) 基础上，
+      混合 (0.0, 0.0) 完全敲除对，显式覆盖 0 边界
+
+    离散参数 (mdt, ESP1T, is_mutant_104, Tem1T, Cdc15T) 维持原采样方式：
+    - 由 single_pools / cdh1_pairs / bub2_pairs 池随机采样，不应用 boundary
+
+    Args:
+        target_families: dict, 家族配置
+            {family_name: {
+                'mutants': [mutant_name, ...],
+                'num_per_mutant': int,
+                'perturbation': float,
+                'mode': 'boundary'  # V5_boundary: 统一 boundary 模式
+            }}
+            若为 None, 使用内置 DEFAULT_TARGET_FAMILIES（三大家族 + N_LHS不足）
+        default_num_per_mutant: int, 默认每突变体采样数
+        default_perturbation: float, 默认扰动幅度
+
+    Returns:
+        lhs_tasks_dict: {f"{m_name}_LHS_T{idx:03d}": sample_dict}
+        键名后缀 _LHS_T (T=Targeted) 保持与 _LHS_ 子串匹配兼容
+    """
+    if target_families is None:
+        target_families = DEFAULT_TARGET_FAMILIES
+
+    # ── 与 generate_lhs_tasks 完全一致的前置逻辑 ──
+    single_pools, cdh1_pairs, bub2_pairs = build_discrete_pools(mutant_rules)
+
+    defaults = get_default_params()
+    defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992,
+                     'init_BUB2': 0.2, 'BUB2_active': 1.0, 'is_mutant_104': False})
+
+    # 全局跨检查预计算：构建全部真实突变体的完整参数向量
+    real_mutant_full = build_real_mutant_full(mutant_rules, defaults)
+
+    lhs_tasks_dict = {}
+
+    for family_name, family_cfg in target_families.items():
+        mutants = family_cfg['mutants']
+        num_per = family_cfg.get('num_per_mutant', default_num_per_mutant)
+        # V5_boundary: perturbation 下限保持 0.30 (与 V5 一致, 避免过小扰动)
+        perturbation = max(family_cfg.get('perturbation', default_perturbation), 0.30)
+        mode = family_cfg.get('mode', 'boundary')  # V5_boundary: 默认 boundary (兼容旧配置)
+        # V5_boundary: 废弃 boundary_params / anchor_params, 统一使用 boundary 0 值邻域逻辑
+
+        family_collected = 0
+
+        for m_name in mutants:
+            if m_name not in mutant_rules:
+                continue
+
+            original_rules = mutant_rules[m_name]
+            mutated_params = list(original_rules.keys())
+            if not mutated_params:
+                continue
+
+            # 全局跨检查预筛
+            _mutated_set = set(mutated_params)
+            cross_check_candidates = build_cross_check_candidates(real_mutant_full, mutant_rules, defaults, _mutated_set)
+
+            # ── 与 generate_lhs_tasks 完全一致的参数分类 ──
+            strict_mutated = [p for p in mutated_params if p in DISCRETE_STRICT_PARAMS]
+            continuous_mutated = [p for p in mutated_params if p not in DISCRETE_STRICT_PARAMS]
+            has_bub2 = any(p in ['BUB2_active', 'init_BUB2'] for p in strict_mutated)
+
+            # ── 与 generate_lhs_tasks 完全一致的智能截断逻辑 ──
+            if not continuous_mutated and not has_bub2:
+                max_comb = 1
+                if 'init_CDH1T' in strict_mutated or 'init_CDH1' in strict_mutated:
+                    max_comb *= len(cdh1_pairs)
+                for p in strict_mutated:
+                    if p not in ['init_CDH1T', 'init_CDH1', 'init_BUB2', 'BUB2_active'] and p in single_pools:
+                        max_comb *= len(single_pools[p])
+                actual_samples = min(num_per, max(1, max_comb - 1))
+            else:
+                actual_samples = num_per
+
+            if actual_samples <= 0:
+                continue
+
+            candidate_count = actual_samples * 10
+
+            # ── V5_boundary 统一 boundary 连续参数采样 ──
+            # 所有问题家族统一使用 boundary 0 值邻域采样策略:
+            # - 非KO突变: 采样范围 [0, center_val * (1 + pert)] (覆盖 0 边界到过表达)
+            # - KO突变 (center=0): 采样范围 [0, ref_val * (1 + pert)] (用默认值参考)
+            # 完全废弃 density (局部邻域) 和 anchor (锚点) 模式
+            continuous_samples = {}
+            if continuous_mutated:
+                sampler = qmc.LatinHypercube(d=len(continuous_mutated),
+                                             seed=int(time.time() * 1000) % 2**32)
+                lhs_matrix = sampler.random(n=candidate_count)
+
+                for i, p_name in enumerate(continuous_mutated):
+                    center_val = original_rules[p_name]
+                    # 0值修复：KO突变体 center_val=0 时采样退化，改用默认值为参考
+                    ref_val = defaults.get(p_name, 0.0)
+                    zero_ko = (center_val == 0.0 and ref_val > 0.0)
+
+                    # V5_boundary 统一 boundary 采样: 强制 l_bound=0, 覆盖 0 值邻域
+                    if zero_ko:
+                        # KO突变: 用默认值作为上界参考 (覆盖 0 到过表达)
+                        l_bound = 0.0
+                        u_bound = ref_val * (1.0 + perturbation)
+                    else:
+                        # 非KO突变: 覆盖从完全敲除 (0) 到过表达 (1+pert)
+                        l_bound = 0.0
+                        u_bound = center_val * (1.0 + perturbation)
+                    if u_bound <= l_bound:
+                        u_bound = l_bound + 1e-6
+
+                    continuous_samples[p_name] = l_bound + lhs_matrix[:, i] * (u_bound - l_bound)
+
+            # ── 与 generate_lhs_tasks 完全一致的 BUB2 缩放 ──
+            if has_bub2:
+                bub2_coeffs = qmc.LatinHypercube(d=1).random(n=candidate_count).flatten() * 1.5
+                np.random.shuffle(bub2_coeffs)
+
+            # ── 组装与去重 ──
+            valid_samples_collected = 0
+            seen_configs = set()
+
+            for k in range(candidate_count):
+                if valid_samples_collected >= actual_samples:
+                    break
+
+                sample_dict = {}
+
+                # 1. 填装连续参数
+                for p_name in continuous_mutated:
+                    sample_dict[p_name] = continuous_samples[p_name][k]
+
+                # 2. 填装严格离散与成对参数 (V5_boundary: CDH1/BUB2 boundary 专用方案)
+                # V5_boundary 设计原则:
+                # - 离散参数 (mdt, ESP1T, is_mutant_104, Tem1T, Cdc15T) 维持原 single_pools 采样
+                # - CDH1: boundary 模式显式覆盖 (0,0) 完全敲除边界 + cdh1_pairs 池混合
+                # - BUB2: boundary 模式显式覆盖 (0,0) 完全敲除边界 + LHS 系数缩放混合
+                sampled_cdh1, sampled_bub2 = False, False
+                for dp in strict_mutated:
+                    if dp in ['init_CDH1T', 'init_CDH1']:
+                        if not sampled_cdh1:
+                            # V5_boundary CDH1 boundary 采样方案:
+                            # 物理意义: (init_CDH1T, init_CDH1) = (total, active), active = total × ratio
+                            # boundary 边界: (0.0, 0.0) 代表 CDH1 完全敲除 (KO)
+                            # 策略: 30% 概率显式选 (0,0) 覆盖 boundary,
+                            #       70% 概率从 cdh1_pairs 池随机 (保留生物学强绑定约束)
+                            # 注: cdh1_pairs 池已包含 (0,0) 及其他真实突变体配对
+                            if np.random.random() < 0.3:
+                                sample_dict['init_CDH1T'] = 0.0
+                                sample_dict['init_CDH1'] = 0.0
+                            else:
+                                pair = cdh1_pairs[np.random.choice(len(cdh1_pairs))]
+                                sample_dict['init_CDH1T'] = pair[0]
+                                sample_dict['init_CDH1'] = pair[1]
+                            sampled_cdh1 = True
+                    elif dp in ['init_BUB2', 'BUB2_active']:
+                        if not sampled_bub2:
+                            # V5_boundary BUB2 boundary 采样方案:
+                            # 物理意义: (init_BUB2, BUB2_active) 同频缩放, (0,0) 代表完全敲除
+                            # 原始 LHS 系数 [0, 1.5] 天然覆盖 0, 但小系数概率低
+                            # 策略: 30% 概率显式选 (0,0) 覆盖 boundary,
+                            #       70% 概率用 LHS 系数缩放 (保留同频生物学约束)
+                            if np.random.random() < 0.3:
+                                sample_dict['init_BUB2'] = 0.0
+                                sample_dict['BUB2_active'] = 0.0
+                            else:
+                                pair = bub2_pairs[np.random.choice(len(bub2_pairs))]
+                                coeff = bub2_coeffs[k]
+                                sample_dict['init_BUB2'] = pair[0] * coeff
+                                sample_dict['BUB2_active'] = pair[1] * coeff
+                            sampled_bub2 = True
+                    else:
+                        # 离散参数 (mdt, ESP1T, is_mutant_104, Tem1T, Cdc15T) 维持原采样方式
+                        sample_dict[dp] = np.random.choice(single_pools[dp])
+
+                # 3. 未被突变的参数继承原值
+                for p, val in original_rules.items():
+                    if p not in sample_dict:
+                        sample_dict[p] = val
+
+                # ── 与 generate_lhs_tasks 完全一致的等价碰撞拦截器 ──
+                if is_near_mother(sample_dict, mutated_params, original_rules, defaults):
+                    continue
+
+                # 全局跨检查：拦截跨家系污染和 WT 污染
+                if is_near_any_real(sample_dict, mutated_params, cross_check_candidates, defaults):
+                    continue
+
+                # 纯离散去重
+                if not continuous_mutated and not has_bub2:
+                    config_tuple = tuple(sample_dict.get(p) for p in sorted(mutated_params))
+                    if config_tuple in seen_configs:
+                        continue
+                    seen_configs.add(config_tuple)
+
+                # 键名后缀 _LHS_T (T=Targeted) 保持与 _LHS_ 子串匹配兼容
+                lhs_tasks_dict[f"{m_name}_LHS_T{valid_samples_collected:03d}"] = sample_dict
+                valid_samples_collected += 1
+                family_collected += 1
+
+        print(f"📊 [定向LHS] 家族={family_name} (mode={mode}) | 目标突变体={len(mutants)} | 生成样本={family_collected}")
+
+    total_expected = sum(
+        cfg.get('num_per_mutant', default_num_per_mutant) * len(cfg['mutants'])
+        for cfg in target_families.values()
+    )
+    print(f"📊 [定向LHS引擎] 三大家族+N_LHS补足 | 目标 {total_expected} | 实际生成 {len(lhs_tasks_dict)} 个定向样本")
+    return lhs_tasks_dict
+
+
+# ==========================================
+# 5. 主程序：大一统数据整合与保存
+# ==========================================
+if __name__ == '__main__':
+    
+    all_tasks = {} 
+    all_tasks.update(mutant_rules)
+    
+    # 将 LHS 任务并入大一统任务字典
+    lhs_tasks = generate_lhs_tasks(NUM_LHS_SAMPLES)
+    all_tasks.update(lhs_tasks)
+
+    # === v2 新增：定向扩展采样（三大家族 + N_LHS 不足补足） ===
+    targeted_tasks = generate_targeted_lhs_tasks()
+    all_tasks.update(targeted_tasks)
+
+    # === v5 新增：残留瓶颈修复 + 新盲区覆盖（基于 V4+none eval 逐突变体分析） ===
+    # V5 完全替代 V4 的 V4_EXPANSION_FAMILIES (不调用 V4, 改调用 V5)
+    # V5_EXPANSION_FAMILIES 包含 13 个家族: V4 的 11 个 (含 P0/P2 修改) + 5 个新增 (P1/P3-P6)
+    # 与 V2 的 DEFAULT_TARGET_FAMILIES 有部分键名重叠 (CLB1_clb2), V5 后执行会覆盖 V2 (pert 更大)
+    # 与 V4 的 CLB2_db_enhanced 有键名重叠 (61.2/124), V5 新增专用家族后执行会覆盖 (pert 更大)
+    v5_expansion_tasks = generate_targeted_lhs_tasks(target_families=V5_EXPANSION_FAMILIES)
+    all_tasks.update(v5_expansion_tasks)
+
+    ordered_names = list(all_tasks.keys())
+    results = {}
+    bio_labels_dict = {}
+    pattern_labels_dict = {}
+    
+    print(f"🔥 启动集群: 共计 {len(ordered_names)} 个细胞，单点超时设定 {SIM_TIMEOUT}s...")
+    start_time = time.time()
+    
+    timeout_count = 0
+    fail_count = 0
+    mass_drop_count = 0  
+    
+    total_cores = os.cpu_count()
+    # 例如 128 核的机器，你只用 32 核，剩下的 96 核留给 8 张显卡
+    safe_cores = max(1, total_cores // 4) 
+    
+    print(f"🔥 启动集群: 绅士模式，调用 {safe_cores}/{total_cores} 个 CPU 核心...")
+    # 准备计数器
+    real_cnt = {'success': 0, 'timeout': 0, 'fail': 0, 'discarded': 0}
+    lhs_cnt = {'success': 0, 'timeout': 0, 'fail': 0, 'discarded': 0}
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=safe_cores) as executor:
+        future_to_name = {
+            executor.submit(simulate_mutant, name, all_tasks[name], SIM_TF, SIM_STEPS): name 
+            for name in ordered_names
+        }
+        for idx, future in enumerate(concurrent.futures.as_completed(future_to_name)):
+            name = future_to_name[future]
+            is_lhs = "_LHS_" in name
+            target = lhs_cnt if is_lhs else real_cnt
+            
+            try:
+                m_name, y_uniform, m_bio_label, m_pattern_label = future.result(timeout=SIM_TIMEOUT + 10.0)
+                
+                if y_uniform is not None:
+                    results[m_name] = y_uniform
+                    bio_labels_dict[m_name] = m_bio_label
+                    pattern_labels_dict[m_name] = m_pattern_label
+                    target['success'] += 1
+                elif m_bio_label == "Discarded_Mass":
+                    target['discarded'] += 1
+                    
+            except concurrent.futures.TimeoutError:
+                target['timeout'] += 1
+            except Exception as e:
+                target['fail'] += 1
+                
+            if (idx + 1) % 500 == 0:
+                print(f"  └─ 进度: {idx + 1} / {len(ordered_names)}", flush=True)
+
+    # 打印最终统计报表
+    print("\n" + "="*50)
+    print("📈 模拟任务执行最终统计报告")
+    print(f"{'类型':<12} | {'成功':<8} | {'超时':<8} | {'失败':<8} | {'丢弃':<8}")
+    print("-" * 50)
+    print(f"{'Real Mutant':<12} | {real_cnt['success']:<8} | {real_cnt['timeout']:<8} | {real_cnt['fail']:<8} | {real_cnt['discarded']:<8}")
+    print(f"{'LHS Sample':<12} | {lhs_cnt['success']:<8} | {lhs_cnt['timeout']:<8} | {lhs_cnt['fail']:<8} | {lhs_cnt['discarded']:<8}")
+    print("="*50)
+    
+    # ==========================================
+    # 🌟 [新增] 第三级防御：动态浓度异常剔除系统 (Data Pruning)
+    # ==========================================
+    RELATIVE_MULTIPLIER = 2.0 
+    ABSOLUTE_SAFE_LIMIT = 2.0 
+    
+    # 1. 提取本次模拟中所有存活的 Real Mutants 的极值包围网
+    real_max_vals = []
+    for name in ordered_names:
+        if name in results and "LHS" not in name:
+            real_max_vals.append(np.max(results[name], axis=1))
+            
+    concentration_drop_count = 0
+    if real_max_vals:
+        real_envelope = np.max(real_max_vals, axis=0)
+        dynamic_thresholds = np.maximum(real_envelope * RELATIVE_MULTIPLIER, ABSOLUTE_SAFE_LIMIT)
+        
+        # 2. 扫描 LHS 样本，抓捕浓度爆炸的怪物细胞
+        names_to_delete = set()
+        for name in ordered_names:
+            if name in results and "LHS" in name:
+                lhs_max_vals = np.max(results[name], axis=1)
+                for var_idx in range(1, 39):
+                    if lhs_max_vals[var_idx] > dynamic_thresholds[var_idx]:
+                        names_to_delete.add(name)
+                        break 
+                        
+        # 3. 内存销毁
+        for name in names_to_delete:
+            del results[name] 
+            concentration_drop_count += 1
+            
+        print(f"\n🛡️ 动态浓度剔除系统执行完毕！")
+        print(f"  └─ 成功拦截并销毁了 {concentration_drop_count} 个浓度爆炸的怪物细胞。")
+    else:
+        print("\n⚠️ 未检测到可用的 Real Mutant 基准，跳过动态浓度清洗。")
+
+
+    # ==========================================
+    # 6. 对齐参数矩阵与格式保存
+    # ==========================================
+    defaults = get_default_params()
+    defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
+    param_keys = sorted([k for k in defaults.keys() if k != 'is_mutant_104']) 
+    
+    ordered_tensors = []
+    final_names = []
+    final_params = []
+    final_bio_labels = [] 
+    final_pattern_labels = [] 
+    
+    for name in ordered_names:
+        if name in results:
+            ordered_tensors.append(results[name])
+            final_names.append(name)
+            final_bio_labels.append(bio_labels_dict[name]) 
+            final_pattern_labels.append(pattern_labels_dict[name])
+            
+            overrides = all_tasks[name]
+            p_vec = [overrides.get(k, defaults[k]) for k in param_keys]
+            final_params.append(p_vec)
+            
+    all_tensors = np.array(ordered_tensors)
+    all_params = np.array(final_params)
+    all_bio_labels = np.array(final_bio_labels)
+    all_pattern_labels = np.array(final_pattern_labels)
+    
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    np.savez_compressed(DATASET_PATH,
+                        data=all_tensors,
+                        params=all_params,
+                        param_names=param_keys,
+                        mutant_names=final_names,
+                        labels=all_bio_labels,
+                        pattern_labels=all_pattern_labels)
+
+    print(f"\n📊 保存成功！文件: {DATASET_PATH}")
+    print(f"✅ 耗时: {time.time() - start_time:.2f} 秒")
+    print(f"📊 张量维度 (Samples, Vars, Timesteps): {all_tensors.shape}")
+    print(f"📊 参数维度 (Samples, Param_Count): {all_params.shape}")
+    
+    print("\n🔬 【Biological Labels】 生物学机理标签分布:")
+    u_bio, c_bio = np.unique(all_bio_labels, return_counts=True)
+    for lbl, count in zip(u_bio, c_bio):
+        print(f"  - {lbl}: {count} 个")
+
+    print("\n📈 【Pattern Labels】 视觉形态学标签分布:")
+    u_pat, c_pat = np.unique(all_pattern_labels, return_counts=True)
+    for lbl, count in zip(u_pat, c_pat):
+        print(f"  - {lbl}: {count} 个")
+
+    # ==========================================
+    # 📊 各家族 LHS 样本数量统计 (普通 LHS + Target 定向 LHS)
+    # ==========================================
+    print("\n" + "="*75)
+    print("📊 各家族 LHS 样本数量统计 (按突变体母体分组)")
+    print("="*75)
+
+    from collections import defaultdict
+    family_stats = defaultdict(lambda: {'real': 0, 'lhs_normal': 0, 'lhs_target': 0})
+
+    for name in final_names:
+        if '_LHS_T' in name:
+            m_name = name.split('_LHS_T')[0]
+            family_stats[m_name]['lhs_target'] += 1
+        elif '_LHS_' in name:
+            m_name = name.split('_LHS_')[0]
+            family_stats[m_name]['lhs_normal'] += 1
+        else:
+            family_stats[name]['real'] += 1
+
+    print(f"{'突变体母体':<35} | {'Real':<6} | {'普通LHS':<8} | {'TargetLHS':<9} | {'合计':<6}")
+    print("-" * 75)
+    total_real = total_normal = total_target = 0
+    for m_name in sorted(family_stats.keys()):
+        s = family_stats[m_name]
+        total = s['real'] + s['lhs_normal'] + s['lhs_target']
+        if total > 0:
+            print(f"{m_name:<35} | {s['real']:<6} | {s['lhs_normal']:<8} | {s['lhs_target']:<9} | {total:<6}")
+        total_real += s['real']
+        total_normal += s['lhs_normal']
+        total_target += s['lhs_target']
+    print("-" * 75)
+    print(f"{'合计':<35} | {total_real:<6} | {total_normal:<8} | {total_target:<9} | {total_real+total_normal+total_target:<6}")
+    print("="*75)

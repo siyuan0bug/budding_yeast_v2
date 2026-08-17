@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Callback, EarlyStopping
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -168,6 +168,14 @@ def main():
     parser.add_argument('--lambda_penalty', type=float, default=1.0,
                         help='PINN v2: 负值惩罚权重（v1=10.0, v2=1.0）')
 
+    # PINO 损失参数 (loss_type='pino' 时生效)
+    # H1 Sobolev 损失: ||u-v||_{H1}² = α·||u-v||_{L2}² + β·||du/dt-dv/dt||_{L2}²
+    # 时域 L2 (α) 已含在 MSE 主损失中，这里 β 控制频域梯度约束强度
+    parser.add_argument('--lambda_h1', type=float, default=0.1,
+                        help='PINO: H1 频域梯度损失权重（warmup 后线性增长到该值）')
+    parser.add_argument('--h1_beta', type=float, default=1.0,
+                        help='PINO: H1 频域项中 k² 的缩放系数（β in weight=α+β·k²）')
+
     # 自回归滚动选项
     parser.add_argument('--rollout_type', type=str, default='one_time',
                         choices=['one_time', 'autoregressive'],
@@ -187,13 +195,15 @@ def main():
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
     parser.add_argument('--al_strategy', type=str, default='none',
                           choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs', 'pial', 'mutant_aware',
-                                   'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal'],
+                                   'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_boundary', 'al4pde_mass'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
                                "us/is/random=标准池化AL; rgs=Real-Guided局部密集采样; "
                                "pial=Physics-Informed AL (ODE残差+轨迹多样性); "
                                "mutant_aware=基于atlas数据的优先级加权采样, 需配合 --atlas_csv; "
                                "al4pde_random/uncertainty/diversity=al4pde风格池化AL(需配合--al_pool_dataset); "
-                               "maal=Mutant-Aware AL (diversity+target priority, 需配合--al_pool_dataset)")
+                               "maal=Mutant-Aware AL (diversity+target priority, 需配合--al_pool_dataset); "
+                               "al4pde_boundary=借鉴v5_boundary的0值邻域采样思想, 优先选择突变参数接近0边界的候选(需配合--al_pool_dataset); "
+                               "al4pde_mass=借鉴mass_dataset_generator的分层采样, 按通路频率×机制频率优先选择生物学高频典型突变(需配合--al_pool_dataset)")
     parser.add_argument('--atlas_csv', type=str, default=None,
                         help="mutant_aware 策略专用: mutant_atlas_merged.csv 路径 (含 lhs_MAE_min, lhs_n_samples 列)")
     # al4pde 框架专用参数
@@ -201,6 +211,8 @@ def main():
                         help="al4pde/maal 策略专用: 候选池数据集路径 (v5), 含 target 样本 (_LHS_T 后缀)")
     parser.add_argument('--al_target_weight', type=float, default=0.4,
                         help="MAAL 的 target priority 权重 (默认 0.4; diversity 权重 = 1 - target_weight)")
+    parser.add_argument('--al_mass_weight', type=float, default=0.5,
+                        help="al4pde_mass 的 MASS 生物学分层优先级权重 (默认 0.5; diversity 权重 = 1 - mass_weight)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
     parser.add_argument('--al_num_add', type=int, default=500, help="每轮 AL 新增样本数 (减小以避免引入噪声)")
     parser.add_argument('--al_perturbation', type=float, default=0.05, help="RGS专用: 连续参数局部扰动幅度 (0.05=±5%%, 减小以提升参数合理性)")
@@ -225,33 +237,39 @@ def main():
     pl.seed_everything(args.seed, workers=True)
     os.makedirs(args.save_dir, exist_ok=True)
 
-    model = YeastLitModule(
-        model_name=args.model,
-        wavelet=args.wavelet,
-        num_vars=39,
-        param_dim=141,
-        modes=args.modes,
-        width=args.width,
-        n_blocks=args.n_blocks,
-        loss_type=args.loss_type,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        max_epochs=args.max_epochs,
-        warmup_epochs=args.warmup_epochs,
-        d_lambda=args.d_lambda,
-        ode_method=args.ode_method,
-        ode_rtol=args.ode_rtol,
-        ode_atol=args.ode_atol,
-        lambda_phys=args.lambda_phys,
-        lambda_jump=args.lambda_jump,
-        lambda_penalty=args.lambda_penalty,
-        event_window=args.event_window,
-        event_tol=args.event_tol,
-        jump_ratio=args.jump_ratio,
-        residual_subsample=args.residual_subsample,
-        event_weight=args.event_weight,
-        rollout_type=args.rollout_type,
-    )
+    def build_fresh_model():
+        """构造一个全新随机初始化的模型 (v2.3 al4pde 外层重训: 每轮冷启动)。"""
+        return YeastLitModule(
+            model_name=args.model,
+            wavelet=args.wavelet,
+            num_vars=39,
+            param_dim=141,
+            modes=args.modes,
+            width=args.width,
+            n_blocks=args.n_blocks,
+            loss_type=args.loss_type,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            max_epochs=args.max_epochs,
+            warmup_epochs=args.warmup_epochs,
+            d_lambda=args.d_lambda,
+            ode_method=args.ode_method,
+            ode_rtol=args.ode_rtol,
+            ode_atol=args.ode_atol,
+            lambda_phys=args.lambda_phys,
+            lambda_jump=args.lambda_jump,
+            lambda_penalty=args.lambda_penalty,
+            event_window=args.event_window,
+            event_tol=args.event_tol,
+            jump_ratio=args.jump_ratio,
+            residual_subsample=args.residual_subsample,
+            event_weight=args.event_weight,
+            lambda_h1=args.lambda_h1,
+            h1_beta=args.h1_beta,
+            rollout_type=args.rollout_type,
+        )
+
+    model = build_fresh_model()
 
     datamodule = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
@@ -272,64 +290,121 @@ def main():
         logger = WandbLogger(project=args.project, name=run_name)
         logger.log_hyperparams(vars(args))
 
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=os.path.join(args.save_dir, run_name),
-        filename='best-{epoch:02d}-{val_loss_lhs:.4f}',
-        monitor='val_loss_lhs',
-        mode='min',
-        save_top_k=1,
-    )
-
+    AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
+                         'maal', 'al4pde_boundary', 'al4pde_mass')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)
 
-    # 🌟🌟🌟 新增 2：挂载回调拦截器 🌟🌟🌟
-    callbacks = [checkpoint_callback, lr_monitor, visualizer, EpochSummaryCallback()]
-    
-    if args.al_strategy != 'none':
+    if args.al_strategy in AL4PDE_STRATEGIES:
+        # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
+        # 5 轮 AL: 每轮全新模型 + 全新余弦周期在完整累积数据上跑满 (args.max_epochs),
+        # 前 4 轮训练后各采集追加一次 (每次 19000), 末轮只训练; 取最后一轮最后 epoch。
+        # 最优权重 = 最后一轮最后 epoch (不做 val-best 选择, 无早停; 依赖余弦退火到近零)。
         from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
-        print(f"🚀 [Active Learning] 已挂载主动学习引擎，当前策略: {args.al_strategy.upper()}")
+        NUM_AL_ROUNDS = 5
+        device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"🚀 [al4pde v2.3 外层重训] 策略={args.al_strategy.upper()} | "
+              f"{NUM_AL_ROUNDS} 轮 × {args.max_epochs} epoch/轮 | 每轮冷启动 + 全新余弦 | 取最后一轮最后 epoch")
+
+        datamodule.setup('fit')  # 构建数据集 (setup 幂等, 后续 fit 不会重建)
+
         al_cb = ActiveLearningCallback(
-              trigger_every_n_epochs=args.al_trigger_epoch,
-              strategy=args.al_strategy,
-              num_add=args.al_num_add,
-              perturbation=args.al_perturbation,
-              mae_threshold=args.al_mae_threshold,
-              # 标准池化 AL 参数
-              initial_train_size=args.al_initial_train_size,
-              initial_selection=args.al_initial_selection,
-              diversity_weight=args.al_diversity_weight,
-              pool_subset_size=args.al_pool_subset_size,
-              uncertainty_metric=args.al_uncertainty_metric,
-              random_seed=args.seed,
-              # mutant_aware 策略专用参数
-              atlas_csv_path=args.atlas_csv,
-              # al4pde 框架专用参数
-              al_pool_dataset=args.al_pool_dataset,
-              target_weight=args.al_target_weight,
-          )
-        callbacks.append(al_cb)
+            trigger_every_n_epochs=args.al_trigger_epoch,
+            strategy=args.al_strategy,
+            num_add=args.al_num_add,
+            perturbation=args.al_perturbation,
+            mae_threshold=args.al_mae_threshold,
+            initial_train_size=args.al_initial_train_size,
+            initial_selection=args.al_initial_selection,
+            diversity_weight=args.al_diversity_weight,
+            pool_subset_size=args.al_pool_subset_size,
+            uncertainty_metric=args.al_uncertainty_metric,
+            random_seed=args.seed,
+            atlas_csv_path=args.atlas_csv,
+            al_pool_dataset=args.al_pool_dataset,
+            target_weight=args.al_target_weight,
+            mass_weight=args.al_mass_weight,
+        )
+        al_cb.enable_outer_loop_mode()
+        # 一次性: 缩至初始子集 + 生成候选池 + (diversity/maal/boundary) ODE 预计算
+        al_cb.al4pde_setup(datamodule, device=device_str)
+
+        ckpt_dir = os.path.join(args.save_dir, run_name)
+        os.makedirs(ckpt_dir, exist_ok=True)
+        trainer = None
+        for r in range(NUM_AL_ROUNDS):
+            n_train = len(datamodule.train_dataset_lhs)
+            print(f"\n===== [al4pde v2.3] AL 轮 {r + 1}/{NUM_AL_ROUNDS} | 当前训练集: {n_train} =====")
+            model = build_fresh_model()  # 冷启动: 全新随机初始化 + 全新余弦周期
+            trainer = pl.Trainer(
+                max_epochs=args.max_epochs,
+                logger=logger,
+                callbacks=[lr_monitor, visualizer, EpochSummaryCallback()],
+                accelerator=args.device if args.device != 'cpu' else 'auto',
+                devices=args.devices,
+                gradient_clip_val=1.0,
+                precision="bf16-mixed",
+                strategy='ddp_find_unused_parameters_true' if args.devices > 1 else 'auto',
+                reload_dataloaders_every_n_epochs=0,
+                num_sanity_val_steps=0,
+            )
+            trainer.fit(model, datamodule=datamodule)
+            # 前 4 轮: 用当前(本轮训练完)模型选样并追加; 末轮只训练不选 (对齐 al4pde is_last)
+            if r < NUM_AL_ROUNDS - 1:
+                al_cb.al4pde_select_and_append(model, datamodule, device=device_str)
+
+        # 取最后一轮最后 epoch 权重保存 (唯一 ckpt, run_pipeline.sh 用 ls *.ckpt|head -1 发现)
+        final_ckpt = os.path.join(ckpt_dir, 'final-last-epoch.ckpt')
+        trainer.save_checkpoint(final_ckpt)
+        print(f"✅ [al4pde v2.3] 已保存最终模型 (最后一轮最后 epoch): {final_ckpt}")
     else:
-        print("🌱 [Baseline Mode] 未启用主动学习，数据集在全生命周期锁定。")
+        # ================= 非 al4pde: 单次 fit (最优权重依据 val_loss_lhs) =================
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=os.path.join(args.save_dir, run_name),
+            filename='best-{epoch:02d}-{val_loss_lhs:.4f}',
+            monitor='val_loss_lhs',
+            mode='min',
+            save_top_k=1,
+        )
+        callbacks = [checkpoint_callback, lr_monitor, visualizer, EpochSummaryCallback()]
 
-    # 🌟🌟🌟 新增 3：修改 Trainer，强制刷新 DataLoader 🌟🌟🌟
-    trainer = pl.Trainer(
-        max_epochs=args.max_epochs,
-        logger=logger,
-        callbacks=callbacks,
-        accelerator=args.device if args.device != 'cpu' else 'auto',
-        devices=args.devices,
+        if args.al_strategy != 'none':
+            from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
+            print(f"🚀 [Active Learning] 已挂载主动学习引擎，当前策略: {args.al_strategy.upper()}")
+            al_cb = ActiveLearningCallback(
+                  trigger_every_n_epochs=args.al_trigger_epoch,
+                  strategy=args.al_strategy,
+                  num_add=args.al_num_add,
+                  perturbation=args.al_perturbation,
+                  mae_threshold=args.al_mae_threshold,
+                  initial_train_size=args.al_initial_train_size,
+                  initial_selection=args.al_initial_selection,
+                  diversity_weight=args.al_diversity_weight,
+                  pool_subset_size=args.al_pool_subset_size,
+                  uncertainty_metric=args.al_uncertainty_metric,
+                  random_seed=args.seed,
+                  atlas_csv_path=args.atlas_csv,
+                  al_pool_dataset=args.al_pool_dataset,
+                  target_weight=args.al_target_weight,
+                  mass_weight=args.al_mass_weight,
+              )
+            callbacks.append(al_cb)
+        else:
+            print("🌱 [Baseline Mode] 未启用主动学习，数据集在全生命周期锁定。")
 
-        # 🌟🌟🌟 新增这一行：开启 BF16 混合精度加速 🌟🌟🌟
-        precision="bf16-mixed",
-
-        strategy='ddp_find_unused_parameters_true' if args.devices > 1 else 'auto',
-        # 【关键】开启后，每次触发主动学习添加新数据后，底层数据集才会立刻生效
-        reload_dataloaders_every_n_epochs=args.al_trigger_epoch if args.al_strategy != 'none' else 0,
-        num_sanity_val_steps=0 # 建议设为0，防止 AL 框架在第0步引发多余逻辑
-    )
-
-    trainer.fit(model, datamodule=datamodule)
+        trainer = pl.Trainer(
+            max_epochs=args.max_epochs,
+            logger=logger,
+            callbacks=callbacks,
+            accelerator=args.device if args.device != 'cpu' else 'auto',
+            devices=args.devices,
+            gradient_clip_val=1.0,
+            precision="bf16-mixed",
+            strategy='ddp_find_unused_parameters_true' if args.devices > 1 else 'auto',
+            reload_dataloaders_every_n_epochs=args.al_trigger_epoch if args.al_strategy != 'none' else 0,
+            num_sanity_val_steps=0
+        )
+        trainer.fit(model, datamodule=datamodule)
     
     #print("\n🔬 开始最终测试阶段...")
     #trainer.test(model, datamodule=datamodule, ckpt_path='best')

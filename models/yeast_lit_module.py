@@ -59,6 +59,9 @@ class YeastLitModule(pl.LightningModule):
         jump_ratio=0.3,
         residual_subsample=1,
         event_weight=0.1,
+        # PINO 损失相关超参数 (loss_type='pino' 时生效)
+        lambda_h1=0.1,
+        h1_beta=1.0,
         # 自回归滚动选项
         rollout_type='one_time',  # 'one_time' (默认, 一次性预测) 或 'autoregressive' (自回归滚动)
     ):
@@ -90,11 +93,9 @@ class YeastLitModule(pl.LightningModule):
                                     method=ode_method, rtol=ode_rtol, atol=ode_atol)
 
         loss_class = LOSS_REGISTRY[loss_type]
-        if loss_type == 'mse_only':
+        if loss_type in ('mse_only', 'mse_smooth', 'h1'):
             self.criterion = loss_class()
-        elif loss_type == 'mse_smooth':
-            self.criterion = loss_class()
-        elif loss_type == 'pinn_residual':
+        elif loss_type in ('pinn_residual', 'pino'):
             # 创建占位实例以在 ModelSummary 中显示损失类型
             # 真实参数在 on_train_start 中用 datamodule 统计量重建
             dummy_mean = torch.zeros(1, num_vars, 1)
@@ -107,6 +108,7 @@ class YeastLitModule(pl.LightningModule):
                 event_window=event_window, event_tol=event_tol,
                 jump_ratio=jump_ratio, residual_subsample=residual_subsample,
                 event_weight=event_weight,
+                **({'lambda_h1': lambda_h1, 'h1_beta': h1_beta} if loss_type == 'pino' else {}),
             )
         else:
             self.criterion = None
@@ -121,7 +123,7 @@ class YeastLitModule(pl.LightningModule):
             dm = self.trainer.datamodule
             loss_type = self.hparams.loss_type
             loss_class = LOSS_REGISTRY[loss_type]
-            if loss_type == 'pinn_residual':
+            if loss_type in ('pinn_residual', 'pino'):
                 # 用 datamodule 真实统计量重建（替换 __init__ 中的占位实例）
                 self.criterion = loss_class(
                     dm.mean_y.to(self.device),
@@ -137,9 +139,10 @@ class YeastLitModule(pl.LightningModule):
                     jump_ratio=self.hparams.jump_ratio,
                     residual_subsample=self.hparams.residual_subsample,
                     event_weight=self.hparams.event_weight,
+                    **({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta} if loss_type == 'pino' else {}),
                 )
             elif self.criterion is None:
-                if loss_type in ('mse_only', 'mse_smooth'):
+                if loss_type in ('mse_only', 'mse_smooth', 'h1'):
                     self.criterion = loss_class()
                 else:
                     self.criterion = loss_class(
@@ -220,9 +223,10 @@ class YeastLitModule(pl.LightningModule):
 
         out_full = self.forward_ic_time(x, p)
 
-        if self.hparams.loss_type == 'pinn_residual':
+        if self.hparams.loss_type in ('pinn_residual', 'pino'):
             # Curriculum learning 由 loss 类内部管理（set_epoch + _get_physics_weight）
             # v2: warmup_epochs=30（前30轮纯MSE），之后30轮线性增长到目标权重
+            # PINO 同样走物理约束路径，H1 频域项由 PINOLoss 内部 warmup 调度
             self.criterion.set_epoch(self.current_epoch)
 
             loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)

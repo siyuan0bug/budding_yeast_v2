@@ -227,6 +227,9 @@ class PINNResidualLoss(nn.Module):
 
         n_t = len(t_indices)
         y_all = pred_real[:, :, t_indices]  # (B, 39, n_t)
+        # 【关键】浓度非负约束: 防止预测的负值导致 ODE 分母接近 0 产生 NaN
+        # (SIC1T = SIC1+C2+C5+SIC1P+C2P+C5P 等聚合变量在分母中, 负值可使分母归零)
+        y_all = torch.clamp(y_all, min=0.0)
         y_all = y_all.transpose(1, 2).reshape(B * n_t, V)  # (B*n_t, 39)
 
         p_dict_expanded = {}
@@ -238,12 +241,18 @@ class PINNResidualLoss(nn.Module):
 
         t_all = t_grid[t_indices].unsqueeze(0).expand(B, n_t).reshape(B * n_t)
         f_all = eqns_torch(y_all, p_dict_expanded, t_all)  # (B*n_t, 39)
+        # 安全防护: ODE 函数在极端输入下仍可能产生 NaN/Inf (Goldbeter-Koshland 分母→0)
+        f_all = torch.nan_to_num(f_all, nan=0.0, posinf=1e4, neginf=-1e4)
         f_u[:, :, t_indices] = f_all.reshape(B, n_t, V).transpose(1, 2)
 
         # 残差（真实空间）归一化到归一化空间
         residual = du_dt - f_u  # (B, 39, T)
         residual_norm = residual / self.std_y  # (B, 39, T)
-        residual_sq = residual_norm ** 2
+        # 【关键】nan_to_num + clamp 双重防护:
+        #   torch.clamp(NaN, max=100) 仍是 NaN! 必须先用 nan_to_num 转为有限值
+        #   ODE 函数 f(u,p) 分母→0 时产生 NaN, 传播到残差使模型权重变 NaN
+        residual_norm = torch.nan_to_num(residual_norm, nan=0.0, posinf=50.0, neginf=-50.0)
+        residual_sq = torch.clamp(residual_norm ** 2, max=100.0)
 
         # 软掩码：连续区间权重=1.0，event 区间权重=event_weight
         weight = torch.ones_like(mask, dtype=pred_real.dtype, device=pred_real.device)
@@ -366,6 +375,177 @@ class PINNResidualLoss(nn.Module):
         return total_loss
 
 
+class H1Loss(nn.Module):
+    """
+    H1 Sobolev 损失: 时域 L2 + 频域梯度 L2
+
+    数学定义:
+        ||u-v||_{H1}² = α·||u-v||_{L2}² + β·||du/dt - dv/dt||_{L2}²
+
+    时域部分 (α): MSE(pred, target) — 约束原始值
+    频域部分 (β): Σ_k k²·|FFT(pred-target)_k|² — 约束导数/高频分量
+
+    频域实现 (合并两项等价):
+        H1 = Σ_k (α + β·k²)·|û_k - v̂_k|²
+
+    适配 budding yeast:
+    - 数据形状: (B, 39, T), T=500, FFT 在时间维度 dim=-1
+    - 39 个变量有不同量级，在归一化空间计算
+    - 时域和频域分别计算，便于观察两部分贡献
+
+    来源: HyperNOs 项目的 H1relLoss_1D (loss_fun.py L336-L401)，
+          适配为 budding yeast 时间序列场景。
+    原始 H1relLoss_1D 在频域合并计算 (α + β·k²) 权重，
+          此处拆分为时域 MSE + 频域梯度 MSE 以明确两部分贡献。
+    """
+
+    def __init__(self, mean_y=None, std_y=None, alpha=1.0, beta=1.0):
+        """
+        Args:
+            mean_y, std_y: (1, 39, 1) 归一化统计量 (接口兼容, 此损失在归一化空间计算不直接使用)
+            alpha: 时域 L2 权重 (约束原始值)
+            beta: 频域梯度 L2 权重 (约束导数/高频)
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.mse = nn.MSELoss(reduction='none')
+
+    def forward(self, pred_norm, target_norm, batch_weights, lambda_penalty, lambda_smooth):
+        B, V, T = pred_norm.shape
+
+        # 时域 L2 损失 (原始值 MSE)
+        diff = pred_norm - target_norm  # (B, V, T)
+        loss_time = diff.pow(2).mean(dim=(1, 2))  # (B,)
+
+        # 频域梯度 L2 损失 (导数 MSE, 通过 FFT 计算)
+        # 导数在频域: du/dt ↔ i·ω·û, 模² = ω²·|û|²
+        # 使用 rfft (实数输入), 频率 k = rfftfreq(T)
+        # 【关键】norm='ortho' 确保 FFT 能量守恒 (对齐 HyperNOs H1relLoss_1D)
+        #   无 norm 时 |FFT|² 正比于 T², T=500 时频域损失比 MSE 大 ~500 倍, 导致梯度爆炸
+        diff_fft = torch.fft.rfft(diff, dim=-1, norm='ortho')  # (B, V, T//2+1) complex
+        k = torch.fft.rfftfreq(T, device=pred_norm.device)  # (T//2+1,) 归一化频率 [0, 0.5]
+        # 频域梯度: |FFT(diff)|² × k², 对高频分量施加更大权重
+        loss_freq = (torch.abs(diff_fft) ** 2 * (k ** 2).unsqueeze(0).unsqueeze(0)).mean(dim=(1, 2))  # (B,)
+
+        # H1 = α·时域L2 + β·频域梯度L2
+        total_loss = self.alpha * loss_time + self.beta * loss_freq  # (B,)
+
+        # 记录分量
+        self._last_loss_components = {
+            'h1_time': loss_time.mean().detach(),
+            'h1_freq': loss_freq.mean().detach(),
+        }
+
+        return (total_loss * batch_weights).mean()
+
+
+class PINOLoss(PINNResidualLoss):
+    """
+    PINO (Physics-Informed Neural Operator) 损失函数。
+
+    L = L_data + λ_phys·L_phys + λ_h1·L_h1
+
+    L_data:  MSE 数据损失 (时域, 继承自 PINNResidualLoss)
+    L_phys:  ODE 残差损失 (有限差分计算 du/dt, 继承自 PINNResidualLoss)
+    L_h1:    H1 频域梯度约束 (新增, FFT 计算高频分量误差)
+
+    与 PINNResidualLoss 的区别:
+    1. 加入 H1 频域梯度约束 (Sobolev 范数, 约束高频/导数误差)
+    2. 保留 ODE 残差和 event 掩码 (物理约束)
+    3. H1 约束只包含频域梯度部分 (时域 L2 已由 MSE 覆盖)
+
+    设计说明:
+    - PINO 论文用频域方法计算导数, 但 budding yeast 轨迹含 event 跳跃,
+      FFT 导数在跳跃点产生 Gibbs 现象, 故 du/dt 仍用有限差分。
+    - PINO 的频域思想体现在 H1 约束上: 通过 FFT 在频域约束高频误差。
+    - H1 约束与物理约束同步 curriculum learning (warmup 后逐步启动)。
+
+    来源: PINO 论文 "Physics-Informed Neural Operator for Learning PDEs"
+          (Li et al., ICLR 2021), 适配 budding yeast ODE 场景。
+    """
+
+    def __init__(self, mean_y, std_y, p_mean, p_std, t_max=210.0,
+                 lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
+                 event_window=4, event_tol=0.08, jump_ratio=0.3,
+                 residual_subsample=1, event_weight=0.1,
+                 warmup_epochs=30,
+                 lambda_h1=0.1, h1_beta=1.0):
+        """
+        Args:
+            ... (继承 PINNResidualLoss 的所有参数)
+            lambda_h1: H1 频域约束权重 (warmup 后逐步启动)
+            h1_beta: H1 频域梯度 L2 权重 (时域 L2 由 MSE 覆盖, 此处只约束频域梯度)
+        """
+        super().__init__(mean_y, std_y, p_mean, p_std, t_max,
+                         lambda_phys, lambda_jump, lambda_penalty,
+                         event_window, event_tol, jump_ratio,
+                         residual_subsample, event_weight,
+                         warmup_epochs)
+        self.lambda_h1 = lambda_h1
+        self.h1_beta = h1_beta
+
+    def _compute_h1_freq_loss(self, pred_norm, target_norm):
+        """
+        H1 频域梯度损失 (仅频域梯度部分, 时域 L2 由 MSE 覆盖)
+
+        计算: mean( |FFT(pred-target)|² × k² )
+
+        高频分量 (大 k) 受到更大惩罚, 约束预测的导数/高频误差。
+        不使用 event 掩码: FFT 是全局变换, 无法局部屏蔽;
+        通过较小的 lambda_h1 权重避免压制 event 跳跃。
+        """
+        B, V, T = pred_norm.shape
+        diff = pred_norm - target_norm  # (B, V, T)
+        # 【关键】norm='ortho' 确保 FFT 能量守恒, 否则 |FFT|² 正比于 T² 导致梯度爆炸
+        diff_fft = torch.fft.rfft(diff, dim=-1, norm='ortho')  # (B, V, T//2+1) complex
+        k = torch.fft.rfftfreq(T, device=pred_norm.device)  # (T//2+1,)
+        # 频域梯度 L2: |FFT(diff)|² × k²
+        loss_freq = (torch.abs(diff_fft) ** 2 * (k ** 2).unsqueeze(0).unsqueeze(0)).mean(dim=(1, 2))  # (B,)
+        return loss_freq.mean()
+
+    def _get_h1_weight(self):
+        """Curriculum: H1 约束与物理约束同步启动"""
+        if self._current_epoch < self.warmup_epochs:
+            return 0.0
+        progress = min(1.0, (self._current_epoch - self.warmup_epochs) / 30.0)
+        return self.lambda_h1 * progress
+
+    def forward(self, pred_norm, target_norm, p_norm, batch_weights,
+                lambda_penalty=None, lambda_smooth=None):
+        """
+        PINO 损失前向传播。
+
+        Args:
+            pred_norm: (B, 39, T) 归一化预测轨迹
+            target_norm: (B, 39, T) 归一化目标轨迹
+            p_norm: (B, 141) 归一化参数向量
+            batch_weights: (B,) 批次权重
+            lambda_penalty: 负值惩罚权重 (覆盖默认值)
+            lambda_smooth: 未使用 (接口兼容)
+
+        Returns:
+            total_loss: 标量
+        """
+        # 父类处理: MSE + 负值惩罚 + ODE残差 + 跳跃条件
+        total_loss = super().forward(pred_norm, target_norm, p_norm, batch_weights,
+                                     lambda_penalty, lambda_smooth)
+
+        # H1 频域约束 (新增)
+        lam_h1_eff = self._get_h1_weight()
+        loss_h1 = torch.tensor(0.0, device=pred_norm.device)
+        if lam_h1_eff > 0:
+            loss_h1 = self._compute_h1_freq_loss(pred_norm, target_norm)
+            total_loss = total_loss + lam_h1_eff * loss_h1
+
+        # 更新分量记录
+        if hasattr(self, '_last_loss_components'):
+            self._last_loss_components['h1_freq'] = loss_h1.detach()
+            self._last_loss_components['h1_weight'] = torch.tensor(lam_h1_eff)
+
+        return total_loss
+
+
 LOSS_REGISTRY = {
     'physics_informed': PhysicsInformedLoss,
     'mse_only': MSEOnlyLoss,
@@ -373,6 +553,8 @@ LOSS_REGISTRY = {
     'mse_smooth': MSESmoothLoss,
     't_smooth': DilatedSobolevLoss,
     'pinn_residual': PINNResidualLoss,
+    'h1': H1Loss,
+    'pino': PINOLoss,
 }
 
 

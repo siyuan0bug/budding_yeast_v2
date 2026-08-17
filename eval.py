@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
+from budding_yeast_v2.data.lhs_v1_origin import get_default_params, mutant_rules
 from budding_yeast_v2.utils.metrics import calculate_metrics
 
 CORE_9_INDICES = [0, 1, 2, 3, 4, 20, 22, 33, 35]
@@ -20,6 +21,67 @@ VARIABLE_NAMES = [
     "CDC20", "CDH1T", "CDH1", "CDC14T", "CDC14", "NET1T", "NET1", "RENT", "TEM1", "CDC15",
     "PPX", "PDS1", "ESP1", "ORI", "BUD", "SPN", "Vi20", "lte1", "BUB2"
 ]
+
+# ======== 突变参数信息提取 (参考 plot_real_vs_lhs.py) ========
+_DEFAULTS_DICT = get_default_params()
+_DEFAULTS_DICT.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
+PARAM_KEYS = sorted([k for k in _DEFAULTS_DICT.keys() if k != 'is_mutant_104'])
+_DEFAULT_PARAM_VEC = np.array([_DEFAULTS_DICT[k] for k in PARAM_KEYS])
+
+def get_real_mutations_str(mutant_name):
+    """从 mutant_rules 获取 real mutant 的突变参数字符串"""
+    rules = mutant_rules.get(mutant_name, {})
+    if not rules:
+        return "WT (Default)"
+    return ", ".join(f"{k}={v:.4g}" for k, v in rules.items())
+
+def get_lhs_perturbation_str(lhs_name, lhs_param_vec_real):
+    """提取 LHS 样本相对母体 mutant 的微扰参数及倍数关系
+
+    格式参考 plot_real_vs_lhs.py 的 parse_lhs_mutations, 增强: 显示母体值
+    - 母体非0: name=lhs_val (母体=mother_val, ratio_x)
+    - 母体为0: name=lhs_val (母体=0)
+
+    Args:
+        lhs_name: LHS 样本名 (如 '3_cln1_cln2_KO_LHS_083')
+        lhs_param_vec_real: 反归一化后的真实参数向量 (141,)
+
+    Returns:
+        mother_name: 母体 mutant 名
+        perturb_str: 微扰参数字符串 (含换行, 每5个参数一组)
+    """
+    # 从样本名中提取母体名 (按长度降序匹配, 避免短名误匹配)
+    mother_name = None
+    for rule_name in sorted(mutant_rules.keys(), key=len, reverse=True):
+        if lhs_name.startswith(rule_name + '_LHS'):
+            mother_name = rule_name
+            break
+
+    if mother_name is None:
+        return "Unknown", "Unknown mother mutant"
+
+    # 构建母体参数向量 (默认值 + 母体突变规则)
+    mother_rules = mutant_rules.get(mother_name, {})
+    mother_defaults = dict(_DEFAULTS_DICT)
+    mother_defaults.update(mother_rules)
+    mother_param_vec = np.array([mother_defaults[k] for k in PARAM_KEYS])
+
+    # 提取微扰参数及倍数
+    mutated_info = []
+    for lhs_val, mother_val, name in zip(lhs_param_vec_real, mother_param_vec, PARAM_KEYS):
+        if not np.isclose(lhs_val, mother_val, rtol=1e-4, atol=1e-6):
+            if abs(mother_val) > 1e-8:
+                ratio = lhs_val / mother_val
+                mutated_info.append(f"{name}={lhs_val:.4g} (mother={mother_val:.4g}, {ratio:.2f}x)")
+            else:
+                mutated_info.append(f"{name}={lhs_val:.4g} (mother=0)")
+
+    if not mutated_info:
+        return mother_name, "No Perturbations (Identical to Base Mutant)"
+
+    # 每5个参数一组换行
+    chunks = [" | ".join(mutated_info[i:i+5]) for i in range(0, len(mutated_info), 5)]
+    return mother_name, "\n".join(chunks)
 
 def load_model_from_checkpoint(ckpt_path, device='cpu'):
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -51,8 +113,8 @@ def plot_variable_grid(pred, target, var_indices, title, save_path, rows, cols, 
         ax.grid(True, alpha=0.3)
         if i == 0: ax.legend(fontsize=8)
     for i in range(len(var_indices), len(axes)): axes[i].set_visible(False)
-    plt.suptitle(title, fontsize=16, fontweight='bold')
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.suptitle(title, fontsize=13, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
@@ -93,6 +155,22 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             if max_plots is None or plot_count < max_plots:
                 m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
                 title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
+
+                # 添加突变参数信息行 (参考 plot_real_vs_lhs.py 格式)
+                # 反归一化参数: p_norm -> p_real
+                p_real_np = (p.cpu() * dm.p_std.cpu() + dm.p_mean.cpu()).squeeze(0).numpy()
+                if '_LHS_' in m_name:
+                    # LHS 样本: 添加母体名 + 微扰参数(含母体值和倍数)
+                    mother_name, perturb_str = get_lhs_perturbation_str(m_name, p_real_np)
+                    title_base += f"\nMother: {mother_name} | Perturbations (mother_val, ratio):\n{perturb_str}"
+                elif str(m_name).startswith('MASS_'):
+                    # MASS 合成样本 (mass_dataset_generator.py 生成): 无母体规则, 标注为合成样本
+                    title_base += f"\nMASS synthetic sample (mutant-aware stratified sampling)"
+                else:
+                    # Real mutant: 添加突变参数
+                    mut_str = get_real_mutations_str(m_name)
+                    title_base += f"\nMutations: {mut_str}"
+
                 p_np, t_np = pred_denorm[0].numpy(), target_denorm[0].numpy()
                 save_plot_path = os.path.join(plot_dir, f"{m_name}.png")
                 plot_variable_grid(p_np, t_np, range(39), f"{title_base}\nAll 39 Variables",
