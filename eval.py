@@ -3,10 +3,12 @@ import argparse
 import json
 import csv
 import torch
+from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from concurrent.futures import ProcessPoolExecutor
 
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
@@ -22,35 +24,19 @@ VARIABLE_NAMES = [
     "PPX", "PDS1", "ESP1", "ORI", "BUD", "SPN", "Vi20", "lte1", "BUB2"
 ]
 
-# ======== 突变参数信息提取 (参考 plot_real_vs_lhs.py) ========
+# ======== 突变参数信息提取 ========
 _DEFAULTS_DICT = get_default_params()
 _DEFAULTS_DICT.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
 PARAM_KEYS = sorted([k for k in _DEFAULTS_DICT.keys() if k != 'is_mutant_104'])
 _DEFAULT_PARAM_VEC = np.array([_DEFAULTS_DICT[k] for k in PARAM_KEYS])
 
 def get_real_mutations_str(mutant_name):
-    """从 mutant_rules 获取 real mutant 的突变参数字符串"""
     rules = mutant_rules.get(mutant_name, {})
     if not rules:
         return "WT (Default)"
     return ", ".join(f"{k}={v:.4g}" for k, v in rules.items())
 
 def get_lhs_perturbation_str(lhs_name, lhs_param_vec_real):
-    """提取 LHS 样本相对母体 mutant 的微扰参数及倍数关系
-
-    格式参考 plot_real_vs_lhs.py 的 parse_lhs_mutations, 增强: 显示母体值
-    - 母体非0: name=lhs_val (母体=mother_val, ratio_x)
-    - 母体为0: name=lhs_val (母体=0)
-
-    Args:
-        lhs_name: LHS 样本名 (如 '3_cln1_cln2_KO_LHS_083')
-        lhs_param_vec_real: 反归一化后的真实参数向量 (141,)
-
-    Returns:
-        mother_name: 母体 mutant 名
-        perturb_str: 微扰参数字符串 (含换行, 每5个参数一组)
-    """
-    # 从样本名中提取母体名 (按长度降序匹配, 避免短名误匹配)
     mother_name = None
     for rule_name in sorted(mutant_rules.keys(), key=len, reverse=True):
         if lhs_name.startswith(rule_name + '_LHS'):
@@ -60,13 +46,11 @@ def get_lhs_perturbation_str(lhs_name, lhs_param_vec_real):
     if mother_name is None:
         return "Unknown", "Unknown mother mutant"
 
-    # 构建母体参数向量 (默认值 + 母体突变规则)
     mother_rules = mutant_rules.get(mother_name, {})
     mother_defaults = dict(_DEFAULTS_DICT)
     mother_defaults.update(mother_rules)
     mother_param_vec = np.array([mother_defaults[k] for k in PARAM_KEYS])
 
-    # 提取微扰参数及倍数
     mutated_info = []
     for lhs_val, mother_val, name in zip(lhs_param_vec_real, mother_param_vec, PARAM_KEYS):
         if not np.isclose(lhs_val, mother_val, rtol=1e-4, atol=1e-6):
@@ -79,7 +63,6 @@ def get_lhs_perturbation_str(lhs_name, lhs_param_vec_real):
     if not mutated_info:
         return mother_name, "No Perturbations (Identical to Base Mutant)"
 
-    # 每5个参数一组换行
     chunks = [" | ".join(mutated_info[i:i+5]) for i in range(0, len(mutated_info), 5)]
     return mother_name, "\n".join(chunks)
 
@@ -98,110 +81,132 @@ def load_model_from_checkpoint(ckpt_path, device='cpu'):
     model.eval()
     return model, hp
 
-def plot_variable_grid(pred, target, var_indices, title, save_path, rows, cols, t_max=210):
+def _render_and_save_plot(task):
+    """独立的多进程画图函数，充分利用多核 CPU"""
+    pred, target, title, save_path, rows, cols, t_max = task
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
     axes = axes.flatten()
     t = np.linspace(0, t_max, pred.shape[-1])
-    for i, var_idx in enumerate(var_indices):
+    for i in range(pred.shape[0]):
         ax = axes[i]
-        ax.plot(t, target[var_idx], 'b-', label='Truth', linewidth=1.5)
-        ax.plot(t, pred[var_idx], 'r--', label='Pred', linewidth=1.5)
-        ax.set_xlabel('Time (min)')
-        ax.set_ylabel('Concentration')
-        var_name = VARIABLE_NAMES[var_idx] if var_idx < len(VARIABLE_NAMES) else f"Var {var_idx}"
-        ax.set_title(f'{var_idx}: {var_name}', fontweight='bold', fontsize=10)
+        ax.plot(t, target[i], 'b-', label='Truth', linewidth=1.5)
+        ax.plot(t, pred[i], 'r--', label='Pred', linewidth=1.5)
+        ax.set_xlabel('Time (min)', fontsize=8)
+        ax.set_ylabel('Concentration', fontsize=8)
+        var_name = VARIABLE_NAMES[i] if i < len(VARIABLE_NAMES) else f"Var {i}"
+        ax.set_title(f'{i}: {var_name}', fontweight='bold', fontsize=9)
         ax.grid(True, alpha=0.3)
-        if i == 0: ax.legend(fontsize=8)
-    for i in range(len(var_indices), len(axes)): axes[i].set_visible(False)
-    plt.suptitle(title, fontsize=13, fontweight='bold', y=0.98)
+        if i == 0:
+            ax.legend(fontsize=8)
+    for i in range(pred.shape[0], len(axes)):
+        axes[i].set_visible(False)
+    plt.suptitle(title, fontsize=12, fontweight='bold', y=0.98)
     plt.tight_layout(rect=[0, 0, 1, 0.90])
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=120, bbox_inches='tight')
     plt.close(fig)
 
 def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, save_dir, 
-                     sub_dir, max_plots=None):
-    """通用评估函数，评估一个 dataset 并生成图片和 CSV 行。"""
+                     sub_dir, batch_size=512, max_plots=None, max_workers=16):
+    """
+    高度优化的通用评估函数：
+    1. 使用 GPU 大 Batch 并行推理，将千级样本前向时间压至 < 0.2 秒；
+    2. 向量化计算 Per-mutant 指标；
+    3. 使用多进程进程池并行绘制 matplotlib 图片。
+    """
     plot_dir = os.path.join(save_dir, sub_dir)
     os.makedirs(plot_dir, exist_ok=True)
     
-    all_preds_denorm, all_targets_denorm = [], []
-    csv_rows = []
-    plot_count = 0
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    
+    all_preds_denorm_list = []
+    all_targets_denorm_list = []
+    all_p_real_list = []
 
+    # 1. GPU 大 Batch 高速推理
     with torch.no_grad():
-        for local_idx, batch in enumerate(dataset):
-            global_idx = indices[local_idx]
-            m_name = dm._mutant_names[global_idx]
-            p_label = dm.pattern_labels[global_idx]
+        for batch in loader:
+            x, p, y = [b.to(device, non_blocking=True) for b in batch]
+            pred = model.forward_ic_time(x, p)
+            
+            pred_denorm = pred * std_y + mean_y
+            target_denorm = y * std_y + mean_y
+            p_real = p * dm.p_std.to(device) + dm.p_mean.to(device)
+            
+            all_preds_denorm_list.append(pred_denorm.cpu())
+            all_targets_denorm_list.append(target_denorm.cpu())
+            all_p_real_list.append(p_real.cpu())
 
-            x, p, y = [b.unsqueeze(0).to(device) for b in batch]
-            pred_denorm = (model.forward_ic_time(x, p) * std_y + mean_y).cpu()
-            target_denorm = (y * std_y + mean_y).cpu()
+    all_preds = torch.cat(all_preds_denorm_list, dim=0)    # (N, V, T)
+    all_targets = torch.cat(all_targets_denorm_list, dim=0) # (N, V, T)
+    all_p_real = torch.cat(all_p_real_list, dim=0)          # (N, param_dim)
 
-            all_preds_denorm.append(pred_denorm)
-            all_targets_denorm.append(target_denorm)
+    # 2. 向量化构建 CSV 记录与画图任务
+    csv_rows = []
+    plot_tasks = []
+    N = len(indices)
 
-            metrics = calculate_metrics(pred_denorm, target_denorm)
-            csv_rows.append({
-                'Mutant': m_name,
-                'Pattern': p_label,
-                'MAE': metrics['MAE'],
-                'MSE': metrics['MSE'],
-                'Relative_L2': metrics['Relative L2'],
-                'Correlation': metrics['Correlation']
-            })
+    for i in range(N):
+        global_idx = indices[i]
+        m_name = dm._mutant_names[global_idx]
+        p_label = dm.pattern_labels[global_idx]
+        
+        pred_i = all_preds[i]     # (V, T)
+        target_i = all_targets[i] # (V, T)
+        p_real_i = all_p_real[i].numpy()
+        
+        metrics = calculate_metrics(pred_i, target_i)
+        csv_rows.append({
+            'Mutant': m_name,
+            'Pattern': p_label,
+            'MAE': metrics['MAE'],
+            'MSE': metrics['MSE'],
+            'Relative_L2': metrics['Relative L2'],
+            'Correlation': metrics['Correlation']
+        })
 
-            # 生成图片（受 max_plots 限制）
-            if max_plots is None or plot_count < max_plots:
-                m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
-                title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
+        if max_plots is None or i < max_plots:
+            m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
+            title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
+            
+            if '_LHS_' in m_name:
+                mother_name, perturb_str = get_lhs_perturbation_str(m_name, p_real_i)
+                title_base += f"\nMother: {mother_name} | Perturbations (mother_val, ratio):\n{perturb_str}"
+            elif str(m_name).startswith('MASS_'):
+                title_base += f"\nMASS synthetic sample (mutant-aware stratified sampling)"
+            else:
+                mut_str = get_real_mutations_str(m_name)
+                title_base += f"\nMutations: {mut_str}"
 
-                # 添加突变参数信息行 (参考 plot_real_vs_lhs.py 格式)
-                # 反归一化参数: p_norm -> p_real
-                p_real_np = (p.cpu() * dm.p_std.cpu() + dm.p_mean.cpu()).squeeze(0).numpy()
-                if '_LHS_' in m_name:
-                    # LHS 样本: 添加母体名 + 微扰参数(含母体值和倍数)
-                    mother_name, perturb_str = get_lhs_perturbation_str(m_name, p_real_np)
-                    title_base += f"\nMother: {mother_name} | Perturbations (mother_val, ratio):\n{perturb_str}"
-                elif str(m_name).startswith('MASS_'):
-                    # MASS 合成样本 (mass_dataset_generator.py 生成): 无母体规则, 标注为合成样本
-                    title_base += f"\nMASS synthetic sample (mutant-aware stratified sampling)"
-                else:
-                    # Real mutant: 添加突变参数
-                    mut_str = get_real_mutations_str(m_name)
-                    title_base += f"\nMutations: {mut_str}"
+            save_plot_path = os.path.join(plot_dir, f"{m_name}.png")
+            plot_tasks.append((pred_i.numpy(), target_i.numpy(), f"{title_base}\nAll 39 Variables", save_plot_path, 5, 8, dm.t_max))
 
-                p_np, t_np = pred_denorm[0].numpy(), target_denorm[0].numpy()
-                save_plot_path = os.path.join(plot_dir, f"{m_name}.png")
-                plot_variable_grid(p_np, t_np, range(39), f"{title_base}\nAll 39 Variables",
-                                   save_plot_path, 5, 8, t_max=dm.t_max)
-                plot_count += 1
+    # 3. 多进程并发画图
+    if plot_tasks:
+        workers = min(max_workers, os.cpu_count() or 4)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(_render_and_save_plot, plot_tasks))
 
-    # 汇总指标
-    if all_preds_denorm:
-        all_preds = torch.cat(all_preds_denorm, dim=0)
-        all_targets = torch.cat(all_targets_denorm, dim=0)
-        summary = {
-            "all_39_vars": calculate_metrics(all_preds, all_targets),
-            "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
-            "count": len(all_preds_denorm)
-        }
-    else:
-        summary = {"all_39_vars": {}, "core_9_vars": {}, "count": 0}
+    # 4. 全局汇总指标
+    summary = {
+        "all_39_vars": calculate_metrics(all_preds, all_targets),
+        "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
+        "count": N
+    }
 
-    return summary, csv_rows, all_preds_denorm, all_targets_denorm
+    return summary, csv_rows, [all_preds], [all_targets]
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt', type=str, required=True)
-    parser.add_argument('--data_dir', type=str, default='./data')
+    parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
     parser.add_argument('--dataset_name', type=str, required=True)
-    parser.add_argument('--batch_size', type=int, default=512, help='评估 batch size，不影响结果，只影响速度。建议设大利用显存')
+    parser.add_argument('--batch_size', type=int, default=1024, help='GPU 推理 Batch Size (A6000 48GB 推荐 1024)')
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--save_dir', type=str, default='./eval_result')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--lhs_test_plots', type=int, default=100, help='LHS 测试集最多画多少张图')
+    parser.add_argument('--lhs_test_plots', type=int, default=50, help='LHS 测试集最多画多少张图')
+    parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -219,30 +224,25 @@ def main():
     real_summary, real_csv, real_preds, real_targets = evaluate_dataset(
         model, dm, dm.test_dataset_real, dm._test_idx_real,
         args.device, mean_y, std_y, args.seed, args.save_dir,
-        sub_dir='real_mutants', max_plots=None  # 全部画图
+        sub_dir='real_mutants', batch_size=args.batch_size, max_plots=None, max_workers=args.plot_workers
     )
 
     # ======== 2. 评估 LHS 测试集 ========
     lhs_summary, lhs_csv, lhs_preds, lhs_targets = evaluate_dataset(
         model, dm, dm.test_dataset_lhs, dm._test_idx_lhs,
         args.device, mean_y, std_y, args.seed, args.save_dir,
-        sub_dir='lhs_test', max_plots=args.lhs_test_plots
+        sub_dir='lhs_test', batch_size=args.batch_size, max_plots=args.lhs_test_plots, max_workers=args.plot_workers
     )
 
     # ======== 3. 汇总 JSON ========
-    all_preds_list = real_preds + lhs_preds
-    all_targets_list = real_targets + lhs_targets
+    all_preds = torch.cat(real_preds + lhs_preds, dim=0)
+    all_targets = torch.cat(real_targets + lhs_targets, dim=0)
 
-    if all_preds_list:
-        all_preds = torch.cat(all_preds_list, dim=0)
-        all_targets = torch.cat(all_targets_list, dim=0)
-        all_test_summary = {
-            "all_39_vars": calculate_metrics(all_preds, all_targets),
-            "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
-            "count": len(all_preds_list)
-        }
-    else:
-        all_test_summary = {"all_39_vars": {}, "core_9_vars": {}, "count": 0}
+    all_test_summary = {
+        "all_39_vars": calculate_metrics(all_preds, all_targets),
+        "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
+        "count": len(all_preds)
+    }
 
     global_metrics = {
         "all_test": all_test_summary,

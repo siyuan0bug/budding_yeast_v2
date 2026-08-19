@@ -574,7 +574,7 @@ def sample_scaling_factor(mode, g_name=None):
         if g_name == 'CDC20':
             return 10.0 ** float(np.random.uniform(np.log10(0.50), np.log10(12.0)))
         elif g_name == 'CLB2':
-            return 10.0 ** float(np.random.uniform(np.log10(0.02), np.log10(1.50)))
+            return 10.0 ** float(np.random.uniform(np.log10(0.002), np.log10(1.50)))
         elif g_name == 'SIC1':
             return 10.0 ** float(np.random.uniform(np.log10(0.03), np.log10(0.36)))
         elif g_name == 'CDC6':
@@ -608,6 +608,8 @@ def sample_scaling_factor(mode, g_name=None):
         log_alpha = np.random.uniform(np.log10(1.5), np.log10(30.0))
         return 10.0 ** float(log_alpha)
     elif mode == 'ts':
+        if g_name == 'CDC14':
+            return float(np.random.uniform(0.05, 0.35))
         u = np.random.beta(a=0.5, b=2.0)
         return float(0.20 * u)
     elif mode == 'DAmP':
@@ -616,11 +618,16 @@ def sample_scaling_factor(mode, g_name=None):
     elif mode == 'pLOF':
         return float(np.random.uniform(0.10, 0.50))
     elif mode == 'db':
-        if np.random.rand() < 0.80:
+        if g_name == 'CLB2':
+            return float(np.random.uniform(0.04, 0.15))
+        elif g_name == 'PDS1':
+            return float(np.random.uniform(0.0, 0.05))
+        elif g_name == 'CLB5':
+            return 0.0
+        elif g_name == 'SIC1':
             return 0.0
         else:
-            u = np.random.beta(a=0.5, b=3.0)
-            return float(0.15 * u)
+            return 0.0
     return 1.0
 
 # ==============================================================================
@@ -764,9 +771,17 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         elif g_name == 'CDC20':
             ovr['ks20p'] = p_wt['ks20p'] * alpha; ovr['ks20pp'] = p_wt['ks20pp'] * alpha
         elif g_name == 'CDC14':
-            # Complete thermal inactivation zeroes ks14, partial scales ks14 & 4 dephosphorylation rates
-            ovr['ks14'] = p_wt['ks14'] * alpha
-            ovr['kppc1'] = p_wt['kppc1'] * alpha; ovr['kppf6'] = p_wt['kppf6'] * alpha; ovr['kaswi'] = p_wt['kaswi'] * alpha; ovr['kacdhpp'] = p_wt['kacdhpp'] * alpha
+            # CDC14-ts dual physiological representations:
+            # Mode A (50% prob): Restrictive temp (37°C) complete arrest: ks14 = 0.0, catalytic rates nominal WT
+            # Mode B (50% prob): Semi-permissive temp (30-34°C) catalytic attenuation: ks14 = WT, 4 catalytic rates scaled by alpha in [0.05, 0.35]
+            if np.random.rand() < 0.50:
+                ovr['ks14'] = 0.0
+            else:
+                ovr['ks14'] = p_wt['ks14']
+                ovr['kppc1'] = p_wt['kppc1'] * alpha
+                ovr['kppf6'] = p_wt['kppf6'] * alpha
+                ovr['kaswi'] = p_wt['kaswi'] * alpha
+                ovr['kacdhpp'] = p_wt['kacdhpp'] * alpha
         elif g_name == 'NET1':
             # net1-ts / tab6-1: kasrent & kasrentp scaled by alpha (at alpha=0.05, gives 10.0 and 0.05)
             ovr['kasrent'] = p_wt['kasrent'] * alpha
@@ -880,64 +895,143 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
 def sample_mass_mutant(level=1):
     """
     Generate a synthetic mutant sample by selecting binding groups and applying
-    Section 7 master table lookups & Section 2.3.1 biophysical distributions.
+    Section 7 master table lookups, Section 2.3 biophysical distributions,
+    Section 2.4 carbon decoupling & Section 2.4.2 biological rescue motifs.
     Returns (ovr_dict, mutant_description_str).
     """
     p_wt = get_default_params()
     p_mut = p_wt.copy()
     ovr = {}
 
-    # Step 1: Number of target genes ki based on Level
-    if level == 1: ki = 1
-    elif level == 2: ki = 2
-    elif level == 3: ki = np.random.randint(3, 6)
-    else: ki = np.random.randint(4, 7)
-
-    # Step 2: Categorical sampling of ki binding groups based on P_bio(G_g)
-    group_keys = list(BINDING_GROUPS.keys())
-    group_weights = [BINDING_GROUPS[k]['P_bio_G'] for k in group_keys]
-    selected_g_keys = np.random.choice(group_keys, size=min(ki, len(group_keys)), replace=False, p=group_weights)
-
     has_gal_oe = False
     mut_descriptions = []
 
-    # Step 3 & 4: Universal Section 7 Lookup & Parameter Rewrite
-    for g_key in selected_g_keys:
-        g_info = BINDING_GROUPS[g_key]
-        g_name = g_info['name']
+    # Step 1 & 2: Check for Biological Rescue Motif (Level 3 & 4 only, 50% probability)
+    use_rescue_motif = (level in [3, 4] and np.random.rand() < 0.50)
 
-        # Sample allowed mutation mode Mm based on P_bio(Mm | G_g)
-        modes = list(g_info['modes'].keys())
-        m_weights = [g_info['modes'][m] for m in modes]
-        m_weights = np.array(m_weights) / sum(m_weights)
-        m_chosen = np.random.choice(modes, p=m_weights)
+    if use_rescue_motif:
+        motif_type = np.random.choice(['M_EXIT', 'G1_S', 'ANAPHASE', 'PREMATURE'])
+        selected_mut_pairs = []
 
-        # Check for single-gene dual-mode composite mutation (e.g. GAL-CLB2-dbΔ / GAL-PDS1-dbΔ)
-        comp_mode = None
-        if g_name in ['CLB2', 'CLB5', 'PDS1', 'SIC1'] and m_chosen in ['GAL-OE', 'MC'] and 'db' in modes:
-            if np.random.rand() < 0.20: # 20% chance of dual-mode composite mutation
-                comp_mode = 'db'
+        if motif_type == 'M_EXIT':
+            driver_choices = [('CLB2', 'db'), ('CLB2', 'GAL-OE'), ('CDC14', 'ts'), ('TEM1', 'ts')]
+            driver = driver_choices[np.random.choice(len(driver_choices))]
+            suppressors_pool = [
+                ('SIC1', np.random.choice(['MC', 'GAL-OE'])),
+                ('CLB5', 'KO'),
+                ('CDC6', 'MC'),
+                ('CDC15', 'GAL-OE'),
+                ('NET1', 'TAB6-1')
+            ]
+            k_supp = min(level - 1, len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
+            if np.random.rand() < 0.30:
+                ovr['mdt'] = float(np.random.choice([150.0, 160.0]))
 
-        if comp_mode:
-            mut_descriptions.append(f"{g_name}[{m_chosen}+{comp_mode}]")
-            if m_chosen == 'GAL-OE' or comp_mode == 'GAL-OE':
-                has_gal_oe = True
+        elif motif_type == 'G1_S':
+            driver = ('CLN2', 'KO')
+            suppressors_pool = [
+                ('CLN3', 'KO'),
+                ('BCK2', 'KO'),
+                ('CLB5', 'GAL-OE'),
+                ('CLB2', 'GAL-OE'),
+                ('SIC1', 'KO')
+            ]
+            k_supp = min(level - 1, len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
-            alpha1 = sample_scaling_factor(m_chosen, g_name)
-            apply_gene_mutation(g_name, m_chosen, alpha1, p_wt, p_mut, ovr)
-            alpha2 = sample_scaling_factor(comp_mode, g_name)
-            apply_gene_mutation(g_name, comp_mode, alpha2, p_wt, p_mut, ovr)
-        else:
+        elif motif_type == 'ANAPHASE':
+            driver = ('PDS1', 'db') if np.random.rand() < 0.6 else ('CDC20', 'ts')
+            suppressors_pool = [
+                ('ESP1', np.random.choice(['GAL-OE', 'MC'])),
+                ('SCC1', 'scc1-RR'),
+                ('MAD2', 'CSL'),
+                ('BUB2', 'CKO')
+            ]
+            k_supp = min(level - 1, len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
+
+        else: # PREMATURE
+            driver = ('SIC1', 'KO')
+            suppressors_pool = [
+                ('CDH1', 'KO'),
+                ('CDC20', np.random.choice(['GAL-OE', 'MC'])),
+                ('CDC6', 'pDEL'),
+                ('SWI5', 'KO')
+            ]
+            k_supp = min(level - 1, len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
+
+        # Apply the structured rescue mutations
+        for g_name, m_chosen in selected_mut_pairs:
             mut_descriptions.append(f"{g_name}[{m_chosen}]")
             if m_chosen == 'GAL-OE':
                 has_gal_oe = True
-
             alpha = sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
 
-    # Enforce GAL-OE medium switching rule
+    else:
+        # Standard unconstrained exploratory sampling
+        if level == 1: ki = 1
+        elif level == 2: ki = 2
+        elif level == 3: ki = np.random.randint(3, 6)
+        else: ki = np.random.randint(4, 7)
+
+        group_keys = list(BINDING_GROUPS.keys())
+        group_weights = [BINDING_GROUPS[k]['P_bio_G'] for k in group_keys]
+        selected_g_keys = np.random.choice(group_keys, size=min(ki, len(group_keys)), replace=False, p=group_weights)
+
+        for g_key in selected_g_keys:
+            g_info = BINDING_GROUPS[g_key]
+            g_name = g_info['name']
+
+            modes = list(g_info['modes'].keys())
+            m_weights = [g_info['modes'][m] for m in modes]
+            m_weights = np.array(m_weights) / sum(m_weights)
+            m_chosen = np.random.choice(modes, p=m_weights)
+
+            comp_mode = None
+            if g_name in ['CLB2', 'CLB5', 'PDS1', 'SIC1', 'CDH1']:
+                synth_modes = [m for m in ['GAL-OE', 'MC'] if m in modes]
+                struc_modes = [m for m in ['db', 'PM', 'CA'] if m in modes]
+                if m_chosen in synth_modes and struc_modes and np.random.rand() < 0.25:
+                    comp_mode = np.random.choice(struc_modes)
+                elif m_chosen in struc_modes and synth_modes and np.random.rand() < 0.25:
+                    comp_mode = np.random.choice(synth_modes)
+
+            if comp_mode:
+                mut_descriptions.append(f"{g_name}[{m_chosen}+{comp_mode}]")
+                if m_chosen == 'GAL-OE' or comp_mode == 'GAL-OE':
+                    has_gal_oe = True
+
+                alpha1 = sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+                apply_gene_mutation(g_name, m_chosen, alpha1, p_wt, p_mut, ovr)
+                alpha2 = sample_scaling_factor(comp_mode, g_name) if comp_mode in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+                apply_gene_mutation(g_name, comp_mode, alpha2, p_wt, p_mut, ovr)
+            else:
+                mut_descriptions.append(f"{g_name}[{m_chosen}]")
+                if m_chosen == 'GAL-OE':
+                    has_gal_oe = True
+
+                alpha = sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+                apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
+
+    # Environmental Carbon Source Decoupling (Section 2.4.1)
     if has_gal_oe:
         ovr['mdt'] = 150.0
+    else:
+        if 'mdt' not in ovr:
+            carbon_choice = np.random.choice(['Glc', 'Gal', 'Raff'], p=[0.75, 0.18, 0.07])
+            if carbon_choice == 'Gal':
+                ovr['mdt'] = 150.0
+            elif carbon_choice == 'Raff':
+                ovr['mdt'] = 160.0
+            else:
+                ovr['mdt'] = 90.0
 
     desc_str = "+".join(mut_descriptions)
     return ovr, desc_str
@@ -1212,8 +1306,8 @@ if __name__ == '__main__':
     # =========================================================================
     # 用户可调参数配置区 (随时在此处直接修改，或通过命令行参数指定)
     # =========================================================================
-    NUM_SAMPLES = 20000   # 生成的采样样本数量
-    NUM_WORKERS = 32      # 并行调用的 CPU 核心数 (当前服务器共有 64 核，设为 32 可预留一半核心给其他用户)
+    NUM_SAMPLES = 100000   # 生成的采样样本数量
+    NUM_WORKERS = 60      # 并行调用的 CPU 核心数 (当前服务器共有 64 核，设为 32 可预留一半核心给其他用户)
     # =========================================================================
 
     import argparse

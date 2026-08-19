@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def calculate_metrics(pred, target):
+def calculate_metrics(pred, target, eps=0.1):
     # 动态适应维度：正常传入的 pred 和 target 形状是 (Batch, Vars, Time)
     if pred.dim() == 3:
         B, V, T = pred.shape
@@ -19,13 +19,21 @@ def calculate_metrics(pred, target):
         target_v = target.view(1, -1)
 
     # ==========================================
-    # 1. 计算 Per-variable Relative L2
+    # 1. 计算 Per-variable Relative L2 (方案 B: 物理基线截断保护)
     # ==========================================
     # dim=1 表示沿着时间轴(含Batch)计算，此时 numerator 和 denominator 的长度都是 39
     numerator = torch.sum((pred_v - target_v) ** 2, dim=1)
     denominator = torch.sum(target_v ** 2, dim=1)
+    
+    # 设定物理基底能量下限: eps 为基底浓度 (默认 0.1 a.u.), 乘以时间步数 N 得到基底能量
+    # 对正常信号(denominator >> floor_energy) 100% 保持纯正 Relative L2
+    # 对完全敲除信号(denominator == 0) 优雅托底，彻底消除除以 1e-8 导致的伪异常
+    N_steps = pred_v.size(1)
+    floor_energy = (eps ** 2) * N_steps
+    safe_denominator = torch.clamp(denominator, min=floor_energy)
+
     # 分别算出 39 个变量的 Relative L2 后，再求这 39 个值的平均
-    rel_l2 = torch.sqrt(numerator / (denominator + 1e-8)).mean()
+    rel_l2 = torch.sqrt(numerator / safe_denominator).mean()
 
     # ==========================================
     # 2. 计算 Per-variable Correlation (Pearson)

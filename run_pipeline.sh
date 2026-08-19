@@ -7,6 +7,7 @@ export NCCL_P2P_DISABLE=1
 export PYTHONPATH=$(pwd)/..:$PYTHONPATH
 # 强制 Python stdout/stderr 无缓冲, 让 tqdm 进度条和 print 摘要行立即写入日志文件
 export PYTHONUNBUFFERED=1
+PYTHON_BIN="/home/users/zsy/.conda/envs/neuralop/bin/python"
 #export WANDB_API_KEY="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"  #v1版本
 export WANDB_API_KEY="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"  #active版本
 
@@ -129,8 +130,17 @@ EXPERIMENTS=(
     # 与 v5_probe_bs1024 完全相同的模型/训练配置, 仅替换数据集为 DATASET_MASS、标签为 mass。
     # 数据集无 LHS 家族结构 (real mutants + MASS_* 合成样本), datamodule 会自动跳过家族分层、
     # 仅按 Pattern 做宏观 train/val/test 划分 (real mutants 全部作为 test_real)。
-    # run_name = hyper_fno_none_mse_only_mass_modes32_seed42; 独占 GPU 1。
-    "hyper_fno mse_only false ${DATASET_MASS} mass 32 32 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # ====== 8卡全并行旗舰神经算子全面评测 (8 GPUs 0~7 Parallel Benchmark) ======
+    #"hyper_fno hybrid_mse_rel false ${DATASET_MASS} mass 32 32 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    "cross_fno hybrid_mse_rel false ${DATASET_MASS} mass 32 32 128 100 none 3e-4 10 0 0 0 one_time 0"
+    #"multiscale_diffgraph hybrid_mse_rel false ${DATASET_MASS} mass_multiscale_diffgraph 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"dualpath_spectralgraph hybrid_mse_rel false ${DATASET_MASS} mass_dualpath_spectralgraph 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    #"bio_statespace_graph hybrid_mse_rel false ${DATASET_MASS} mass_bio_statespace 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"gated_graph_resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_gated_graph_hybrid 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"graph_resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_graph_resnet_hybrid 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    #"resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_resnet_hybrid 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"channel_hyper_fno hybrid_mse_rel false ${DATASET_MASS} mass_channel_hybrid 32 32 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    #"deeponet hybrid_mse_rel false ${DATASET_MASS} mass_deeponet_hybrid 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
 
     # 实验 1: RGS 主动学习 (减小新增样本数到500, 扰动幅度降到0.05)
     #"hyper_fno mse_only false ${DATASET_CHEAT} 32 32 64 200 rgs 6e-4 10 500 0.05 0.1 one_time"
@@ -343,7 +353,7 @@ for SEED in "${SEEDS[@]}"; do
                     rm -f "${TRAIN_CKPT_DIR}"/*.ckpt
                     echo "🧹 训练前已清理旧 checkpoint: ${TRAIN_CKPT_DIR}/*.ckpt" >> "$LOG_FILE" 2>&1
                 fi
-                CUDA_VISIBLE_DEVICES=$GPU_ID python train.py \
+                CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON_BIN train.py \
                     --model $MODEL \
                     --wavelet haar \
                     --loss_type $LOSS_TYPE \
@@ -389,7 +399,7 @@ for SEED in "${SEEDS[@]}"; do
 
                 # 步骤 C: 评估（独立大 batch，充分利用显存加速）
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始评估..." >> "$LOG_FILE" 2>&1
-                CUDA_VISIBLE_DEVICES=$GPU_ID python eval.py \
+                CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON_BIN eval.py \
                     --ckpt "$CKPT_PATH" \
                     --dataset_name "$DATASET" \
                     --save_dir "$EVAL_OUT_DIR" \

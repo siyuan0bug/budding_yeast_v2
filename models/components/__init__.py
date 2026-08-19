@@ -4,5 +4,14 @@ from .ultimate_fno import UltimateFNO
 from .wno_cross import NIPSYeastWNO
 from .lno_cross import NIPSYeastLNO
 from .hyper_fno import HyperFNO
+from .channel_hyper_fno import ChannelHyperFNO
+from .resnet_film import ResNetFiLM
+from .deeponet import DeepONet
 from .hp_fno import hpYeastFNO
 from .neural_ode import NeuralODEModel
+from .graph_resnet_film import GraphResNetFiLM
+from .gated_graph_resnet_film import GatedGraphResNetFiLM
+from .multiscale_diffgraph import MultiScaleDiffGraphNet
+from .dualpath_spectralgraph import DualPathSpectralGraphNet
+from .bio_statespace_graph import BioStateSpaceGraphNet
+from .gcgnet import GCGNetYeast

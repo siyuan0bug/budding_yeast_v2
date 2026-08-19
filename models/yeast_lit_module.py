@@ -9,10 +9,16 @@ from .components.pure_fno import PureFNO_ICLR2021
 from .components.cross_fno import NIPSYeastFNO
 from .components.ultimate_fno import UltimateFNO
 from .components.wno_cross import NIPSYeastWNO
-from .components.lno_cross import NIPSYeastLNO
-from .components.hyper_fno import HyperFNO
-from .components.hp_fno import hpYeastFNO
-from .components.neural_ode import NeuralODEModel
+import os
+import numpy as np
+
+from budding_yeast_v2.models.components import (
+    PureFNO_ICLR2021, NIPSYeastFNO, UltimateFNO,
+    NIPSYeastWNO, NIPSYeastLNO, HyperFNO, ChannelHyperFNO,
+    ResNetFiLM, DeepONet, hpYeastFNO, NeuralODEModel, GraphResNetFiLM,
+    GatedGraphResNetFiLM, MultiScaleDiffGraphNet, DualPathSpectralGraphNet,
+    BioStateSpaceGraphNet, GCGNetYeast
+)
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 
@@ -24,8 +30,17 @@ MODEL_REGISTRY = {
     'wno': NIPSYeastWNO,
     'lno': NIPSYeastLNO,
     'hyper_fno': HyperFNO,
+    'channel_hyper_fno': ChannelHyperFNO,
+    'resnet_film': ResNetFiLM,
+    'deeponet': DeepONet,
     'hp_fno': hpYeastFNO,
     'neural_ode': NeuralODEModel,
+    'graph_resnet_film': GraphResNetFiLM,
+    'gated_graph_resnet_film': GatedGraphResNetFiLM,
+    'multiscale_diffgraph': MultiScaleDiffGraphNet,
+    'dualpath_spectralgraph': DualPathSpectralGraphNet,
+    'bio_statespace_graph': BioStateSpaceGraphNet,
+    'gcgnet': GCGNetYeast,
 }
 
 
@@ -68,6 +83,12 @@ class YeastLitModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
+        # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno'):
+            adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
+            if os.path.exists(adj_path):
+                adj_matrix = np.load(adj_path)
+
         ModelClass = MODEL_REGISTRY[model_name]
 
         if model_name == 'ultimate_fno':
@@ -86,14 +107,37 @@ class YeastLitModule(pl.LightningModule):
         elif model_name == 'hyper_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
                                     width=width, n_layers=n_blocks, d_lambda=d_lambda)
+        elif model_name == 'channel_hyper_fno':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
+                                    width=width, n_layers=n_blocks, d_lambda=d_lambda,
+                                    adj_matrix=adj_matrix)
+        elif model_name == 'resnet_film':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    width=width, n_blocks=n_blocks, d_lambda=d_lambda)
+        elif model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'bio_statespace_graph'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    width=width, n_blocks=n_blocks, d_lambda=d_lambda,
+                                    adj_matrix=adj_matrix)
+        elif model_name == 'dualpath_spectralgraph':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    width=width, modes=modes, n_blocks=n_blocks, d_lambda=d_lambda,
+                                    adj_matrix=adj_matrix)
+        elif model_name == 'deeponet':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    p_basis=width, hidden_dim=width * 2)
         elif model_name == 'hp_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes, width=width)
         elif model_name == 'neural_ode':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, hidden_dim=width,
                                     method=ode_method, rtol=ode_rtol, atol=ode_atol)
+        elif model_name == 'gcgnet':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, t_steps=500,
+                                    patch_len=25, width=width, d_ff=width * 2,
+                                    n_heads=4, e_layers=n_blocks if n_blocks > 0 else 2,
+                                    rank=16)
 
         loss_class = LOSS_REGISTRY[loss_type]
-        if loss_type in ('mse_only', 'mse_smooth', 'h1'):
+        if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel'):
             self.criterion = loss_class()
         elif loss_type in ('pinn_residual', 'pino'):
             # 创建占位实例以在 ModelSummary 中显示损失类型
@@ -142,7 +186,7 @@ class YeastLitModule(pl.LightningModule):
                     **({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta} if loss_type == 'pino' else {}),
                 )
             elif self.criterion is None:
-                if loss_type in ('mse_only', 'mse_smooth', 'h1'):
+                if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel'):
                     self.criterion = loss_class()
                 else:
                     self.criterion = loss_class(
