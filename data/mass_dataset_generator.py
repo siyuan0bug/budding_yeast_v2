@@ -59,6 +59,10 @@ def get_default_params():
         'mdt':90.0, 'Vi20_active':8.0, 'BUB2_active':1.0
     }
 
+_defaults = get_default_params()
+_defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
+PARAM_KEYS = sorted([k for k in _defaults.keys() if k != 'is_mutant_104'])
+
 def initial_conds():
     """Chen (2004) Table 2B Initial State Vector (39 States)"""
     y0 = np.zeros(39)
@@ -417,6 +421,8 @@ REAL_MUTANTS = {
     '123': ('APC-A sic1Δ', {'ksc1p': 0.0, 'ksc1pp': 0.0, 'ka20pp': 0.0}),
     '124': ('APC-A GAL-CLB2', {'ksb2p': 0.48, 'ka20pp': 0.0, 'mdt': 150.0})
 }
+
+mutant_rules = {f"{mid}_{mname}": movr for mid, (mname, movr) in REAL_MUTANTS.items()}
 
 # ==============================================================================
 # Part 3: 27 Parameter Binding Groups (G1 ~ G27) & Hub Centrality Probabilities

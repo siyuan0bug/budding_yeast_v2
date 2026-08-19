@@ -10,7 +10,7 @@
 # === 可配置参数 (通过环境变量覆盖) ===
 SIM_TF=${SIM_TF:-210}
 SIM_STEPS=${SIM_STEPS:-500}
-SCRIPT_DIR="/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="/home/users/zsy/mydata/budding_yeast/logs"
 
 # === 限制 BLAS 线程数为 1, 防止 fork + OpenBLAS 多线程死锁 ===

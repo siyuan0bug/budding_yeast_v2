@@ -17,7 +17,7 @@ from sklearn.metrics.pairwise import euclidean_distances
 # ==============================================================
 # 1. 完美、完整地导入原版 LHS 引擎的所有核心组件
 # ==============================================================
-from budding_yeast_v2.data.lhs_v1_origin import (
+from budding_yeast_v2.data.LHS.lhs_v1_origin import (
     simulate_mutant,
     get_default_params,
     generate_lhs_tasks,
@@ -30,13 +30,13 @@ from budding_yeast_v2.data.lhs_v1_origin import (
 # ==============================================================
 # al4pde 候选池生成: 使用 v5 采样算法 (普通采样 + density + boundary)
 # ==============================================================
-from budding_yeast_v2.data.lhs_v1_origin_v5 import (
+from budding_yeast_v2.data.LHS.lhs_v1_origin_v5 import (
     generate_lhs_tasks as generate_lhs_tasks_v5,
     generate_targeted_lhs_tasks as generate_targeted_lhs_tasks_density,
     initial_conds as initial_conds_v5,
 )
 # v5_boundary 的 boundary 采样: 连续参数范围统一 [0, center_val*(1+pert)], 强制 0 值邻域覆盖
-from budding_yeast_v2.data.lhs_v1_origin_v5_boundary import (
+from budding_yeast_v2.data.LHS.lhs_v1_origin_v5_boundary import (
     generate_targeted_lhs_tasks as generate_targeted_lhs_tasks_boundary,
 )
 

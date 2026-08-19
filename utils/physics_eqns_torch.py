@@ -14,7 +14,7 @@
 import torch
 import math
 import numpy as np
-from budding_yeast_v2.data.lhs_v1_origin import get_default_params
+from budding_yeast_v2.data.mass_dataset_generator import get_default_params
 
 # ==============================================================
 # 参数键顺序（与 al_callback.py 完全一致）

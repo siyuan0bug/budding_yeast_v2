@@ -12,7 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
-from budding_yeast_v2.data.lhs_v1_origin import get_default_params, mutant_rules
+from budding_yeast_v2.data.mass_dataset_generator import get_default_params, mutant_rules
 from budding_yeast_v2.utils.metrics import calculate_metrics
 
 CORE_9_INDICES = [0, 1, 2, 3, 4, 20, 22, 33, 35]
