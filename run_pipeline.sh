@@ -132,7 +132,7 @@ EXPERIMENTS=(
     # 仅按 Pattern 做宏观 train/val/test 划分 (real mutants 全部作为 test_real)。
     # ====== 8卡全并行旗舰神经算子全面评测 (8 GPUs 0~7 Parallel Benchmark) ======
     #"hyper_fno hybrid_mse_rel false ${DATASET_MASS} mass 32 32 512 100 none 1.7e-3 10 0 0 0 one_time 6"
-    "cross_fno hybrid_mse_rel false ${DATASET_MASS} mass 32 32 128 100 none 3e-4 10 0 0 0 one_time 0"
+    #"cross_fno hybrid_mse_rel false ${DATASET_MASS} mass 32 32 128 100 none 3e-4 10 0 0 0 one_time 0"
     #"multiscale_diffgraph hybrid_mse_rel false ${DATASET_MASS} mass_multiscale_diffgraph 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
     #"dualpath_spectralgraph hybrid_mse_rel false ${DATASET_MASS} mass_dualpath_spectralgraph 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 1"
     #"bio_statespace_graph hybrid_mse_rel false ${DATASET_MASS} mass_bio_statespace 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
@@ -141,6 +141,25 @@ EXPERIMENTS=(
     #"resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_resnet_hybrid 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 5"
     #"channel_hyper_fno hybrid_mse_rel false ${DATASET_MASS} mass_channel_hybrid 32 32 512 100 none 1.7e-3 10 0 0 0 one_time 6"
     #"deeponet hybrid_mse_rel false ${DATASET_MASS} mass_deeponet_hybrid 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+
+    #"resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_resnet_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+
+    # ====== 新一代生化多关系图神经算子 (Bio-Hetero Multirelational Graph Operators) ======
+    #"bio_hetero_causal_graph hybrid_mse_rel false ${DATASET_MASS} mass_bio_hetero 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"hetero_graph_resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_hetero_resnet 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"hetero_graph_dualpath hybrid_mse_rel false ${DATASET_MASS} mass_hetero_dualpath 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+    #"hetero_graph_channel_hyper_fno hybrid_mse_rel false ${DATASET_MASS} mass_hetero_channel 32 32 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+
+    # ====== 三大原创学术级旗舰神经算子 (Flagship Novel Neural Operators: DyRFO / ST-HyperNO / PC-BioNO) ======
+    #"dyrfo hybrid_mse_rel false ${DATASET_MASS} mass_dyrfo_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    #"st_hyperno hybrid_mse_rel false ${DATASET_MASS} mass_st_hyperno_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"pc_bio_operator hybrid_mse_rel false ${DATASET_MASS} mass_pc_bio_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+
+    # ====== 终极物理生化机制算子 (BioMechanisticOperator / BioMechNet) ======
+    "biom_full hybrid_mse_rel false ${DATASET_MASS} mass_biom_full_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+    "biom_titration hybrid_mse_rel false ${DATASET_MASS} mass_biom_titration_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    "biom_event hybrid_mse_rel false ${DATASET_MASS} mass_biom_event_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    "biom_pathway hybrid_mse_rel false ${DATASET_MASS} mass_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
 
     # 实验 1: RGS 主动学习 (减小新增样本数到500, 扰动幅度降到0.05)
     #"hyper_fno mse_only false ${DATASET_CHEAT} 32 32 64 200 rgs 6e-4 10 500 0.05 0.1 one_time"

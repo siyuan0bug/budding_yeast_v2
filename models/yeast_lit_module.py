@@ -17,7 +17,13 @@ from budding_yeast_v2.models.components import (
     NIPSYeastWNO, NIPSYeastLNO, HyperFNO, ChannelHyperFNO,
     ResNetFiLM, DeepONet, hpYeastFNO, NeuralODEModel, GraphResNetFiLM,
     GatedGraphResNetFiLM, MultiScaleDiffGraphNet, DualPathSpectralGraphNet,
-    BioStateSpaceGraphNet, GCGNetYeast
+    BioStateSpaceGraphNet, GCGNetYeast,
+    BioHeteroCausalGraphNet, HeteroGraphResNetFiLM,
+    HeteroGraphDualPathNet, HeteroGraphChannelHyperFNO,
+    DynamicReactionFluxOperator, SpectralTemporalHybridOperator,
+    PhysicsConstrainedBiochemicalOperator,
+    BioMechanisticOperator, BioMechFull,
+    BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly
 )
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
@@ -41,6 +47,22 @@ MODEL_REGISTRY = {
     'dualpath_spectralgraph': DualPathSpectralGraphNet,
     'bio_statespace_graph': BioStateSpaceGraphNet,
     'gcgnet': GCGNetYeast,
+    'bio_hetero_causal_graph': BioHeteroCausalGraphNet,
+    'hetero_graph_resnet_film': HeteroGraphResNetFiLM,
+    'hetero_graph_dualpath': HeteroGraphDualPathNet,
+    'hetero_graph_channel_hyper_fno': HeteroGraphChannelHyperFNO,
+    'dyrfo': DynamicReactionFluxOperator,
+    'dynamic_reaction_flux_operator': DynamicReactionFluxOperator,
+    'st_hyperno': SpectralTemporalHybridOperator,
+    'spectral_temporal_hybrid_operator': SpectralTemporalHybridOperator,
+    'pc_bio_operator': PhysicsConstrainedBiochemicalOperator,
+    'physics_constrained_biochemical_operator': PhysicsConstrainedBiochemicalOperator,
+    'biom_full': BioMechFull,
+    'biom_net': BioMechFull,
+    'bio_mechanistic_operator': BioMechFull,
+    'biom_event': BioMechEventOnly,
+    'biom_titration': BioMechTitrationOnly,
+    'biom_pathway': BioMechPathwayOnly,
 }
 
 
@@ -135,6 +157,22 @@ class YeastLitModule(pl.LightningModule):
                                     patch_len=25, width=width, d_ff=width * 2,
                                     n_heads=4, e_layers=n_blocks if n_blocks > 0 else 2,
                                     rank=16)
+        elif model_name in ('bio_hetero_causal_graph', 'hetero_graph_resnet_film'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    width=width, n_blocks=n_blocks, d_lambda=d_lambda)
+        elif model_name in ('hetero_graph_dualpath', 'hetero_graph_channel_hyper_fno'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    modes=modes, width=width, n_blocks=n_blocks, d_lambda=d_lambda)
+        elif model_name in ('dyrfo', 'dynamic_reaction_flux_operator', 'pc_bio_operator', 'physics_constrained_biochemical_operator'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    width=width, n_blocks=n_blocks)
+        elif model_name in ('st_hyperno', 'spectral_temporal_hybrid_operator',
+                            'biom_full', 'biom_net', 'bio_mechanistic_operator',
+                            'biom_event', 'biom_titration', 'biom_pathway'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    modes=modes, width=width, n_blocks=n_blocks)
+        else:
+            raise ValueError(f"Unknown model_name: {model_name}")
 
         loss_class = LOSS_REGISTRY[loss_type]
         if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel'):
