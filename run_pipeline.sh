@@ -155,11 +155,30 @@ EXPERIMENTS=(
     #"st_hyperno hybrid_mse_rel false ${DATASET_MASS} mass_st_hyperno_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
     #"pc_bio_operator hybrid_mse_rel false ${DATASET_MASS} mass_pc_bio_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
 
-    # ====== 终极物理生化机制算子 (BioMechanisticOperator / BioMechNet) ======
-    "biom_full hybrid_mse_rel false ${DATASET_MASS} mass_biom_full_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
-    "biom_titration hybrid_mse_rel false ${DATASET_MASS} mass_biom_titration_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
-    "biom_event hybrid_mse_rel false ${DATASET_MASS} mass_biom_event_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
-    "biom_pathway hybrid_mse_rel false ${DATASET_MASS} mass_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    # ====== 终极物理生化机制算子 (BioMechanisticOperator / BioMechNet - 线性基线归一化已完成) ======
+    #"biom_full hybrid_mse_rel false ${DATASET_MASS} mass_biom_full_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+    #"biom_titration hybrid_mse_rel false ${DATASET_MASS} mass_biom_titration_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    #"biom_event hybrid_mse_rel false ${DATASET_MASS} mass_biom_event_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"biom_pathway hybrid_mse_rel false ${DATASET_MASS} mass_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+
+    # ====== 🌟 新一代 Log1p 平滑对数归一化基线实验 (已完成评测归档) ======
+    #"resnet_film hybrid_mse_rel false ${DATASET_MASS} mass_log1p_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"st_hyperno hybrid_mse_rel false ${DATASET_MASS} mass_log1p_st_hyperno_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"biom_pathway hybrid_mse_rel false ${DATASET_MASS} mass_log1p_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    #"biom_full hybrid_mse_rel false ${DATASET_MASS} mass_log1p_biom_full_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"dyrfo hybrid_mse_rel false ${DATASET_MASS} mass_log1p_dyrfo_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    #"biom_titration hybrid_mse_rel false ${DATASET_MASS} mass_log1p_biom_titration_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+
+    # ====== 🚀 动力学感知创新损失全旗舰实验 (Phase Space & Soft-DTW Loss Suite) ======
+    # 方案 A1: 相空间时序导数与切向流场损失 (Phase-Derivative Flow Alignment)
+    "biom_pathway phase_derivative false ${DATASET_MASS} mass_log1p_phase_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    "resnet_film phase_derivative false ${DATASET_MASS} mass_log1p_phase_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    "st_hyperno phase_derivative false ${DATASET_MASS} mass_log1p_phase_st_hyperno_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    "dyrfo phase_derivative false ${DATASET_MASS} mass_log1p_phase_dyrfo_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+
+    # 方案 A2: 核心细胞周期可微软动态时间规整损失 (Soft-DTW Phase Decoupling)
+    "biom_pathway soft_dtw false ${DATASET_MASS} mass_log1p_dtw_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    "resnet_film soft_dtw false ${DATASET_MASS} mass_log1p_dtw_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
 
     # 实验 1: RGS 主动学习 (减小新增样本数到500, 扰动幅度降到0.05)
     #"hyper_fno mse_only false ${DATASET_CHEAT} 32 32 64 200 rgs 6e-4 10 500 0.05 0.1 one_time"

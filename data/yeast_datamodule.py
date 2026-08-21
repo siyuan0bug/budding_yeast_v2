@@ -18,6 +18,7 @@ class YeastDataModule(pl.LightningDataModule):
         num_workers=4,
         seed=42,
         use_adj_matrix=True,
+        norm_type='log1p',
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -30,6 +31,7 @@ class YeastDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.seed = seed
         self.use_adj_matrix = use_adj_matrix
+        self.norm_type = norm_type
         
         # 🌟 新增：动态解析物理时间 t_max
         match = re.search(r'(\d+)min', dataset_path)
@@ -183,14 +185,21 @@ class YeastDataModule(pl.LightningDataModule):
               f"训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)} | "
               f"LHS测试集: {len(test_idx_lhs)} | 真实测试集: {len(test_idx_real)}")
 
+        # 归一化统计量计算：支持 log1p 平滑对数归一化与传统线性归一化
+        self.norm_type = getattr(self, 'norm_type', 'log1p')
+        if self.norm_type == 'log1p':
+            Y_trans = torch.log1p(torch.clamp(Y, min=0.0))
+        else:
+            Y_trans = Y
+
         # 归一化统计量使用全部 LHS 数据，避免稀有 Pattern 缺席导致的偏差
-        self.mean_y = Y[lhs_indices].mean(dim=(0, 2), keepdim=True)
-        self.std_y = Y[lhs_indices].std(dim=(0, 2), keepdim=True) + 1e-6
+        self.mean_y = Y_trans[lhs_indices].mean(dim=(0, 2), keepdim=True)
+        self.std_y = Y_trans[lhs_indices].std(dim=(0, 2), keepdim=True) + 1e-6
 
         self.p_mean = Params[lhs_indices].mean(dim=0, keepdim=True)
         self.p_std = Params[lhs_indices].std(dim=0, keepdim=True) + 1e-6
 
-        Y_norm = (Y - self.mean_y) / self.std_y
+        Y_norm = (Y_trans - self.mean_y) / self.std_y
         Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
 
         Params_norm = (Params - self.p_mean) / self.p_std
@@ -279,3 +288,24 @@ class YeastDataModule(pl.LightningDataModule):
     @property
     def test_indices(self):
         return self._test_idx_lhs, self._test_idx_real
+
+    def denormalize_y(self, y_norm, device=None):
+        """
+        Denormalizes y_norm back to physical concentration space (B, V, T).
+        Supports both 'log1p' and 'linear' normalization modes.
+        """
+        if device is not None:
+            mean_y = self.mean_y.to(device)
+            std_y = self.std_y.to(device)
+        else:
+            mean_y = self.mean_y
+            std_y = self.std_y
+
+        y_shifted = y_norm * std_y + mean_y
+        if getattr(self, 'norm_type', 'log1p') == 'log1p':
+            # Numerical safeguard against extreme logits before expm1
+            y_clamped = torch.clamp(y_shifted, min=-10.0, max=15.0)
+            y_real = torch.clamp(torch.expm1(y_clamped), min=0.0)
+            return y_real
+        else:
+            return y_shifted

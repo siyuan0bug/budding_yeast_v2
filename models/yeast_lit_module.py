@@ -175,7 +175,8 @@ class YeastLitModule(pl.LightningModule):
             raise ValueError(f"Unknown model_name: {model_name}")
 
         loss_class = LOSS_REGISTRY[loss_type]
-        if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel'):
+        if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel',
+                         'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw'):
             self.criterion = loss_class()
         elif loss_type in ('pinn_residual', 'pino'):
             # 创建占位实例以在 ModelSummary 中显示损失类型
@@ -224,7 +225,8 @@ class YeastLitModule(pl.LightningModule):
                     **({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta} if loss_type == 'pino' else {}),
                 )
             elif self.criterion is None:
-                if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel'):
+                if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel',
+                                 'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw'):
                     self.criterion = loss_class()
                 else:
                     self.criterion = loss_class(

@@ -128,8 +128,8 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             x, p, y = [b.to(device, non_blocking=True) for b in batch]
             pred = model.forward_ic_time(x, p)
             
-            pred_denorm = pred * std_y + mean_y
-            target_denorm = y * std_y + mean_y
+            pred_denorm = dm.denormalize_y(pred, device)
+            target_denorm = dm.denormalize_y(y, device)
             p_real = p * dm.p_std.to(device) + dm.p_mean.to(device)
             
             all_preds_denorm_list.append(pred_denorm.cpu())
@@ -207,6 +207,8 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--lhs_test_plots', type=int, default=50, help='LHS 测试集最多画多少张图')
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
+    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'linear'],
+                        help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -215,7 +217,8 @@ def main():
 
     dm = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
-        val_batch_size=args.batch_size, num_workers=args.num_workers, use_adj_matrix=False
+        val_batch_size=args.batch_size, num_workers=args.num_workers, use_adj_matrix=False,
+        norm_type=args.norm_type
     )
     dm.setup('test')
     mean_y, std_y = dm.mean_y.to(args.device), dm.std_y.to(args.device)

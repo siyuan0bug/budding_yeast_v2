@@ -48,8 +48,8 @@ class SimToRealVisualizerCallback(Callback):
                 x, p, y = x.to(device), p.to(device), y.to(device)
                 pred = pl_module.forward_ic_time(x, p)
 
-                pred_denorm = pred * std_y + mean_y
-                target_denorm = y * std_y + mean_y
+                pred_denorm = dm.denormalize_y(pred, device)
+                target_denorm = dm.denormalize_y(y, device)
 
                 metrics = calculate_metrics(pred_denorm.cpu(), target_denorm.cpu())
                 m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
@@ -130,7 +130,7 @@ def main():
     parser.add_argument('--loss_type', type=str, default='physics_informed')
     parser.add_argument('--dataset_name', type=str, required=True)
     parser.add_argument('--adj_matrix_path', type=str, default=None)
-    parser.add_argument('--data_dir', type=str, default='./data')
+    parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
     parser.add_argument('--save_dir', type=str, default='./train_result')
     
     # 超参数
@@ -181,7 +181,8 @@ def main():
                         choices=['one_time', 'autoregressive'],
                         help='预测方式: one_time=一次性预测(默认), autoregressive=自回归滚动')
     
-    # 训练配置
+    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'linear'],
+                        help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--val_batch_size', type=int, default=256,
                         help='验证/测试的 batch size（不影响训练，设大加速评估，默认 256）')
@@ -278,6 +279,7 @@ def main():
         val_batch_size=args.val_batch_size,
         num_workers=args.num_workers,
         use_adj_matrix=(args.adj_matrix_path is not None),
+        norm_type=args.norm_type,
     )
 
     run_name = args.name or f"{args.model}_{args.loss_type}_seed{args.seed}"

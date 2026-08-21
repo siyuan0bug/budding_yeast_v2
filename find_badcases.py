@@ -79,11 +79,11 @@ def main():
     with torch.no_grad():
         for x, p, y in test_real_loader:
             x, p, y = x.to(device), p.to(device), y.to(device)
-            y_denorm = y * std_y + mean_y
+            y_denorm = dm.denormalize_y(y, device)
             all_targets.append(y_denorm.cpu())
             for name, mod in loaded_models.items():
                 pred = mod.forward_ic_time(x, p)
-                pred_denorm = pred * std_y + mean_y
+                pred_denorm = dm.denormalize_y(pred, device)
                 all_preds[name].append(pred_denorm.cpu())
 
     targets = torch.cat(all_targets, dim=0) # (126, 39, 500)

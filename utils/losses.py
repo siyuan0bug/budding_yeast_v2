@@ -587,6 +587,114 @@ class PINOLoss(PINNResidualLoss):
         return total_loss
 
 
+class PhaseDerivativeLoss(nn.Module):
+    """
+    Phase Space & Tangential Derivative Loss:
+    L = L_hybrid + lambda_deriv * L_deriv_rel + lambda_tangent * L_tangent
+    - L_hybrid: Base MSE + Relative L2 amplitude loss
+    - L_deriv_rel: First-order temporal derivative relative error (central differences)
+    - L_tangent: Tangential vector alignment in 39-D phase space (1 - CosineSimilarity)
+    Forces the neural operator to learn limit cycle phase flow and slope dynamics.
+    """
+    def __init__(self, mean_y=None, std_y=None, lambda_rel=0.2, lambda_deriv=0.2, lambda_tangent=0.1, eps=0.1):
+        super().__init__()
+        self.lambda_rel = lambda_rel
+        self.lambda_deriv = lambda_deriv
+        self.lambda_tangent = lambda_tangent
+        self.eps = eps
+        self.rel_loss = RelativeL2Loss(eps=eps, max_clamp=10.0)
+
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None):
+        # 1. Base amplitude loss
+        loss_mse = F.mse_loss(pred_norm, target_norm)
+        loss_rel = self.rel_loss(pred_norm, target_norm)
+        loss_hybrid = loss_mse + self.lambda_rel * loss_rel
+
+        # 2. Derivative field via central difference along time dimension
+        d_pred = (pred_norm[:, :, 2:] - pred_norm[:, :, :-2]) * 0.5
+        d_target = (target_norm[:, :, 2:] - target_norm[:, :, :-2]) * 0.5
+
+        # Relative L2 on derivative field
+        diff_d_l2 = torch.norm(d_pred - d_target, p=2, dim=-1)
+        target_d_energy = torch.sqrt(torch.sum(d_target ** 2, dim=-1) + 1e-4)
+        loss_deriv = torch.clamp(diff_d_l2 / target_d_energy, max=10.0).mean()
+
+        # Tangential phase alignment in 39-D phase space
+        cos_sim = F.cosine_similarity(d_pred, d_target, dim=1, eps=1e-6) # (B, T-2)
+        loss_tangent = (1.0 - cos_sim).mean()
+
+        total_loss = loss_hybrid + self.lambda_deriv * loss_deriv + self.lambda_tangent * loss_tangent
+        return total_loss
+
+
+class SoftDTWLoss(nn.Module):
+    """
+    Differentiable Soft Dynamic Time Warping Loss:
+    L = L_hybrid + lambda_dtw * SoftDTW(pred, target)
+    - Anti-diagonal vectorized GPU dynamic programming with temperature gamma.
+    - Decouples geometric waveform morphology / amplitude fitting from minor temporal phase drift.
+    """
+    def __init__(self, mean_y=None, std_y=None, gamma=0.1, sub_stride=20, lambda_rel=0.2, lambda_dtw=0.05, use_core_only=True):
+        super().__init__()
+        self.gamma = gamma
+        self.sub_stride = sub_stride
+        self.lambda_rel = lambda_rel
+        self.lambda_dtw = lambda_dtw
+        self.use_core_only = use_core_only
+        self.core_indices = [0, 1, 2, 4, 7, 8, 9, 10, 11]
+        self.rel_loss = RelativeL2Loss(eps=0.1, max_clamp=10.0)
+
+    def _soft_dtw_anti_diag(self, x, y):
+        # x, y: (B*V, N) - compute in float32 for AMP stability and index-put compatibility
+        orig_dtype = x.dtype
+        x_f = x.float()
+        y_f = y.float()
+        B_V, N = x_f.shape
+        D = (x_f.unsqueeze(2) - y_f.unsqueeze(1)) ** 2  # Pairwise Euclidean distance matrix (B*V, N, N)
+
+        # DP matrix padded with 1e4 in float32
+        R = torch.full((B_V, N + 2, N + 2), fill_value=1e4, device=x.device, dtype=torch.float32)
+        R[:, 1, 1] = 0.0
+
+        # Vectorized loop across anti-diagonals k = i + j
+        for k in range(3, 2 * N + 3):
+            i_min = max(2, k - (N + 1))
+            i_max = min(N + 1, k - 2)
+            if i_min > i_max:
+                continue
+            i_idx = torch.arange(i_min, i_max + 1, device=x.device)
+            j_idx = k - i_idx
+
+            r0 = R[:, i_idx - 1, j_idx - 1]
+            r1 = R[:, i_idx - 1, j_idx]
+            r2 = R[:, i_idx, j_idx - 1]
+
+            stack_r = torch.stack([r0, r1, r2], dim=-1)
+            soft_min = -self.gamma * torch.logsumexp(-stack_r / self.gamma, dim=-1)
+            d_val = D[:, i_idx - 2, j_idx - 2]
+            R[:, i_idx, j_idx] = d_val + soft_min
+
+        return R[:, N + 1, N + 1].mean().to(orig_dtype)
+
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None):
+        loss_mse = F.mse_loss(pred_norm, target_norm)
+        loss_rel = self.rel_loss(pred_norm, target_norm)
+        loss_hybrid = loss_mse + self.lambda_rel * loss_rel
+
+        # Subsample along time (T=500 -> N=25) on Core 9 channels for millisecond GPU execution
+        if self.use_core_only:
+            p_sub = pred_norm[:, self.core_indices, ::self.sub_stride]
+            t_sub = target_norm[:, self.core_indices, ::self.sub_stride]
+        else:
+            p_sub = pred_norm[:, :, ::self.sub_stride]
+            t_sub = target_norm[:, :, ::self.sub_stride]
+
+        B, V, N = p_sub.shape
+        dtw_val = self._soft_dtw_anti_diag(p_sub.reshape(B * V, N), t_sub.reshape(B * V, N))
+
+        return loss_hybrid + self.lambda_dtw * dtw_val
+
+
 LOSS_REGISTRY = {
     'physics_informed': PhysicsInformedLoss,
     'mse_only': MSEOnlyLoss,
@@ -598,6 +706,10 @@ LOSS_REGISTRY = {
     'pinn_residual': PINNResidualLoss,
     'h1': H1Loss,
     'pino': PINOLoss,
+    'phase_derivative': PhaseDerivativeLoss,
+    'soft_dtw': SoftDTWLoss,
+    'hybrid_phase_deriv': PhaseDerivativeLoss,
+    'hybrid_soft_dtw': SoftDTWLoss,
 }
 
 
