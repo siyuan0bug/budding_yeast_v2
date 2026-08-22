@@ -695,6 +695,92 @@ class SoftDTWLoss(nn.Module):
         return loss_hybrid + self.lambda_dtw * dtw_val
 
 
+class TripleDynamicLoss(nn.Module):
+    """
+    三元动力学复合损失 (Triple-Dynamic Composite Loss)
+    同时联合三大约束维度:
+    1. 宏观浓度与通道能量平衡: Hybrid Loss (MSE + lambda_rel * Rel_L2)
+    2. 39维相空间微分切向流场对齐: Phase Derivative Loss (一阶中心差分 Rel_L2 + 速度向量余弦相似度)
+    3. 核心细胞周期因子可微软动态时间规整: Soft-DTW Loss (解除尖峰时序微小相位偏移的欧氏过度惩罚)
+    """
+    def __init__(self, lambda_rel=0.5, lambda_deriv=0.5, lambda_cos=0.1, lambda_dtw=0.05,
+                 gamma=0.1, sub_stride=20, use_core_only=True):
+        super().__init__()
+        self.lambda_rel = lambda_rel
+        self.lambda_deriv = lambda_deriv
+        self.lambda_cos = lambda_cos
+        self.lambda_dtw = lambda_dtw
+        self.gamma = gamma
+        self.sub_stride = sub_stride
+        self.use_core_only = use_core_only
+        self.core_indices = [0, 1, 2, 4, 7, 8, 9, 10, 11]  # Core 9 variables
+        self.rel_loss = RelativeL2Loss(eps=0.1, max_clamp=10.0)
+
+    def _soft_dtw_anti_diag(self, x, y):
+        orig_dtype = x.dtype
+        x_f = x.float()
+        y_f = y.float()
+        B_V, N = x_f.shape
+        D = (x_f.unsqueeze(2) - y_f.unsqueeze(1)) ** 2  # (B*V, N, N)
+
+        R = torch.full((B_V, N + 2, N + 2), fill_value=1e4, device=x.device, dtype=torch.float32)
+        R[:, 1, 1] = 0.0
+
+        for k in range(3, 2 * N + 3):
+            i_min = max(2, k - (N + 1))
+            i_max = min(N + 1, k - 2)
+            if i_min > i_max:
+                continue
+            i_idx = torch.arange(i_min, i_max + 1, device=x.device)
+            j_idx = k - i_idx
+
+            r0 = R[:, i_idx - 1, j_idx - 1]
+            r1 = R[:, i_idx - 1, j_idx]
+            r2 = R[:, i_idx, j_idx - 1]
+
+            stack_r = torch.stack([r0, r1, r2], dim=-1)
+            soft_min = -self.gamma * torch.logsumexp(-stack_r / self.gamma, dim=-1)
+            d_val = D[:, i_idx - 2, j_idx - 2]
+            R[:, i_idx, j_idx] = d_val + soft_min
+
+        return R[:, N + 1, N + 1].mean().to(orig_dtype)
+
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None):
+        # 1. Macro Hybrid Loss
+        loss_mse = F.mse_loss(pred_norm, target_norm)
+        loss_rel = self.rel_loss(pred_norm, target_norm)
+        loss_hybrid = loss_mse + self.lambda_rel * loss_rel
+
+        # 2. Micro Phase Derivative & Tangential Alignment Loss
+        d_pred = (pred_norm[:, :, 2:] - pred_norm[:, :, :-2]) * 0.5
+        d_target = (target_norm[:, :, 2:] - target_norm[:, :, :-2]) * 0.5
+
+        loss_deriv_rel = self.rel_loss(d_pred, d_target)
+
+        eps = 1e-6
+        pred_norm_t = torch.norm(d_pred, dim=1, keepdim=True) + eps
+        target_norm_t = torch.norm(d_target, dim=1, keepdim=True) + eps
+        cos_sim = torch.sum((d_pred / pred_norm_t) * (d_target / target_norm_t), dim=1)  # (B, T-2)
+        loss_cos = (1.0 - cos_sim).mean()
+
+        loss_phase = loss_deriv_rel + self.lambda_cos * loss_cos
+
+        # 3. Nonlinear Soft-DTW Phase Decoupling Loss
+        if self.use_core_only:
+            p_sub = pred_norm[:, self.core_indices, ::self.sub_stride]
+            t_sub = target_norm[:, self.core_indices, ::self.sub_stride]
+        else:
+            p_sub = pred_norm[:, :, ::self.sub_stride]
+            t_sub = target_norm[:, :, ::self.sub_stride]
+
+        B, V, N = p_sub.shape
+        dtw_val = self._soft_dtw_anti_diag(p_sub.reshape(B * V, N), t_sub.reshape(B * V, N))
+
+        # 4. Total Triple-Dynamic Loss
+        total_loss = loss_hybrid + self.lambda_deriv * loss_phase + self.lambda_dtw * dtw_val
+        return total_loss
+
+
 LOSS_REGISTRY = {
     'physics_informed': PhysicsInformedLoss,
     'mse_only': MSEOnlyLoss,
@@ -708,6 +794,8 @@ LOSS_REGISTRY = {
     'pino': PINOLoss,
     'phase_derivative': PhaseDerivativeLoss,
     'soft_dtw': SoftDTWLoss,
+    'triple_dynamic': TripleDynamicLoss,
+    'hybrid_phase_dtw': TripleDynamicLoss,
     'hybrid_phase_deriv': PhaseDerivativeLoss,
     'hybrid_soft_dtw': SoftDTWLoss,
 }

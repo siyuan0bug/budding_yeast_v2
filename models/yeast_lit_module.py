@@ -23,7 +23,9 @@ from budding_yeast_v2.models.components import (
     DynamicReactionFluxOperator, SpectralTemporalHybridOperator,
     PhysicsConstrainedBiochemicalOperator,
     BioMechanisticOperator, BioMechFull,
-    BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly
+    BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly,
+    BioRefiner, BioRefinerCurvature,
+    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus
 )
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
@@ -63,6 +65,15 @@ MODEL_REGISTRY = {
     'biom_event': BioMechEventOnly,
     'biom_titration': BioMechTitrationOnly,
     'biom_pathway': BioMechPathwayOnly,
+    'biom_refiner': BioRefiner,
+    'bio_refiner': BioRefiner,
+    'biom_refiner_curvature': BioRefinerCurvature,
+    'biom_refiner_curv': BioRefinerCurvature,
+    'biom_refiner_pyramid': BioRefinerPyramid,
+    'biom_refiner_pyr': BioRefinerPyramid,
+    'biom_refiner_graph': BioRefinerGraph,
+    'biom_refiner_graph_attn': BioRefinerGraph,
+    'biom_refiner_plus': BioRefinerPlus,
 }
 
 
@@ -106,7 +117,7 @@ class YeastLitModule(pl.LightningModule):
         self.save_hyperparameters()
 
         # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
-        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno'):
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus'):
             adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
             if os.path.exists(adj_path):
                 adj_matrix = np.load(adj_path)
@@ -168,15 +179,23 @@ class YeastLitModule(pl.LightningModule):
                                     width=width, n_blocks=n_blocks)
         elif model_name in ('st_hyperno', 'spectral_temporal_hybrid_operator',
                             'biom_full', 'biom_net', 'bio_mechanistic_operator',
-                            'biom_event', 'biom_titration', 'biom_pathway'):
+                            'biom_event', 'biom_titration', 'biom_pathway',
+                            'biom_refiner', 'bio_refiner',
+                            'biom_refiner_curvature', 'biom_refiner_curv',
+                            'biom_refiner_pyramid', 'biom_refiner_pyr'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks)
+        elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    modes=modes, width=width, n_blocks=n_blocks,
+                                    adj_matrix=adj_matrix)
         else:
             raise ValueError(f"Unknown model_name: {model_name}")
 
         loss_class = LOSS_REGISTRY[loss_type]
         if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel',
-                         'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw'):
+                         'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw',
+                         'triple_dynamic', 'hybrid_phase_dtw'):
             self.criterion = loss_class()
         elif loss_type in ('pinn_residual', 'pino'):
             # 创建占位实例以在 ModelSummary 中显示损失类型
@@ -226,7 +245,8 @@ class YeastLitModule(pl.LightningModule):
                 )
             elif self.criterion is None:
                 if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel',
-                                 'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw'):
+                                 'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw',
+                                 'triple_dynamic', 'hybrid_phase_dtw'):
                     self.criterion = loss_class()
                 else:
                     self.criterion = loss_class(
@@ -305,22 +325,28 @@ class YeastLitModule(pl.LightningModule):
 
         weights = torch.ones(len(x), dtype=torch.float32, device=self.device)
 
-        out_full = self.forward_ic_time(x, p)
-
-        if self.hparams.loss_type in ('pinn_residual', 'pino'):
-            # Curriculum learning 由 loss 类内部管理（set_epoch + _get_physics_weight）
-            # v2: warmup_epochs=30（前30轮纯MSE），之后30轮线性增长到目标权重
-            # PINO 同样走物理约束路径，H1 频域项由 PINOLoss 内部 warmup 调度
-            self.criterion.set_epoch(self.current_epoch)
-
-            loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
-
-            # 记录分量损失
-            if hasattr(self.criterion, '_last_loss_components'):
-                for k, v in self.criterion._last_loss_components.items():
-                    self.log(f'train_{k}', v, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+        if self.hparams.model_name.startswith(('biom_refiner', 'bio_refiner')) and self.training:
+            out_full, out_coarse = self.model(x, p, return_coarse=True)
+            loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm)
+            loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm)
+            loss = loss_final + 0.3 * loss_coarse
         else:
-            loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
+            out_full = self.forward_ic_time(x, p)
+
+            if self.hparams.loss_type in ('pinn_residual', 'pino'):
+                # Curriculum learning 由 loss 类内部管理（set_epoch + _get_physics_weight）
+                # v2: warmup_epochs=30（前30轮纯MSE），之后30轮线性增长到目标权重
+                # PINO 同样走物理约束路径，H1 频域项由 PINOLoss 内部 warmup 调度
+                self.criterion.set_epoch(self.current_epoch)
+
+                loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
+
+                # 记录分量损失
+                if hasattr(self.criterion, '_last_loss_components'):
+                    for k, v in self.criterion._last_loss_components.items():
+                        self.log(f'train_{k}', v, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+            else:
+                loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
 
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss

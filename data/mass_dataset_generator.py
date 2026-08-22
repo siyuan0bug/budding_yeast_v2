@@ -916,7 +916,10 @@ def sample_mass_mutant(level=1):
     use_rescue_motif = (level in [3, 4] and np.random.rand() < 0.50)
 
     if use_rescue_motif:
-        motif_type = np.random.choice(['M_EXIT', 'G1_S', 'ANAPHASE', 'PREMATURE'])
+        motif_type = np.random.choice([
+            'M_EXIT', 'G1_S_RESCUE', 'SHIRAYAMA_BYPASS', 'APC_A_INTERACTION',
+            'ANTAGONISTIC_TUG', 'ANAPHASE_SEPARASE', 'MEN_TELOPHASE', 'CDC14_SUBSTRATE'
+        ])
         selected_mut_pairs = []
 
         if motif_type == 'M_EXIT':
@@ -935,23 +938,83 @@ def sample_mass_mutant(level=1):
             if np.random.rand() < 0.30:
                 ovr['mdt'] = float(np.random.choice([150.0, 160.0]))
 
-        elif motif_type == 'G1_S':
-            driver = ('CLN2', 'KO')
+        elif motif_type == 'G1_S_RESCUE':
+            # Covers #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25
+            if np.random.rand() < 0.5:
+                base_drivers = [('CLN3', 'KO'), ('BCK2', 'KO')]
+                suppressors_pool = [
+                    ('CLN2', np.random.choice(['MC', 'GAL-OE'])),
+                    ('CLB5', np.random.choice(['MC', 'GAL-OE'])),
+                    ('SIC1', 'KO'),
+                    ('CDH1', 'KO')
+                ]
+            else:
+                base_drivers = [('CLN2', 'KO'), ('CLN3', 'KO')]
+                suppressors_pool = [
+                    ('BCK2', 'MC'),
+                    ('CLB5', np.random.choice(['MC', 'GAL-OE'])),
+                    ('CLB2', 'GAL-OE'),
+                    ('SIC1', 'KO'),
+                    ('CDH1', 'KO')
+                ]
+            k_supp = min(max(1, level - len(base_drivers)), len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = base_drivers + [suppressors_pool[idx] for idx in chosen_indices]
+
+        elif motif_type == 'SHIRAYAMA_BYPASS':
+            # Covers #71, #74, #75, #76 (Shirayama et al. 1999 triple bypass)
+            driver = ('CDC20', np.random.choice(['KO', 'ts']))
             suppressors_pool = [
-                ('CLN3', 'KO'),
-                ('BCK2', 'KO'),
-                ('CLB5', 'GAL-OE'),
-                ('CLB2', 'GAL-OE'),
-                ('SIC1', 'KO')
+                ('PDS1', np.random.choice(['KO', 'db'])),
+                ('CLB5', np.random.choice(['KO', 'db'])),
+                ('SIC1', 'KO'),
+                ('MAD2', 'CSL')
             ]
             k_supp = min(level - 1, len(suppressors_pool))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
-        elif motif_type == 'ANAPHASE':
+        elif motif_type == 'APC_A_INTERACTION':
+            # Covers #115, #116, #117, #118, #119, #120, #121, #122, #123, #124
+            driver = ('APC_Core', 'APC-A')
+            suppressors_pool = [
+                ('CDH1', 'KO'),
+                ('CLB2', 'GAL-OE'),
+                ('SIC1', np.random.choice(['MC', 'GAL-OE', 'KO'])),
+                ('CDC6', np.random.choice(['MC', 'GAL-OE'])),
+                ('CDC20', 'MC')
+            ]
+            k_supp = min(level - 1, len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
+            if any(g == 'CDH1' for g, _ in selected_mut_pairs) and np.random.rand() < 0.40:
+                ovr['mdt'] = 150.0
+
+        elif motif_type == 'ANTAGONISTIC_TUG':
+            # Covers #31, #32, #33, #37, #41, #42, #46
+            if np.random.rand() < 0.5:
+                base_drivers = [('SIC1', 'GAL-OE'), ('CLN2', 'GAL-OE')]
+                suppressors_pool = [
+                    ('CLN2', 'KO'),
+                    ('CDH1', 'KO'),
+                    ('SWI5', 'KO')
+                ]
+            else:
+                base_drivers = [('SIC1', 'KO'), ('CDH1', 'KO')]
+                suppressors_pool = [
+                    ('CDC6', 'pDEL'),
+                    ('CDC20', np.random.choice(['GAL-OE', 'MC'])),
+                    ('SWI5', 'KO')
+                ]
+            k_supp = min(max(1, level - len(base_drivers)), len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = base_drivers + [suppressors_pool[idx] for idx in chosen_indices]
+
+        elif motif_type == 'ANAPHASE_SEPARASE':
+            # Covers #80, #81, #82, #83, #84, #85
             driver = ('PDS1', 'db') if np.random.rand() < 0.6 else ('CDC20', 'ts')
             suppressors_pool = [
-                ('ESP1', np.random.choice(['GAL-OE', 'MC'])),
+                ('ESP1', np.random.choice(['GAL-OE', 'MC', 'ts'])),
                 ('SCC1', 'scc1-RR'),
                 ('MAD2', 'CSL'),
                 ('BUB2', 'CKO')
@@ -960,13 +1023,28 @@ def sample_mass_mutant(level=1):
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
-        else: # PREMATURE
-            driver = ('SIC1', 'KO')
+        elif motif_type == 'MEN_TELOPHASE':
+            # Covers #88, #89, #90, #91, #94, #95, #96, #108, #109
+            driver = ('TEM1', 'ts') if np.random.rand() < 0.6 else ('CDC15', 'ts')
             suppressors_pool = [
+                ('CDC14', np.random.choice(['MC', 'GAL-OE'])),
+                ('CDC15', np.random.choice(['MC', 'GAL-OE'])),
+                ('TEM1', 'MC'),
+                ('NET1', np.random.choice(['ts', 'TAB6-1']))
+            ]
+            k_supp = min(level - 1, len(suppressors_pool))
+            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
+
+        else: # CDC14_SUBSTRATE
+            # Covers #103, #105, #106, #107, #110, #111
+            driver = ('CDC14', 'ts')
+            suppressors_pool = [
+                ('SIC1', np.random.choice(['KO', 'GAL-OE'])),
                 ('CDH1', 'KO'),
-                ('CDC20', np.random.choice(['GAL-OE', 'MC'])),
-                ('CDC6', 'pDEL'),
-                ('SWI5', 'KO')
+                ('CLN2', 'GAL-OE'),
+                ('SWI5', 'KO'),
+                ('NET1', 'TAB6-1')
             ]
             k_supp = min(level - 1, len(suppressors_pool))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
@@ -1056,7 +1134,7 @@ try:
 except Exception:
     pass
 
-DATASET_NAME = "mass_dataset_210min_500steps_dual_labels.npz"
+DATASET_NAME = "mass_v2_dataset_210min_500steps_dual_labels.npz"
 DATASET_PATH = os.path.join(OUTPUT_DIR, DATASET_NAME)
 
 def generate_mass_dataset(n_synthetic=20000, max_attempts=None, num_workers=32):
@@ -1090,10 +1168,10 @@ def generate_mass_dataset(n_synthetic=20000, max_attempts=None, num_workers=32):
     print(f" -> Loaded {len(REAL_MUTANTS)} Real Mutants.")
 
     # Phase 2: Sample MASS Synthetic Mutants
-    print(f"\n[Phase 2/4] Sampling {n_synthetic} Synthetic Mutants (MASS v4.4 Protocol)...")
-    n_l1 = int(math.floor(0.40 * n_synthetic))
-    n_l2 = int(math.floor(0.30 * n_synthetic))
-    n_l3 = int(math.floor(0.20 * n_synthetic))
+    print(f"\n[Phase 2/4] Sampling {n_synthetic} Synthetic Mutants (MASS v4.5 Protocol)...")
+    n_l1 = int(math.floor(0.25 * n_synthetic))
+    n_l2 = int(math.floor(0.35 * n_synthetic))
+    n_l3 = int(math.floor(0.25 * n_synthetic))
     n_l4 = n_synthetic - n_l1 - n_l2 - n_l3
 
     print(f" -> Target Level Distribution: L1 (ki=1): {n_l1} | L2 (ki=2): {n_l2} | L3 (ki=3~5): {n_l3} | L4 (ki=4~6): {n_l4}")
@@ -1313,16 +1391,16 @@ if __name__ == '__main__':
     # 用户可调参数配置区 (随时在此处直接修改，或通过命令行参数指定)
     # =========================================================================
     NUM_SAMPLES = 100000   # 生成的采样样本数量
-    NUM_WORKERS = 60      # 并行调用的 CPU 核心数 (当前服务器共有 64 核，设为 32 可预留一半核心给其他用户)
+    NUM_WORKERS = 60      # 并行调用的 CPU 核心数 (当前服务器共有 64 核，设为 60 进行高并发并行加速)
     # =========================================================================
 
     import argparse
-    parser = argparse.ArgumentParser(description="MASS v4.4 Dataset Generator")
+    parser = argparse.ArgumentParser(description="MASS v4.5 Dataset Generator")
     parser.add_argument("--samples", type=int, default=NUM_SAMPLES, help="Number of synthetic samples to generate")
     parser.add_argument("--workers", type=int, default=NUM_WORKERS, help="Number of parallel CPU worker processes")
     args = parser.parse_args()
 
-    print(f"Executing MASS v4.4 Dataset Generator (Samples: {args.samples}, Workers: {args.workers})...", flush=True)
+    print(f"Executing MASS v4.5 Dataset Generator (Samples: {args.samples}, Workers: {args.workers})...", flush=True)
     generate_mass_dataset(n_synthetic=args.samples, num_workers=args.workers)
     print("\n[SUCCESS] MASS Dataset Generator Execution Finished Cleanly!", flush=True)
 

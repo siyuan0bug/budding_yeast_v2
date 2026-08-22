@@ -69,6 +69,8 @@ DATASET_guaranteed="${DATA_DIR}/lhs_cheat_origin_guaranteed_210min_500steps_dual
 #   样本命名: real mutants 用原名 (如 1_WT_Glc), 合成样本以 'MASS_' 开头 (如 MASS_00001)
 #   yeast_datamodule.py 会自动识别 (无 '_LHS_' + 有 'MASS_' 前缀) 并跳过家族分层, 仅按 Pattern 宏观划分
 DATASET_MASS="${DATA_DIR}/mass_dataset_210min_500steps_dual_labels.npz"
+# MASS v4.5 / v2 数据集 (全新升级: 结构化生物救援基序扩充 + 高阶多突变占比提升至75%)
+DATASET_MASS_V2="${DATA_DIR}/mass_v2_dataset_210min_500steps_dual_labels.npz"
 # mutant_aware 策略专用: atlas CSV (含 lhs_MAE_min, lhs_n_samples 列)
 ATLAS_CSV="./eval_result/old_hyper_fno_none_mse_only_210m_500s_modes32_seed42/mutant_atlas_merged.csv"
 
@@ -169,16 +171,49 @@ EXPERIMENTS=(
     #"dyrfo hybrid_mse_rel false ${DATASET_MASS} mass_log1p_dyrfo_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
     #"biom_titration hybrid_mse_rel false ${DATASET_MASS} mass_log1p_biom_titration_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
 
-    # ====== 🚀 动力学感知创新损失全旗舰实验 (Phase Space & Soft-DTW Loss Suite) ======
-    # 方案 A1: 相空间时序导数与切向流场损失 (Phase-Derivative Flow Alignment)
-    "biom_pathway phase_derivative false ${DATASET_MASS} mass_log1p_phase_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
-    "resnet_film phase_derivative false ${DATASET_MASS} mass_log1p_phase_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
-    "st_hyperno phase_derivative false ${DATASET_MASS} mass_log1p_phase_st_hyperno_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    "dyrfo phase_derivative false ${DATASET_MASS} mass_log1p_phase_dyrfo_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    # ====== 🚀 动力学感知创新损失全旗舰实验 (Phase Space & Soft-DTW Loss Suite - MASS v1 已完成归档) ======
+    #"biom_pathway phase_derivative false ${DATASET_MASS} mass_log1p_phase_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"resnet_film phase_derivative false ${DATASET_MASS} mass_log1p_phase_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"st_hyperno phase_derivative false ${DATASET_MASS} mass_log1p_phase_st_hyperno_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"dyrfo phase_derivative false ${DATASET_MASS} mass_log1p_phase_dyrfo_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    #"biom_pathway soft_dtw false ${DATASET_MASS} mass_log1p_dtw_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    #"resnet_film soft_dtw false ${DATASET_MASS} mass_log1p_dtw_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
 
-    # 方案 A2: 核心细胞周期可微软动态时间规整损失 (Soft-DTW Phase Decoupling)
-    "biom_pathway soft_dtw false ${DATASET_MASS} mass_log1p_dtw_biom_pathway_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
-    "resnet_film soft_dtw false ${DATASET_MASS} mass_log1p_dtw_resnet_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    # ====== 🌟🌟🌟 新一代 MASS v2 / v4.5 高阶救援与拓扑重平衡数据集全旗舰实验 (8 卡第一轮 - 已完成归档) ======
+    #"st_hyperno phase_derivative false ${DATASET_MASS_V2} massv2_st_hyperno_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"biom_pathway soft_dtw false ${DATASET_MASS_V2} massv2_biom_pathway_dtw_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    #"biom_pathway hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_pathway_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"biom_pathway phase_derivative false ${DATASET_MASS_V2} massv2_biom_pathway_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"resnet_film hybrid_mse_rel false ${DATASET_MASS_V2} massv2_resnet_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    #"resnet_film soft_dtw false ${DATASET_MASS_V2} massv2_resnet_dtw_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"dyrfo hybrid_mse_rel false ${DATASET_MASS_V2} massv2_dyrfo_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    #"biom_full hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_full_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+
+    # ====== 🌟🌟🌟 MASS v2 第二轮：三元动力学复合损失 (Triple-Dynamic) 与 双阶粗精残差细化算子 (BioRefiner) 7 卡大决战 (已完成归档) ======
+    #"biom_pathway triple_dynamic false ${DATASET_MASS_V2} massv2_biom_pathway_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"biom_full triple_dynamic false ${DATASET_MASS_V2} massv2_biom_full_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    #"dyrfo triple_dynamic false ${DATASET_MASS_V2} massv2_dyrfo_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"st_hyperno triple_dynamic false ${DATASET_MASS_V2} massv2_st_hyperno_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"biom_refiner hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    #"biom_refiner phase_derivative false ${DATASET_MASS_V2} massv2_biom_refiner_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"biom_refiner triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+
+    # ====== 🔥🔥🔥 MASS v2 第三轮：BioRefiner-Plus 终极大升级与 3 大独立消融子模型 7 卡决战 🔥🔥🔥 ======
+    # GPU 0: 消融子模型 1 (二阶相空间曲率/加速度张量) + Hybrid 损失
+    "biom_refiner_curvature hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_curv_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # GPU 1: 消融子模型 2 (多尺度时间金字塔残差网络) + Hybrid 损失
+    "biom_refiner_pyramid hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_pyr_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # GPU 2: 消融子模型 3 (39 变量生化反应图跨注意力) + Hybrid 损失
+    "biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_graph_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # GPU 3: 👑 终极大融合旗舰 BioRefiner-Plus (三大机制全开) + Hybrid 损失 (冲击项目最高峰！)
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_plus_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # GPU 4: 👑 终极大融合旗舰 BioRefiner-Plus + 相空间导数切向流场
+    "biom_refiner_plus phase_derivative false ${DATASET_MASS_V2} massv2_biom_refiner_plus_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    # GPU 5: 👑 终极大融合旗舰 BioRefiner-Plus + 三元动力学复合损失
+    "biom_refiner_plus triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_plus_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    # GPU 6: 消融子模型 1 (二阶相空间曲率) + 三元动力学复合损失
+    "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_curv_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    # GPU 7: 保留空闲 (留给他人使用)
 
     # 实验 1: RGS 主动学习 (减小新增样本数到500, 扰动幅度降到0.05)
     #"hyper_fno mse_only false ${DATASET_CHEAT} 32 32 64 200 rgs 6e-4 10 500 0.05 0.1 one_time"
@@ -343,7 +378,7 @@ for SEED in "${SEEDS[@]}"; do
         fi
 
         RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_TAG}_modes${MODES}_seed${SEED}"
-        EVAL_OUT_DIR="./eval_result/${RUN_NAME}"
+        EVAL_OUT_DIR="./eval_result_massv2/${RUN_NAME}"
         LOG_FILE="logs/${RUN_NAME}.log"
 
         # 根据 LOSS_TYPE 构建损失函数专属参数
@@ -481,5 +516,5 @@ if [ $FAIL_COUNT -eq 0 ]; then
 else
     echo "⚠️ ${#PIDS[@]} 个实验中有 $FAIL_COUNT 个失败, 请检查 logs/ 目录下的日志"
 fi
-echo "📊 结果目录: ./eval_result/"
+echo "📊 结果目录: ./eval_result_massv2/"
 echo "📋 日志目录: ./logs/"
