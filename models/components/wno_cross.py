@@ -19,18 +19,20 @@ class WaveletConv1d(nn.Module):
 
     def forward(self, x):
         B, C_in, T = x.shape
-        coeffs = ptwt.wavedec(x, self.wavelet, level=self.level, mode='zero')
+        orig_dtype = x.dtype
+        x_float = x.float()
+        coeffs = ptwt.wavedec(x_float, self.wavelet, level=self.level, mode='zero')
 
         out_coeffs = []
         for i, c in enumerate(coeffs):
-            w = self.weights[i]
-            c_out = torch.einsum("bit,oi->bot", c, w)
-            out_coeffs.append(c_out)
+            w = self.weights[i].float()
+            c_out = torch.einsum("bit,oi->bot", c.float(), w)
+            out_coeffs.append(c_out.float())
 
         x_out = ptwt.waverec(out_coeffs, self.wavelet)
         if x_out.shape[-1] > T:
             x_out = x_out[..., :T]
-        return x_out + self.bias.view(1, -1, 1)
+        return (x_out + self.bias.view(1, -1, 1)).to(orig_dtype)
 
 
 class NIPSYeastBlock(nn.Module):

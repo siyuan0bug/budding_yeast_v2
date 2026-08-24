@@ -15,15 +15,16 @@ class LaplaceConv1d(nn.Module):
 
     def forward(self, x):
         batchsize, channels, time_steps = x.shape
+        orig_dtype = x.dtype
         t = torch.linspace(0, 1, time_steps, device=x.device).view(1, 1, time_steps)
         sigma_clamped = torch.clamp(self.sigma, min=-5.0, max=5.0)
         envelope = torch.exp(-sigma_clamped * t)
-        x_laplace = x * envelope
+        x_laplace = (x * envelope).float()
         x_ft = torch.fft.rfft(x_laplace)
         out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1) // 2 + 1, dtype=torch.cfloat, device=x.device)
         out_ft[:, :, :self.modes1] = torch.einsum("bix,iox->box", x_ft[:, :, :self.modes1], self.weights1)
         x_out = torch.fft.irfft(out_ft, n=x.size(-1))
-        return x_out
+        return x_out.to(orig_dtype)
 
 
 class NIPSYeastBlock(nn.Module):

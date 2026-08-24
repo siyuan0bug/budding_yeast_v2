@@ -1,4 +1,5 @@
 from .pure_fno import PureFNO_ICLR2021
+from .pure_wno import PureWNO_2022
 from .cross_fno import NIPSYeastFNO
 from .ultimate_fno import UltimateFNO
 from .wno_cross import NIPSYeastWNO

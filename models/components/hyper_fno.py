@@ -41,10 +41,12 @@ class HyperFNOBlock(nn.Module):
         H_r = I_b + mod_r
         R_dyn = self.R0.unsqueeze(0) * H_r.unsqueeze(-1).to(torch.cfloat)
 
-        x_ft = torch.fft.rfft(x, dim=-1)
+        orig_dtype = x.dtype
+        x_float = x.float()
+        x_ft = torch.fft.rfft(x_float, dim=-1)
         out_ft = torch.zeros(B, self.width, x.size(-1) // 2 + 1, dtype=torch.cfloat, device=x.device)
         out_ft[:, :, :self.modes] = torch.einsum('bix, boix -> box', x_ft[:, :, :self.modes], R_dyn)
-        x_spectral = torch.fft.irfft(out_ft, n=T, dim=-1)
+        x_spectral = torch.fft.irfft(out_ft, n=T, dim=-1).to(orig_dtype)
 
         mod_w = torch.einsum('oid, bd -> boi', self.U0, lambda_prime)
         W_dyn = self.W0.unsqueeze(0) * (I_b + mod_w)

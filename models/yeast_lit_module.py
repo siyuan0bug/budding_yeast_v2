@@ -13,7 +13,7 @@ import os
 import numpy as np
 
 from budding_yeast_v2.models.components import (
-    PureFNO_ICLR2021, NIPSYeastFNO, UltimateFNO,
+    PureFNO_ICLR2021, PureWNO_2022, NIPSYeastFNO, UltimateFNO,
     NIPSYeastWNO, NIPSYeastLNO, HyperFNO, ChannelHyperFNO,
     ResNetFiLM, DeepONet, hpYeastFNO, NeuralODEModel, GraphResNetFiLM,
     GatedGraphResNetFiLM, MultiScaleDiffGraphNet, DualPathSpectralGraphNet,
@@ -33,6 +33,7 @@ from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 
 MODEL_REGISTRY = {
     'pure_fno': PureFNO_ICLR2021,
+    'pure_wno': PureWNO_2022,
     'cross_fno': NIPSYeastFNO,
     'ultimate_fno': UltimateFNO,
     'wno': NIPSYeastWNO,
@@ -131,6 +132,9 @@ class YeastLitModule(pl.LightningModule):
                                     width=width, n_blocks=n_blocks, adj_matrix=adj_matrix)
         elif model_name == 'pure_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes, width=width)
+        elif model_name == 'pure_wno':
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
+                                    n_blocks=n_blocks, wavelet=wavelet)
         elif model_name == 'wno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
                                     n_blocks=n_blocks, adj_matrix=adj_matrix, wavelet=wavelet)

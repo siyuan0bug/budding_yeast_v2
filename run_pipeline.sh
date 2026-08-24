@@ -7,12 +7,13 @@ export NCCL_P2P_DISABLE=1
 export PYTHONPATH=$(pwd)/..:$PYTHONPATH
 # 强制 Python stdout/stderr 无缓冲, 让 tqdm 进度条和 print 摘要行立即写入日志文件
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 PYTHON_BIN="/home/users/zsy/.conda/envs/neuralop/bin/python"
 #export WANDB_API_KEY="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"  #v1版本
 export WANDB_API_KEY="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"  #active版本
 
 # 创建并行实验日志目录
-mkdir -p logs
+mkdir -p logs_v3 logs
 
 # ==========================================
 # 全局开关：设为 1 启用 W&B 离线模式（日志保存在本地 wandb/ 目录，不联网）
@@ -71,6 +72,8 @@ DATASET_guaranteed="${DATA_DIR}/lhs_cheat_origin_guaranteed_210min_500steps_dual
 DATASET_MASS="${DATA_DIR}/mass_dataset_210min_500steps_dual_labels.npz"
 # MASS v4.5 / v2 数据集 (全新升级: 结构化生物救援基序扩充 + 高阶多突变占比提升至75%)
 DATASET_MASS_V2="${DATA_DIR}/mass_v2_dataset_210min_500steps_dual_labels.npz"
+# MASS v3 数据集 (全新微初值与显式微拓扑重平衡数据集)
+DATASET_MASS_V3="${DATA_DIR}/massv3_dataset_210min_500steps_dual_labels.npz"
 # mutant_aware 策略专用: atlas CSV (含 lhs_MAE_min, lhs_n_samples 列)
 ATLAS_CSV="./eval_result/old_hyper_fno_none_mse_only_210m_500s_modes32_seed42/mutant_atlas_merged.csv"
 
@@ -198,22 +201,48 @@ EXPERIMENTS=(
     #"biom_refiner phase_derivative false ${DATASET_MASS_V2} massv2_biom_refiner_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
     #"biom_refiner triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
 
-    # ====== 🔥🔥🔥 MASS v2 第三轮：BioRefiner-Plus 终极大升级与 3 大独立消融子模型 7 卡决战 🔥🔥🔥 ======
-    # GPU 0: 消融子模型 1 (二阶相空间曲率/加速度张量) + Hybrid 损失
-    "biom_refiner_curvature hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_curv_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
-    # GPU 1: 消融子模型 2 (多尺度时间金字塔残差网络) + Hybrid 损失
-    "biom_refiner_pyramid hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_pyr_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
-    # GPU 2: 消融子模型 3 (39 变量生化反应图跨注意力) + Hybrid 损失
-    "biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_graph_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
-    # GPU 3: 👑 终极大融合旗舰 BioRefiner-Plus (三大机制全开) + Hybrid 损失 (冲击项目最高峰！)
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_plus_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # GPU 4: 👑 终极大融合旗舰 BioRefiner-Plus + 相空间导数切向流场
-    "biom_refiner_plus phase_derivative false ${DATASET_MASS_V2} massv2_biom_refiner_plus_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
-    # GPU 5: 👑 终极大融合旗舰 BioRefiner-Plus + 三元动力学复合损失
-    "biom_refiner_plus triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_plus_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
-    # GPU 6: 消融子模型 1 (二阶相空间曲率) + 三元动力学复合损失
-    "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_curv_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    # ====== 🌟🌟🌟 MASS v2 第三轮：BioRefiner-Plus 终极大升级与 3 大独立消融子模型 7 卡决战 (已完成归档) ======
+    #"biom_refiner_curvature hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_curv_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"biom_refiner_pyramid hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_pyr_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    #"biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_graph_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_V2} massv2_biom_refiner_plus_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"biom_refiner_plus phase_derivative false ${DATASET_MASS_V2} massv2_biom_refiner_plus_phase_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    #"biom_refiner_plus triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_plus_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V2} massv2_biom_refiner_curv_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+
+    # ====== 🔥🔥🔥 MASS v3 (全新微初值与拓扑重平衡数据集) 7 卡终极大决战 (已完成归档) 🔥🔥🔥 ======
+    # GPU 0: 👑 全项目总冠军 biom_refiner_graph + Hybrid 损失 (最强拓扑图注意力算子冲击更高峰)
+    #"biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_V3} massv3_biom_refiner_graph_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # GPU 1: 👑 终极大融合旗舰 biom_refiner_plus + 三元动力学复合损失 (全项目最低 MAE 0.0427 冲击巅峰)
+    #"biom_refiner_plus triple_dynamic false ${DATASET_MASS_V3} massv3_biom_refiner_plus_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # GPU 2: 👑 终极大融合旗舰 biom_refiner_plus + Hybrid 损失
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_V3} massv3_biom_refiner_plus_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # GPU 3: 👑 超高精破百纪录保持者 biom_refiner_curvature + 三元动力学复合损失 (101个超高精)
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V3} massv3_biom_refiner_curv_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # GPU 4: 二阶曲率消融模型 biom_refiner_curvature + Hybrid 损失
+    #"biom_refiner_curvature hybrid_mse_rel false ${DATASET_MASS_V3} massv3_biom_refiner_curv_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    # GPU 5: 经典双阶粗精细化算子 BioRefiner + Hybrid 损失 (Core 9 最佳基准)
+    #"biom_refiner hybrid_mse_rel false ${DATASET_MASS_V3} massv3_biom_refiner_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    # GPU 6: 三大机制复合全模型 biom_full + Hybrid 损失 (单阶段机制算子最强代表)
+    #"biom_full hybrid_mse_rel false ${DATASET_MASS_V3} massv3_biom_full_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
     # GPU 7: 保留空闲 (留给他人使用)
+
+    # ====== 🌟🌟🌟 MASS v3 基线模型横向对比评测 (PureFNO, DeepONet, ResNetFiLM, PureWNO, HyperFNO) 🌟🌟🌟 ======
+    # GPU 0: PureFNO (ICLR 2021 原版) + Hybrid 损失 (width=64, batch_size=512, epochs=100)
+    "pure_fno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_pure_fno_hybrid_width64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # GPU 1: DeepONet (已完成评估: Real MAE=0.1567, Corr=0.9641)
+    #"deeponet hybrid_mse_rel false ${DATASET_MASS_V3} massv3_deeponet_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # GPU 2: ResNetFiLM (已完成评估: Real MAE=0.0495, Corr=0.9961)
+    #"resnet_film hybrid_mse_rel false ${DATASET_MASS_V3} massv3_resnet_film_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # GPU 3: PureWNO (CMAME 2022 原版) + Hybrid 损失 (width=64, batch_size=512, epochs=100)
+    "pure_wno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_pure_wno_hybrid_width64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # GPU 4: HyperFNO (已完成评估: Real MAE=0.0798, Corr=0.9924)
+    #"hyper_fno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_hyper_fno_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    # GPU 5: (备选/按需开启) WNO-Cross (Cross-Attention 增强版小波算子) + Hybrid 损失
+    #"wno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_wno_cross_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    # GPU 5: CrossFNO (已注释跳过)
+    #"cross_fno hybrid_mse_rel false ${DATASET_MASS_V3} mass 32 32 128 100 none 3e-4 10 0 0 0 one_time 5"
+    # GPU 6~7: 保留空闲 (留给他人使用)
 
     # 实验 1: RGS 主动学习 (减小新增样本数到500, 扰动幅度降到0.05)
     #"hyper_fno mse_only false ${DATASET_CHEAT} 32 32 64 200 rgs 6e-4 10 500 0.05 0.1 one_time"
@@ -378,8 +407,8 @@ for SEED in "${SEEDS[@]}"; do
         fi
 
         RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_TAG}_modes${MODES}_seed${SEED}"
-        EVAL_OUT_DIR="./eval_result_massv2/${RUN_NAME}"
-        LOG_FILE="logs/${RUN_NAME}.log"
+        EVAL_OUT_DIR="./eval_results_v3/${RUN_NAME}"
+        LOG_FILE="logs_v3/${RUN_NAME}.log"
 
         # 根据 LOSS_TYPE 构建损失函数专属参数
         PINN_PARAMS=""
@@ -421,7 +450,7 @@ for SEED in "${SEEDS[@]}"; do
                 # 尤其 v2.3 al4pde 保存 final-last-epoch.ckpt: 若目录残留旧 best-*.ckpt,
                 # 按字母序 best- 会排在 final- 前被误选, 导致评估到过期模型。
                 # 仅在 SKIP_TRAIN=0 (确实要重新训练) 时清理; 范围严格限定为本 run 目录下的 *.ckpt。
-                TRAIN_CKPT_DIR="./train_result/${RUN_NAME}"
+                TRAIN_CKPT_DIR="./train_results_v3/${RUN_NAME}"
                 if [ -d "$TRAIN_CKPT_DIR" ]; then
                     rm -f "${TRAIN_CKPT_DIR}"/*.ckpt
                     echo "🧹 训练前已清理旧 checkpoint: ${TRAIN_CKPT_DIR}/*.ckpt" >> "$LOG_FILE" 2>&1
@@ -440,12 +469,13 @@ for SEED in "${SEEDS[@]}"; do
                     --lr $LR \
                     --warmup_epochs $WARMUP \
                     --num_workers 4 \
-                    --val_batch_size 512 \
+                    --val_batch_size $BATCH_SIZE \
                     --devices 1 \
                     $AL_PARAMS \
                     $ADJ_PARAM \
                     $PINN_PARAMS \
                     --rollout_type $ROLLOUT_TYPE \
+                    --save_dir ./train_results_v3 \
                     $WANDB_FLAG >> "$LOG_FILE" 2>&1
 
                 TRAIN_EXIT=$?
@@ -460,7 +490,7 @@ for SEED in "${SEEDS[@]}"; do
             # 步骤 B+C: 寻找 Checkpoint 并评估 (SKIP_EVAL=1 时整体跳过, 用于 batch/OOM 冒烟测试)
             if [ "$SKIP_EVAL" = "0" ]; then
                 # 步骤 B: 寻找 Checkpoint
-                CKPT_DIR="./train_result/${RUN_NAME}"
+                CKPT_DIR="./train_results_v3/${RUN_NAME}"
                 CKPT_PATH=$(ls ${CKPT_DIR}/*.ckpt 2>/dev/null | head -n 1)
 
                 if [ -z "$CKPT_PATH" ]; then
@@ -470,13 +500,13 @@ for SEED in "${SEEDS[@]}"; do
 
                 echo "🎯 成功找到 Checkpoint: $CKPT_PATH" >> "$LOG_FILE" 2>&1
 
-                # 步骤 C: 评估（独立大 batch，充分利用显存加速）
+                # 步骤 C: 评估（与模型 batch_size 对齐以确保显存安全）
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始评估..." >> "$LOG_FILE" 2>&1
                 CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON_BIN eval.py \
                     --ckpt "$CKPT_PATH" \
                     --dataset_name "$DATASET" \
                     --save_dir "$EVAL_OUT_DIR" \
-                    --batch_size 512 >> "$LOG_FILE" 2>&1
+                    --batch_size $BATCH_SIZE >> "$LOG_FILE" 2>&1
 
                 if [ $? -eq 0 ]; then
                     echo "✅ [$RUN_NAME] 评估完成！结果已保存至: $EVAL_OUT_DIR" >> "$LOG_FILE" 2>&1
@@ -496,8 +526,8 @@ done
 # 等待所有后台实验完成
 echo ""
 echo "⏳ 等待 ${#PIDS[@]} 个并行实验完成..."
-echo "   实时查看日志: tail -f logs/*.log"
-echo "   查看某个实验: tail -f logs/<实验名>.log"
+echo "   实时查看日志: tail -f logs_v3/*.log"
+echo "   查看某个实验: tail -f logs_v3/<实验名>.log"
 echo ""
 
 FAIL_COUNT=0
@@ -514,7 +544,7 @@ echo ""
 if [ $FAIL_COUNT -eq 0 ]; then
     echo "🎉 所有 ${#PIDS[@]} 个实验全部成功完成!"
 else
-    echo "⚠️ ${#PIDS[@]} 个实验中有 $FAIL_COUNT 个失败, 请检查 logs/ 目录下的日志"
+    echo "⚠️ ${#PIDS[@]} 个实验中有 $FAIL_COUNT 个失败, 请检查 logs_v3/ 目录下的日志"
 fi
-echo "📊 结果目录: ./eval_result_massv2/"
-echo "📋 日志目录: ./logs/"
+echo "📊 结果目录: ./eval_results_v3/"
+echo "📋 日志目录: ./logs_v3/"

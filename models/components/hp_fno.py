@@ -18,8 +18,10 @@ class CoupledSpectralConv1d(nn.Module):
 
     def forward(self, x):
         B, V, W, T = x.shape
+        orig_dtype = x.dtype
+        x_float = x.float()
 
-        x_ft = torch.fft.rfft(x, dim=-1)
+        x_ft = torch.fft.rfft(x_float, dim=-1)
 
         x_ft_flat = x_ft.reshape(B, V * W, -1)
         out_ft_flat = torch.zeros_like(x_ft_flat)
@@ -34,7 +36,7 @@ class CoupledSpectralConv1d(nn.Module):
 
         out_ft = out_ft_flat.reshape(B, V, W, -1)
         x_out = torch.fft.irfft(out_ft, n=T, dim=-1)
-        return x_out
+        return x_out.to(orig_dtype)
 
 
 class hpFNOxBlock(nn.Module):

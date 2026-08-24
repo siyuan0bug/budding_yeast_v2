@@ -17,11 +17,13 @@ class SpectralConv1d(nn.Module):
 
     def forward(self, x):
         batchsize = x.shape[0]
-        x_ft = torch.fft.rfft(x)
+        orig_dtype = x.dtype
+        x_float = x.float()
+        x_ft = torch.fft.rfft(x_float)
         out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1) // 2 + 1, dtype=torch.cfloat, device=x.device)
         out_ft[:, :, :self.modes1] = self.compl_mul1d(x_ft[:, :, :self.modes1], self.weights1)
-        x = torch.fft.irfft(out_ft, n=x.size(-1))
-        return x
+        x_out = torch.fft.irfft(out_ft, n=x.size(-1))
+        return x_out.to(orig_dtype)
 
 
 class FNO1dBlock(nn.Module):

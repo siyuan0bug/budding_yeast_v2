@@ -796,7 +796,7 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
             # ppx-ts / cdc5-ts (#112): kppnetpp reduced from WT 3.0 to 0.05
             ovr['kppnetpp'] = 0.05
         elif g_name == 'CDC15':
-            ovr['Cdc15T'] = 1.0; ovr['kkpnetpp'] = 0.0
+            ovr['kkpnetpp'] = 0.0
         elif g_name == 'TEM1':
             ovr['Tem1T'] = 0.0; ovr['ka15pp'] = 0.002
         elif g_name == 'ESP1':
@@ -826,19 +826,19 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
     # 6. KO (Knockout: complete loss of gene function)
     elif m_chosen == 'KO':
         if g_name == 'CLN2':
-            ovr['ksn2pp'] = 0.0; ovr['init_CLN2'] = 0.0
+            ovr['ksn2pp'] = 0.0
         elif g_name == 'CLN3':
             ovr['C0'] = 0.0
         elif g_name == 'BCK2':
             ovr['B0'] = 0.0
         elif g_name == 'CLB2':
-            ovr['ksb2p'] = 0.0; ovr['ksb2pp'] = 0.0; ovr['init_CLB2'] = 0.0
+            ovr['ksb2p'] = 0.0; ovr['ksb2pp'] = 0.0
         elif g_name == 'CLB5':
-            ovr['ksb5p'] = 0.0; ovr['ksb5pp'] = 0.0; ovr['init_CLB5'] = 0.0
+            ovr['ksb5p'] = 0.0; ovr['ksb5pp'] = 0.0
         elif g_name == 'SIC1':
-            ovr['ksc1p'] = 0.0; ovr['ksc1pp'] = 0.0; ovr['init_SIC1'] = 0.0
+            ovr['ksc1p'] = 0.0; ovr['ksc1pp'] = 0.0
         elif g_name in ['CDC6', 'pDEL']:
-            ovr['ksf6p'] = 0.0; ovr['ksf6pp'] = 0.0; ovr['ksf6ppp'] = 0.0; ovr['init_CDC6'] = 0.0
+            ovr['ksf6p'] = 0.0; ovr['ksf6pp'] = 0.0; ovr['ksf6ppp'] = 0.0
         elif g_name == 'SWI5':
             ovr['ksswip'] = 0.0; ovr['ksswipp'] = 0.0
         elif g_name == 'CDC20':
@@ -850,9 +850,9 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         elif g_name == 'CDC15':
             ovr['Cdc15T'] = 0.0; ovr['kkpnetpp'] = 0.0; ovr['init_Cdc15'] = 0.0
         elif g_name in ['PPX', 'CDC5_Proxy']:
-            ovr['ksppx'] = 0.0; ovr['init_PPX'] = 0.0
+            ovr['ksppx'] = 0.0
         elif g_name == 'PDS1':
-            ovr['ks1pdspp'] = 0.0; ovr['ks2pdspp'] = 0.0; ovr['init_PDS1'] = 0.0
+            ovr['ks1pdspp'] = 0.0; ovr['ks2pdspp'] = 0.0
         elif g_name == 'SBF_MBF':
             ovr['kasbf'] = 0.0; ovr['ksn2pp'] = 0.0; ovr['ksb5pp'] = 0.0
         elif g_name == 'Mcm1':
@@ -928,18 +928,18 @@ def sample_mass_mutant(level=1):
             suppressors_pool = [
                 ('SIC1', np.random.choice(['MC', 'GAL-OE'])),
                 ('CLB5', 'KO'),
-                ('CDC6', 'MC'),
+                ('CDC6', np.random.choice(['MC', 'GAL-OE'])),
                 ('CDC15', 'GAL-OE'),
                 ('NET1', 'TAB6-1')
             ]
-            k_supp = min(level - 1, len(suppressors_pool))
+            k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
             if np.random.rand() < 0.30:
                 ovr['mdt'] = float(np.random.choice([150.0, 160.0]))
 
         elif motif_type == 'G1_S_RESCUE':
-            # Covers #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25
+            # Covers #13, #14, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26
             if np.random.rand() < 0.5:
                 base_drivers = [('CLN3', 'KO'), ('BCK2', 'KO')]
                 suppressors_pool = [
@@ -955,7 +955,8 @@ def sample_mass_mutant(level=1):
                     ('CLB5', np.random.choice(['MC', 'GAL-OE'])),
                     ('CLB2', 'GAL-OE'),
                     ('SIC1', 'KO'),
-                    ('CDH1', 'KO')
+                    ('CDH1', 'KO'),
+                    ('APC_Core', 'ts')
                 ]
             k_supp = min(max(1, level - len(base_drivers)), len(suppressors_pool))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
@@ -970,7 +971,7 @@ def sample_mass_mutant(level=1):
                 ('SIC1', 'KO'),
                 ('MAD2', 'CSL')
             ]
-            k_supp = min(level - 1, len(suppressors_pool))
+            k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
@@ -984,42 +985,64 @@ def sample_mass_mutant(level=1):
                 ('CDC6', np.random.choice(['MC', 'GAL-OE'])),
                 ('CDC20', 'MC')
             ]
-            k_supp = min(level - 1, len(suppressors_pool))
+            k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
             if any(g == 'CDH1' for g, _ in selected_mut_pairs) and np.random.rand() < 0.40:
                 ovr['mdt'] = 150.0
 
         elif motif_type == 'ANTAGONISTIC_TUG':
-            # Covers #31, #32, #33, #37, #41, #42, #46
-            if np.random.rand() < 0.5:
-                base_drivers = [('SIC1', 'GAL-OE'), ('CLN2', 'GAL-OE')]
+            # Covers #30, #31, #32, #33, #37, #41, #42, #45, #46
+            r_pick = np.random.rand()
+            if r_pick < 0.30:
+                # GAL-SIC1 + GAL-CLN2 / cln1,2Δ (Antagonistic G1/S switch)
+                base_drivers = [('SIC1', 'GAL-OE'), ('CLN2', np.random.choice(['GAL-OE', 'KO']))]
                 suppressors_pool = [
-                    ('CLN2', 'KO'),
                     ('CDH1', 'KO'),
-                    ('SWI5', 'KO')
+                    ('SWI5', 'KO'),
+                    ('CLB2', 'GAL-OE')
                 ]
-            else:
+            elif r_pick < 0.55:
                 base_drivers = [('SIC1', 'KO'), ('CDH1', 'KO')]
                 suppressors_pool = [
                     ('CDC6', 'pDEL'),
                     ('CDC20', np.random.choice(['GAL-OE', 'MC'])),
                     ('SWI5', 'KO')
                 ]
-            k_supp = min(max(1, level - len(base_drivers)), len(suppressors_pool))
-            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
-            selected_mut_pairs = base_drivers + [suppressors_pool[idx] for idx in chosen_indices]
+            elif r_pick < 0.80:
+                base_drivers = [('SWI5', 'KO'), ('CDH1', 'KO')]
+                suppressors_pool = [
+                    ('SIC1', 'GAL-OE'),
+                    ('CLN2', 'KO'),
+                    ('CDC20', 'MC')
+                ]
+            else:
+                base_drivers = [('SIC1', 'GAL-OE'), ('CDH1', 'KO')]
+                suppressors_pool = [
+                    ('CLN2', 'KO'),
+                    ('SWI5', 'KO'),
+                    ('CDC6', 'MC')
+                ]
+            k_supp = np.random.randint(0, min(max(1, level - len(base_drivers)) + 1, len(suppressors_pool) + 1))
+            if k_supp > 0:
+                chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+                selected_mut_pairs = base_drivers + [suppressors_pool[idx] for idx in chosen_indices]
+            else:
+                selected_mut_pairs = list(base_drivers)
+            if any(g in ['CDH1', 'SIC1'] for g, _ in selected_mut_pairs) and np.random.rand() < 0.40:
+                ovr['mdt'] = 150.0
 
         elif motif_type == 'ANAPHASE_SEPARASE':
-            # Covers #80, #81, #82, #83, #84, #85
-            driver = ('PDS1', 'db') if np.random.rand() < 0.6 else ('CDC20', 'ts')
+            # Covers #80, #81, #82, #83, #84, #85, #102
+            driver = ('PDS1', 'db') if np.random.rand() < 0.5 else ('CDC20', 'ts')
             suppressors_pool = [
                 ('ESP1', np.random.choice(['GAL-OE', 'MC', 'ts'])),
+                ('NET1', np.random.choice(['ts', 'TAB6-1'])),
                 ('SCC1', 'scc1-RR'),
                 ('MAD2', 'CSL'),
                 ('BUB2', 'CKO')
             ]
-            k_supp = min(level - 1, len(suppressors_pool))
+            k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
@@ -1032,23 +1055,27 @@ def sample_mass_mutant(level=1):
                 ('TEM1', 'MC'),
                 ('NET1', np.random.choice(['ts', 'TAB6-1']))
             ]
-            k_supp = min(level - 1, len(suppressors_pool))
+            k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
         else: # CDC14_SUBSTRATE
-            # Covers #103, #105, #106, #107, #110, #111
-            driver = ('CDC14', 'ts')
-            suppressors_pool = [
-                ('SIC1', np.random.choice(['KO', 'GAL-OE'])),
-                ('CDH1', 'KO'),
-                ('CLN2', 'GAL-OE'),
-                ('SWI5', 'KO'),
-                ('NET1', 'TAB6-1')
-            ]
-            k_supp = min(level - 1, len(suppressors_pool))
-            chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
-            selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
+            # Covers #98, #100, #101, #103, #105, #106, #107, #110, #111
+            if np.random.rand() < 0.35:
+                # GAL-NET1 + GAL-CDC14 double stoichiometric balance manifold (#101)
+                selected_mut_pairs = [('NET1', 'GAL-OE'), ('CDC14', 'GAL-OE')]
+            else:
+                driver = ('CDC14', 'ts')
+                suppressors_pool = [
+                    ('SIC1', np.random.choice(['KO', 'GAL-OE'])),
+                    ('CDH1', 'KO'),
+                    ('CLN2', 'GAL-OE'),
+                    ('SWI5', 'KO'),
+                    ('NET1', np.random.choice(['TAB6-1', 'ts']))
+                ]
+                k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
+                chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
+                selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]
 
         # Apply the structured rescue mutations
         for g_name, m_chosen in selected_mut_pairs:
@@ -1134,7 +1161,7 @@ try:
 except Exception:
     pass
 
-DATASET_NAME = "mass_v2_dataset_210min_500steps_dual_labels.npz"
+DATASET_NAME = "massv3_dataset_210min_500steps_dual_labels.npz"
 DATASET_PATH = os.path.join(OUTPUT_DIR, DATASET_NAME)
 
 def generate_mass_dataset(n_synthetic=20000, max_attempts=None, num_workers=32):
