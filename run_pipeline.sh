@@ -74,6 +74,8 @@ DATASET_MASS="${DATA_DIR}/mass_dataset_210min_500steps_dual_labels.npz"
 DATASET_MASS_V2="${DATA_DIR}/mass_v2_dataset_210min_500steps_dual_labels.npz"
 # MASS v3 数据集 (全新微初值与显式微拓扑重平衡数据集)
 DATASET_MASS_V3="${DATA_DIR}/massv3_dataset_210min_500steps_dual_labels.npz"
+# MASS Random 数据集 (无 Motif 纯随机基线数据集)
+DATASET_MASS_RANDOM="${DATA_DIR}/mass_random_dataset_210min_500steps_dual_labels.npz"
 # mutant_aware 策略专用: atlas CSV (含 lhs_MAE_min, lhs_n_samples 列)
 ATLAS_CSV="./eval_result/old_hyper_fno_none_mse_only_210m_500s_modes32_seed42/mutant_atlas_merged.csv"
 
@@ -227,15 +229,19 @@ EXPERIMENTS=(
     #"biom_full hybrid_mse_rel false ${DATASET_MASS_V3} massv3_biom_full_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
     # GPU 7: 保留空闲 (留给他人使用)
 
+    # ====== 🎲🎲🎲 MASS Random (无 Motif 纯随机基线数据集) 对比实验 🎲🎲🎲 ======
+    # GPU 0: 👑 最强模型 biom_refiner_curvature + 三元动力学复合损失 (Random 数据集消融基线)
+    "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_RANDOM} random_biom_refiner_curv_triple_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+
     # ====== 🌟🌟🌟 MASS v3 基线模型横向对比评测 (PureFNO, DeepONet, ResNetFiLM, PureWNO, HyperFNO) 🌟🌟🌟 ======
     # GPU 0: PureFNO (ICLR 2021 原版) + Hybrid 损失 (width=64, batch_size=512, epochs=100)
-    "pure_fno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_pure_fno_hybrid_width64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    #"pure_fno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_pure_fno_hybrid_width64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
     # GPU 1: DeepONet (已完成评估: Real MAE=0.1567, Corr=0.9641)
     #"deeponet hybrid_mse_rel false ${DATASET_MASS_V3} massv3_deeponet_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
     # GPU 2: ResNetFiLM (已完成评估: Real MAE=0.0495, Corr=0.9961)
     #"resnet_film hybrid_mse_rel false ${DATASET_MASS_V3} massv3_resnet_film_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
     # GPU 3: PureWNO (CMAME 2022 原版) + Hybrid 损失 (width=64, batch_size=512, epochs=100)
-    "pure_wno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_pure_wno_hybrid_width64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    #"pure_wno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_pure_wno_hybrid_width64 32 64 256 100 none 1.7e-3 10 0 0 0 one_time 3"
     # GPU 4: HyperFNO (已完成评估: Real MAE=0.0798, Corr=0.9924)
     #"hyper_fno hybrid_mse_rel false ${DATASET_MASS_V3} massv3_hyper_fno_hybrid_width128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
     # GPU 5: (备选/按需开启) WNO-Cross (Cross-Attention 增强版小波算子) + Hybrid 损失
@@ -287,6 +293,46 @@ EXPERIMENTS=(
     #   mass_priority = 通路频率(high/med/low=6/3/1) × 机制频率(KO/GAL-OE/ts, Chen 2004 统计), 详见 al_callback._compute_mass_priority_scores
     #   mass_weight 默认 0.5 (train.py --al_mass_weight); 与其他 al4pde 策略同配置 (batch=64/EPOCHS=100/lr=6e-4) 以便对比; 独占 GPU 0
     #"hyper_fno mse_only false ${DATASET_CHEAT} v1_al4pde 32 32 64 1024 al4pde_mass 2.4e-3 10 1000 0 0 one_time 1"
+
+    # ====== 🌟 al4pde 框架实验 v2.4 (MASS 版): 外层重训式 AL + DATASET_MASS_V3 初始训练集 🌟 ======
+    # 数据集生成算法已从 v5 LHS 家族采样切换为 MASS 分层采样 (mass_dataset_generator.py),
+    # al4pde 各策略已全面适配 MASS (al_callback.py):
+    #   - 候选池 (v2.6 全策略统一): sample_mass_random 纯随机生成 100000 个
+    #     (无 rescue motif 定向采样), Level L1/L2/L3/L4 = 15%/30%/30%/25%
+    #     (v2.7 多基因加强: L3+L4 上位性组合载体 40%→55%, 数据集原生 25/35/25/15),
+    #     D_real 隔离 (126 real mutants 参数去重) + 池内 1% 相对阈值去重 (v2.8:
+    #     8% 会使 L1 容量仅 ~5.9K < 配额 15000, 指针卡死烧尽尝试预算, 实测池仅
+    #     39387/100000; 1% 使 L1 容量 ~45K, 平均间距 ~3-4%, L2-L4 不受影响)
+    #   - 初始训练集 (v2.6 全策略统一): 从随机候选池完全随机抽取 5000 + ODE 仿真
+    #     (不用 npz K-Means 子集, 其含 L3/L4 50% 概率 rescue motif 定向样本);
+    #     随机碰撞产生的 motif 形组合属允许范围 (非定向构造)
+    #   - 选中后仿真: mass 版 ODE 引擎 (完整 ovr 字典, 支持 init_*/MAD2-CSL/BUB2-CKO 特殊逻辑 + SIGALRM 超时)
+    #   - maal: 家族 = _mass_sample_genes 提取全部突变基因 (v2.7 多基因聚合,
+    #     每个样本的信号归属其全部基因家族, 纯碳源归 CARBON 伪家族)
+    #   - al4pde_mass: 直接查 BINDING_GROUPS 真实 (gene, mode) 元数据打分 (通路频率 × 机制频率)
+    #   4 轮采集各追加 19000 (来自随机候选池) → 总 81000, 与 v1 al4pde 实验规模对齐
+    # 配置 (v2.6 换强模型): biom_refiner_curvature + triple_dynamic + width=128 + batch=512
+    #   + 每轮 100 epoch + lr=1.7e-3 (对齐当前最强模型 L221 超高精破百纪录配置, 用户指定)
+    # 注: --al_pool_dataset/--al_initial_train_size 为遗留参数 (候选池动态生成, 不读取 npz)
+    # 注: al4pde_boundary 已删除 (用户判定无意义: 仅是"参数越接近0越优先选", 无判别价值)
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V3} massv3_al4pde 32 128 512 100 al4pde_random 1.7e-3 10 1000 0 0 one_time 0"
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V3} massv3_al4pde 32 128 512 100 al4pde_diversity 1.7e-3 10 1000 0 0 one_time 1"
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V3} massv3_al4pde 32 128 512 100 maal 1.7e-3 10 1000 0 0 one_time 2"
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V3} massv3_al4pde 32 128 512 100 al4pde_mass 1.7e-3 10 1000 0 0 one_time 5"
+
+    # ====== 🌟 al4pde_novelty (v2.5): 组合新颖性主动选择 🌟 ======
+    # v2.6 起 5 个 al4pde 实验的候选池与初始集完全一致 (均为 sample_mass_random
+    # 纯随机池 + 随机初始 5000), 唯一差异是每轮的 acquisition 选样策略 → 策略间公平对比
+    # 设计目标: 选样不得泄露 126 个 real mutants; 验证集/测试集与其他实验完全一致 (massv3 npz 同一划分)。
+    # 机制 (al_callback.py):
+    #   - 选样: acquisition = 0.6*novelty(突变单元全子集组合覆盖稀缺度, 主导信号;
+    #     单元=(基因,突变类型), 评估单元/对/三元/.../完整组合, 尺寸加权 w_s=2^-|s-2|)
+    #     + 0.2*family_unc(训练集家族不确定性) + 0.2*diversity(ODE 轨迹形状 min-dist),
+    #     三信号仅来自训练集+候选池元数据, 对 real mutants 零泄露
+    #   - 权重可调: --al_novelty_weight/--al_family_weight (diversity = 1 - 两者, 自动归一化)
+    # 模型配置 (v2.6): 与 4 个对照实验统一, 均为当前最强模型 biom_refiner_curvature
+    #   + triple_dynamic + width=128 + batch=512 + lr=1.7e-3 (对齐 L221 配置)
+    #"biom_refiner_curvature triple_dynamic false ${DATASET_MASS_V3} massv3_al4pde 32 128 512 100 al4pde_novelty 1.7e-3 10 1000 0 0 one_time 4"
 
     # [已注释] H1/PINO 损失实验 (已完成初步验证, 待修复后重跑)
     #"hyper_fno h1 false ${DATASET_CHEAT} v1_h1 32 32 64 200 none 3e-4 10 0 0 0 one_time 1"
@@ -393,12 +439,13 @@ for SEED in "${SEEDS[@]}"; do
             fi
 
             # al4pde/maal 策略专属参数:
-            # --al_pool_dataset: 遗留参数 (al4pde 候选池由 lhs_v1_origin_v5.py 动态生成, 不读取 npz)
-            # --al_initial_train_size 2000: 命令行传入但被 al_callback.py 硬编码覆盖为 15000
-            #   K-Means 从 v1 LHS 常规样本中选 15000 个作为初始训练集
-            # 候选池: 由 lhs_v1_origin_v5.py + lhs_v1_origin_v5_boundary.py 动态生成
-            #   每 mutant 3 类采样各 300 个 (normal 常规 + density 突变参数邻域 + boundary 0值邻域)
-            #   排除 3 个 WT 家族, 仅存参数 P_norm + Y_IC, 选中后才 ODE 仿真生成完整轨迹
+            # --al_pool_dataset: 遗留参数 (MASS 候选池由 sample_mass_mutant 动态生成, 不读取 npz)
+            # --al_initial_train_size 2000: 命令行传入但被 al_callback.py 硬编码覆盖为 5000
+            #   K-Means 从 MASS 合成训练样本中选 5000 个作为初始训练集
+            # 候选池 (MASS 版, al_callback._generate_param_only_pool):
+            #   sample_mass_mutant 分层采样 80000 个 (L1/L2/L3/L4 = 25%/35%/25%/15%),
+            #   D_real 隔离 (126 real mutants) + 池内 8% 相对阈值去重
+            #   仅存参数 P_norm + Y_IC + ovr, 选中后才 mass 版 ODE 仿真生成完整轨迹
             if [[ "$AL_STRATEGY" == al4pde_* || "$AL_STRATEGY" = "maal" ]]; then
                 AL_PARAMS="$AL_PARAMS --al_pool_dataset $DATASET_V5 --al_initial_train_size 2000"
             fi

@@ -196,15 +196,18 @@ def main():
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
     parser.add_argument('--al_strategy', type=str, default='none',
                           choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs', 'pial', 'mutant_aware',
-                                   'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_boundary', 'al4pde_mass'],
+                                   'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_mass',
+                                   'al4pde_novelty'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
                                "us/is/random=标准池化AL; rgs=Real-Guided局部密集采样; "
                                "pial=Physics-Informed AL (ODE残差+轨迹多样性); "
                                "mutant_aware=基于atlas数据的优先级加权采样, 需配合 --atlas_csv; "
-                               "al4pde_random/uncertainty/diversity=al4pde风格池化AL(需配合--al_pool_dataset); "
-                               "maal=Mutant-Aware AL (diversity+target priority, 需配合--al_pool_dataset); "
-                               "al4pde_boundary=借鉴v5_boundary的0值邻域采样思想, 优先选择突变参数接近0边界的候选(需配合--al_pool_dataset); "
-                               "al4pde_mass=借鉴mass_dataset_generator的分层采样, 按通路频率×机制频率优先选择生物学高频典型突变(需配合--al_pool_dataset)")
+                               "al4pde_random/uncertainty/diversity=al4pde风格池化AL; "
+                               "maal=Mutant-Aware AL (diversity+target priority); "
+                               "al4pde_mass=借鉴mass_dataset_generator的分层采样, 按通路频率×机制频率优先选择生物学高频典型突变; "
+                               "al4pde_novelty=纯随机候选池(无定向采样)+组合新颖性选择: 初始集与候选池均由mass_random_sampler完全随机生成(保留Level分层), "
+                               "acquisition=novelty(突变单元全子集组合覆盖)+family_unc(训练集家族不确定性)+diversity(ODE轨迹形状), 对real mutants零泄露. "
+                               "注: 全部al4pde策略的候选池与初始集统一为sample_mass_random随机生成 (v2.6)")
     parser.add_argument('--atlas_csv', type=str, default=None,
                         help="mutant_aware 策略专用: mutant_atlas_merged.csv 路径 (含 lhs_MAE_min, lhs_n_samples 列)")
     # al4pde 框架专用参数
@@ -214,6 +217,11 @@ def main():
                         help="MAAL 的 target priority 权重 (默认 0.4; diversity 权重 = 1 - target_weight)")
     parser.add_argument('--al_mass_weight', type=float, default=0.5,
                         help="al4pde_mass 的 MASS 生物学分层优先级权重 (默认 0.5; diversity 权重 = 1 - mass_weight)")
+    parser.add_argument('--al_novelty_weight', type=float, default=0.6,
+                        help="al4pde_novelty 的组合新颖性权重 (默认 0.6; 突变单元(基因,突变类型)组合在训练集中的"
+                             "覆盖稀缺度, 单元/对/三元/.../完整组合全子集评估, rescue motif 价值的主要代理, 主导选样)")
+    parser.add_argument('--al_family_weight', type=float, default=0.2,
+                        help="al4pde_novelty 的家族不确定性权重 (默认 0.2; diversity 权重 = 1 - novelty - family 自动归一化)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
     parser.add_argument('--al_num_add', type=int, default=500, help="每轮 AL 新增样本数 (减小以避免引入噪声)")
     parser.add_argument('--al_perturbation', type=float, default=0.05, help="RGS专用: 连续参数局部扰动幅度 (0.05=±5%%, 减小以提升参数合理性)")
@@ -293,7 +301,7 @@ def main():
         logger.log_hyperparams(vars(args))
 
     AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
-                         'maal', 'al4pde_boundary', 'al4pde_mass')
+                         'maal', 'al4pde_mass', 'al4pde_novelty')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)
 
@@ -326,6 +334,8 @@ def main():
             al_pool_dataset=args.al_pool_dataset,
             target_weight=args.al_target_weight,
             mass_weight=args.al_mass_weight,
+            novelty_weight=args.al_novelty_weight,
+            family_weight=args.al_family_weight,
         )
         al_cb.enable_outer_loop_mode()
         # 一次性: 缩至初始子集 + 生成候选池 + (diversity/maal/boundary) ODE 预计算
@@ -389,6 +399,8 @@ def main():
                   al_pool_dataset=args.al_pool_dataset,
                   target_weight=args.al_target_weight,
                   mass_weight=args.al_mass_weight,
+                  novelty_weight=args.al_novelty_weight,
+                  family_weight=args.al_family_weight,
               )
             callbacks.append(al_cb)
         else:
