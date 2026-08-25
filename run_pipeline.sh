@@ -386,6 +386,15 @@ EXPERIMENTS=(
     #"cross_fno mse_only true ${DATASET_CHEAT} hggs 3e-4 10 5000 0 0 one_time"
 )
 
+# ==========================================
+# 实验管理模式选择:
+#   USE_HIERARCHICAL=1 (推荐, 启用新版分层语义化目录 experiments/dataset/model/...)
+#   USE_HIERARCHICAL=0 (兼容旧版扁平目录 train_results_v3/ / eval_results_v3/)
+# ==========================================
+USE_HIERARCHICAL=1
+EXP_ROOT="./experiments"
+mkdir -p "$EXP_ROOT" logs_v3
+
 # ====== 并行执行: 每个实验在指定 GPU 上同时运行 ======
 # 变量在子 shell 中自动继承快照, 不会被下次循环迭代覆盖
 PIDS=()
@@ -414,11 +423,6 @@ for SEED in "${SEEDS[@]}"; do
         # 构建 AL 专属参数 (只有策略非 none 时才传递)
         AL_PARAMS=""
         if [ "$AL_STRATEGY" != "none" ]; then
-            # PIAL 策略推迟到 epoch 50 触发: 早期模型预测差, ODE 残差无意义
-            # mutant_aware 策略推迟到 epoch 100 触发: 需模型基本收敛后再做 atlas 优先级评估, 否则 priority 基于错误的模型状态
-            # al4pde/maal 策略: 命令行 TRIGGER_EPOCH 被 al_callback.py 硬编码覆盖 (trigger=4ep, num_add=1000 固定)
-            #   实际每 4 epoch 触发一次, 200/4=50 轮 +1 safety = 51 轮 AL, 每轮固定新增 1000 样本 (非指数增长)
-            # 其他策略保持 epoch 10 触发
             if [ "$AL_STRATEGY" = "pial" ]; then
                 TRIGGER_EPOCH=50
             elif [ "$AL_STRATEGY" = "mutant_aware" ]; then
@@ -430,22 +434,10 @@ for SEED in "${SEEDS[@]}"; do
             fi
             AL_PARAMS="--al_strategy $AL_STRATEGY --al_trigger_epoch $TRIGGER_EPOCH --al_num_add $AL_NUM_ADD --al_perturbation $AL_PERTURBATION --al_mae_threshold $AL_MAE_THRESHOLD"
 
-            # mutant_aware 策略专属参数:
-            # 必须传入 atlas CSV 路径 (含 lhs_MAE_min, lhs_n_samples 列)
-            # 若文件不存在, al_callback 会自动降级为 rgs 策略
-            # 注: al_initial_train_size 参数对 mutant_aware 无效 (al_callback.py 中查询合成策略跳过 K-Means, 直接用全量数据)
             if [ "$AL_STRATEGY" = "mutant_aware" ]; then
                 AL_PARAMS="$AL_PARAMS --atlas_csv $ATLAS_CSV"
             fi
 
-            # al4pde/maal 策略专属参数:
-            # --al_pool_dataset: 遗留参数 (MASS 候选池由 sample_mass_mutant 动态生成, 不读取 npz)
-            # --al_initial_train_size 2000: 命令行传入但被 al_callback.py 硬编码覆盖为 5000
-            #   K-Means 从 MASS 合成训练样本中选 5000 个作为初始训练集
-            # 候选池 (MASS 版, al_callback._generate_param_only_pool):
-            #   sample_mass_mutant 分层采样 80000 个 (L1/L2/L3/L4 = 25%/35%/25%/15%),
-            #   D_real 隔离 (126 real mutants) + 池内 8% 相对阈值去重
-            #   仅存参数 P_norm + Y_IC + ovr, 选中后才 mass 版 ODE 仿真生成完整轨迹
             if [[ "$AL_STRATEGY" == al4pde_* || "$AL_STRATEGY" = "maal" ]]; then
                 AL_PARAMS="$AL_PARAMS --al_pool_dataset $DATASET_V5 --al_initial_train_size 2000"
             fi
@@ -453,22 +445,59 @@ for SEED in "${SEEDS[@]}"; do
             AL_PARAMS="--al_strategy none"
         fi
 
+        # 格式化学习率字符串
+        if (( $(echo "$LR >= 0.001" | bc -l 2>/dev/null || echo 0) )); then
+            LR_STR=$(printf "%.4g" "$LR")
+        else
+            LR_STR=$(printf "%.1e" "$LR" | sed 's/-0/-/g')
+        fi
+
+        # 直接使用数据集文件名称 (去掉 .npz 后缀) 作为 Level 1 目录名
+        DATASET_NAME=$(basename "$DATASET" .npz)
+
+        # 根据模式构建路径与目录
         RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_TAG}_modes${MODES}_seed${SEED}"
-        EVAL_OUT_DIR="./eval_results_v3/${RUN_NAME}"
-        LOG_FILE="logs_v3/${RUN_NAME}.log"
+
+        if [ "$USE_HIERARCHICAL" = "1" ]; then
+            if [[ "$MODEL" == *"wno"* ]]; then
+                HPARAM_SIG="w${WIDTH}_lev3_haar_b${BATCH_SIZE}_ep${EPOCHS}_lr${LR_STR}"
+            else
+                HPARAM_SIG="w${WIDTH}_m${MODES}_b${BATCH_SIZE}_ep${EPOCHS}_lr${LR_STR}"
+            fi
+
+            # 非默认标记智能追加
+            if [ "$USE_ADJ" = "true" ]; then
+                HPARAM_SIG="${HPARAM_SIG}_adj"
+            fi
+            if [ "$ROLLOUT_TYPE" = "autoregressive" ]; then
+                HPARAM_SIG="${HPARAM_SIG}_ar"
+            fi
+            if [ -n "$WARMUP" ] && [ "$WARMUP" -ne 10 ] && [ "$WARMUP" -gt 0 ]; then
+                HPARAM_SIG="${HPARAM_SIG}_wm${WARMUP}"
+            fi
+
+            EXP_DIR="${EXP_ROOT}/${DATASET_NAME}/${MODEL}/${LOSS_TYPE}_${AL_STRATEGY}/${HPARAM_SIG}/seed_${SEED}"
+            CKPT_DIR="${EXP_DIR}/checkpoints"
+            EVAL_OUT_DIR="${EXP_DIR}/eval"
+            LOG_FILE="${EXP_DIR}/train.log"
+            mkdir -p "$CKPT_DIR" "$EVAL_OUT_DIR"
+            # 建立软链接到 logs_v3 方便统一 tail
+            ln -sf "$(pwd)/${LOG_FILE}" "logs_v3/${RUN_NAME}.log" 2>/dev/null
+            DIR_PARAMS="--exp_dir $EXP_DIR --dataset_tag $DATASET_NAME"
+        else
+            EXP_DIR="./train_results_v3/${RUN_NAME}"
+            CKPT_DIR="./train_results_v3/${RUN_NAME}"
+            EVAL_OUT_DIR="./eval_results_v3/${RUN_NAME}"
+            LOG_FILE="logs_v3/${RUN_NAME}.log"
+            mkdir -p "$EXP_DIR" "$EVAL_OUT_DIR"
+            DIR_PARAMS="--save_dir ./train_results_v3"
+        fi
 
         # 根据 LOSS_TYPE 构建损失函数专属参数
         PINN_PARAMS=""
         if [ "$LOSS_TYPE" = "pinn_residual" ] || [ "$LOSS_TYPE" = "pino" ]; then
-            # v2: 物理约束作弱正则, Curriculum learning (warmup 30 轮纯 MSE)
-            # v1 问题: lambda_phys=1.0 → val_loss=0.930 (baseline=0.037, 差 25 倍)
-            # v1 问题: lambda_penalty=10.0 → 负值惩罚压制 MSE
-            # v1 问题: event 掩码基于预测 → 早期掩码错误导致梯度爆炸
-            # v2 修复: 掩码改用真值, 负值惩罚降到 1.0, warmup 30 轮
-            # PINO 复用同一组物理约束参数 (继承 PINNResidualLoss)
             PINN_PARAMS="--lambda_phys 0.01 --lambda_jump 0.001 --lambda_penalty 1.0 --residual_subsample 10 --event_weight 0.1"
         fi
-        # PINO 专属: H1 频域梯度损失参数 (warmup 30 轮后线性增长到 lambda_h1)
         if [ "$LOSS_TYPE" = "pino" ]; then
             PINN_PARAMS="$PINN_PARAMS --lambda_h1 0.1 --h1_beta 1.0"
         fi
@@ -478,7 +507,7 @@ for SEED in "${SEEDS[@]}"; do
             WANDB_FLAG="--no_wandb"
         fi
 
-        echo "🚀 启动实验 -> Seed: $SEED | 策略: $AL_STRATEGY | GPU: $GPU_ID | 日志: $LOG_FILE"
+        echo "🚀 启动实验 -> Seed: $SEED | 模型: $MODEL | 策略: $AL_STRATEGY | GPU: $GPU_ID | 目录: $EXP_DIR"
 
         # 后台并行执行 train + eval (子 shell 继承当前变量快照)
         {
@@ -486,21 +515,15 @@ for SEED in "${SEEDS[@]}"; do
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始训练: $RUN_NAME (GPU=$GPU_ID)" >> "$LOG_FILE" 2>&1
             echo "===========================================================" >> "$LOG_FILE" 2>&1
 
-            # ===== 临时开关: SKIP_TRAIN=1 跳过训练只做eval, =0 恢复正常训练 =====
             SKIP_TRAIN=0
-            # ===== 临时开关: SKIP_EVAL=1 跳过评估只做训练(OOM/冒烟测试用), =0 恢复正常评估 =====
             SKIP_EVAL=0
 
             # 步骤 A: 训练
             if [ "$SKIP_TRAIN" = "0" ]; then
-                # 训练前清理旧 checkpoint, 防止 步骤B 的 `ls *.ckpt|head -1` 命中上一次残留权重。
-                # 尤其 v2.3 al4pde 保存 final-last-epoch.ckpt: 若目录残留旧 best-*.ckpt,
-                # 按字母序 best- 会排在 final- 前被误选, 导致评估到过期模型。
-                # 仅在 SKIP_TRAIN=0 (确实要重新训练) 时清理; 范围严格限定为本 run 目录下的 *.ckpt。
-                TRAIN_CKPT_DIR="./train_results_v3/${RUN_NAME}"
-                if [ -d "$TRAIN_CKPT_DIR" ]; then
-                    rm -f "${TRAIN_CKPT_DIR}"/*.ckpt
-                    echo "🧹 训练前已清理旧 checkpoint: ${TRAIN_CKPT_DIR}/*.ckpt" >> "$LOG_FILE" 2>&1
+                # 训练前清理旧 checkpoint
+                if [ -d "$CKPT_DIR" ]; then
+                    rm -f "${CKPT_DIR}"/*.ckpt
+                    echo "🧹 训练前已清理旧 checkpoint: ${CKPT_DIR}/*.ckpt" >> "$LOG_FILE" 2>&1
                 fi
                 CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON_BIN train.py \
                     --model $MODEL \
@@ -522,7 +545,7 @@ for SEED in "${SEEDS[@]}"; do
                     $ADJ_PARAM \
                     $PINN_PARAMS \
                     --rollout_type $ROLLOUT_TYPE \
-                    --save_dir ./train_results_v3 \
+                    $DIR_PARAMS \
                     $WANDB_FLAG >> "$LOG_FILE" 2>&1
 
                 TRAIN_EXIT=$?
@@ -534,10 +557,9 @@ for SEED in "${SEEDS[@]}"; do
                 echo "⏭️ SKIP_TRAIN=1, 跳过训练, 直接评估已有 checkpoint" >> "$LOG_FILE" 2>&1
             fi
 
-            # 步骤 B+C: 寻找 Checkpoint 并评估 (SKIP_EVAL=1 时整体跳过, 用于 batch/OOM 冒烟测试)
+            # 步骤 B+C: 寻找 Checkpoint 并评估
             if [ "$SKIP_EVAL" = "0" ]; then
-                # 步骤 B: 寻找 Checkpoint
-                CKPT_DIR="./train_results_v3/${RUN_NAME}"
+                # 步骤 B: 寻找 Checkpoint (优先选 final 或 best)
                 CKPT_PATH=$(ls ${CKPT_DIR}/*.ckpt 2>/dev/null | head -n 1)
 
                 if [ -z "$CKPT_PATH" ]; then
@@ -547,7 +569,7 @@ for SEED in "${SEEDS[@]}"; do
 
                 echo "🎯 成功找到 Checkpoint: $CKPT_PATH" >> "$LOG_FILE" 2>&1
 
-                # 步骤 C: 评估（与模型 batch_size 对齐以确保显存安全）
+                # 步骤 C: 评估
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始评估..." >> "$LOG_FILE" 2>&1
                 CUDA_VISIBLE_DEVICES=$GPU_ID $PYTHON_BIN eval.py \
                     --ckpt "$CKPT_PATH" \
@@ -574,7 +596,7 @@ done
 echo ""
 echo "⏳ 等待 ${#PIDS[@]} 个并行实验完成..."
 echo "   实时查看日志: tail -f logs_v3/*.log"
-echo "   查看某个实验: tail -f logs_v3/<实验名>.log"
+echo "   分层实验目录: ${EXP_ROOT}/"
 echo ""
 
 FAIL_COUNT=0
@@ -591,7 +613,13 @@ echo ""
 if [ $FAIL_COUNT -eq 0 ]; then
     echo "🎉 所有 ${#PIDS[@]} 个实验全部成功完成!"
 else
-    echo "⚠️ ${#PIDS[@]} 个实验中有 $FAIL_COUNT 个失败, 请检查 logs_v3/ 目录下的日志"
+    echo "⚠️ ${#PIDS[@]} 个实验中有 $FAIL_COUNT 个失败, 请检查日志"
 fi
-echo "📊 结果目录: ./eval_results_v3/"
-echo "📋 日志目录: ./logs_v3/"
+
+# 自动生成多 Seed 聚合报告与排行榜
+if [ "$USE_HIERARCHICAL" = "1" ] && [ -d "$EXP_ROOT" ]; then
+    echo ""
+    echo "📊 正在自动汇总多 Seed 统计指标并生成排行榜..."
+    $PYTHON_BIN analyze_experiments.py --exp_root "$EXP_ROOT" --sort_by real_mae
+fi
+

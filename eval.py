@@ -2,6 +2,7 @@ import os
 import argparse
 import json
 import csv
+import glob
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -197,12 +198,13 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--ckpt', type=str, required=True)
+    parser.add_argument('--ckpt', type=str, default=None, help='Checkpoint 路径 (若提供 exp_dir 则可自动查找)')
+    parser.add_argument('--exp_dir', type=str, default=None, help='分层实验目录 (如 ./experiments/.../seed_42)')
     parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
     parser.add_argument('--dataset_name', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=1024, help='GPU 推理 Batch Size (A6000 48GB 推荐 1024)')
     parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--save_dir', type=str, default='./eval_result')
+    parser.add_argument('--save_dir', type=str, default=None, help='评估输出目录 (默认保存在 exp_dir/eval 或 ./eval_result)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--lhs_test_plots', type=int, default=50, help='LHS 测试集最多画多少张图')
@@ -211,7 +213,31 @@ def main():
                         help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
     args = parser.parse_args()
 
+    # 路径与 Checkpoint 解析
+    if args.exp_dir:
+        args.exp_dir = os.path.abspath(args.exp_dir)
+        if args.save_dir is None:
+            args.save_dir = os.path.join(args.exp_dir, 'eval')
+        if args.ckpt is None:
+            # 自动在 exp_dir/checkpoints 或 exp_dir 寻找 ckpt
+            ckpt_search_dirs = [os.path.join(args.exp_dir, 'checkpoints'), args.exp_dir]
+            for d in ckpt_search_dirs:
+                if os.path.isdir(d):
+                    ckpts = glob.glob(os.path.join(d, '*.ckpt'))
+                    if ckpts:
+                        # 优先选 final-last 或 best
+                        args.ckpt = sorted(ckpts, key=lambda x: (not 'final' in x, not 'best' in x))[0]
+                        break
+
+    if args.save_dir is None:
+        args.save_dir = './eval_result'
+
+    if not args.ckpt or not os.path.exists(args.ckpt):
+        raise FileNotFoundError(f"未找到有效的 Checkpoint 文件: {args.ckpt}")
+
     os.makedirs(args.save_dir, exist_ok=True)
+    print(f"🎯 加载 Checkpoint: {args.ckpt}")
+    print(f"📁 评估结果输出目录: {args.save_dir}")
     model, _ = load_model_from_checkpoint(args.ckpt, device=args.device)
     model = model.to(args.device)
 

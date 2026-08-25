@@ -241,10 +241,61 @@ def main():
                         choices=['variance', 'entropy'],
                         help="不确定性度量方法 (variance=预测方差, entropy=预测熵)")
 
+    # 实验管理与目录参数
+    parser.add_argument('--exp_root', type=str, default='./experiments',
+                        help='统一分层实验根目录 (默认 ./experiments)')
+    parser.add_argument('--exp_dir', type=str, default=None,
+                        help='显式指定实验目录 (若指定则优先使用该目录作为输出路径)')
+    parser.add_argument('--dataset_tag', type=str, default=None,
+                        help='数据集简短标签 (如 massv3, v5, 用于构建分层路径)')
+    parser.add_argument('--hparam_tag', type=str, default=None,
+                        help='超参附加标签 (用于构建分层路径)')
+    parser.add_argument('--use_hierarchical_dir', action='store_true', default=False,
+                        help='启用分层语义化目录结构 (experiments/dataset/model/...)')
+
     args = parser.parse_args()
 
     pl.seed_everything(args.seed, workers=True)
-    os.makedirs(args.save_dir, exist_ok=True)
+
+    # 导入实验管理工具库
+    from budding_yeast_v2.utils.exp_utils import (
+        build_experiment_dir,
+        generate_hparams_signature,
+        save_metadata,
+        setup_wandb_logger,
+        clean_dataset_tag
+    )
+
+    # 确定实际实验输出目录
+    run_name = args.name or f"{args.model}_{args.loss_type}_seed{args.seed}"
+    if args.exp_dir:
+        actual_exp_dir = os.path.abspath(args.exp_dir)
+    elif args.use_hierarchical_dir:
+        ds_tag = clean_dataset_tag(args.dataset_tag or args.dataset_name)
+        hparams_sig = generate_hparams_signature(
+            width=args.width, modes=args.modes, batch_size=args.batch_size, lr=args.lr,
+            epochs=args.max_epochs,
+            model_name=args.model, extra_tag=args.hparam_tag, rollout_type=args.rollout_type,
+            wavelet=args.wavelet,
+            use_adj=(args.adj_matrix_path is not None),
+            warmup=args.warmup_epochs,
+            norm_type=args.norm_type
+        )
+        actual_exp_dir = build_experiment_dir(
+            exp_root=args.exp_root, dataset_tag=ds_tag, model_name=args.model,
+            loss_type=args.loss_type, al_strategy=args.al_strategy,
+            hparams_sig=hparams_sig, seed=args.seed
+        )
+    else:
+        # 兼容旧版扁平目录
+        actual_exp_dir = os.path.join(args.save_dir, run_name)
+
+    ckpt_dir = os.path.join(actual_exp_dir, 'checkpoints') if (args.exp_dir or args.use_hierarchical_dir) else actual_exp_dir
+    os.makedirs(ckpt_dir, exist_ok=True)
+    os.makedirs(actual_exp_dir, exist_ok=True)
+
+    # 保存完整运行配置与元数据快照
+    save_metadata(actual_exp_dir, args, extra_info={"exp_dir": actual_exp_dir, "ckpt_dir": ckpt_dir})
 
     def build_fresh_model():
         """构造一个全新随机初始化的模型 (v2.3 al4pde 外层重训: 每轮冷启动)。"""
@@ -290,15 +341,8 @@ def main():
         norm_type=args.norm_type,
     )
 
-    run_name = args.name or f"{args.model}_{args.loss_type}_seed{args.seed}"
-    if args.no_wandb:
-        os.environ["WANDB_MODE"] = "offline"
-        logger = WandbLogger(project=args.project, name=run_name)
-        logger.log_hyperparams(vars(args))
-        print("W&B 离线模式 (--no_wandb): 日志保存在本地 wandb/ 目录，恢复上传请运行: wandb sync wandb/offline-run-*")
-    else:
-        logger = WandbLogger(project=args.project, name=run_name)
-        logger.log_hyperparams(vars(args))
+    # W&B Logger 结构化接入
+    logger = setup_wandb_logger(args, exp_dir=actual_exp_dir, project=args.project)
 
     AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
                          'maal', 'al4pde_mass', 'al4pde_novelty')
@@ -307,9 +351,6 @@ def main():
 
     if args.al_strategy in AL4PDE_STRATEGIES:
         # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
-        # 5 轮 AL: 每轮全新模型 + 全新余弦周期在完整累积数据上跑满 (args.max_epochs),
-        # 前 4 轮训练后各采集追加一次 (每次 19000), 末轮只训练; 取最后一轮最后 epoch。
-        # 最优权重 = 最后一轮最后 epoch (不做 val-best 选择, 无早停; 依赖余弦退火到近零)。
         from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
         NUM_AL_ROUNDS = 5
         device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -335,14 +376,12 @@ def main():
             target_weight=args.al_target_weight,
             mass_weight=args.al_mass_weight,
             novelty_weight=args.al_novelty_weight,
-            family_weight=args.al_family_weight,
+            family_weight=args.family_weight if hasattr(args, 'family_weight') else args.al_family_weight,
         )
         al_cb.enable_outer_loop_mode()
         # 一次性: 缩至初始子集 + 生成候选池 + (diversity/maal/boundary) ODE 预计算
         al_cb.al4pde_setup(datamodule, device=device_str)
 
-        ckpt_dir = os.path.join(args.save_dir, run_name)
-        os.makedirs(ckpt_dir, exist_ok=True)
         trainer = None
         for r in range(NUM_AL_ROUNDS):
             n_train = len(datamodule.train_dataset_lhs)
@@ -372,7 +411,7 @@ def main():
     else:
         # ================= 非 al4pde: 单次 fit (最优权重依据 val_loss_lhs) =================
         checkpoint_callback = ModelCheckpoint(
-            dirpath=os.path.join(args.save_dir, run_name),
+            dirpath=ckpt_dir,
             filename='best-{epoch:02d}-{val_loss_lhs:.4f}',
             monitor='val_loss_lhs',
             mode='min',
@@ -400,7 +439,7 @@ def main():
                   target_weight=args.al_target_weight,
                   mass_weight=args.al_mass_weight,
                   novelty_weight=args.al_novelty_weight,
-                  family_weight=args.al_family_weight,
+                  family_weight=args.family_weight if hasattr(args, 'family_weight') else args.al_family_weight,
               )
             callbacks.append(al_cb)
         else:
@@ -419,9 +458,6 @@ def main():
             num_sanity_val_steps=0
         )
         trainer.fit(model, datamodule=datamodule)
-    
-    #print("\n🔬 开始最终测试阶段...")
-    #trainer.test(model, datamodule=datamodule, ckpt_path='best')
     
     wandb.finish()
 
