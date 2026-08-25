@@ -145,25 +145,59 @@ def extract_submetrics(d: Any) -> Dict[str, float]:
 
 
 def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
-    """计算单个超参组多 Seed 的均值与标准差"""
+    """
+    计算单个超参组多 Seed 的完整统计均值与标准差。
+    全面覆盖 real_mutants, lhs_test, all_test 以及 all_39_vars 与 core_9_vars 的所有指标。
+    """
     seeds = group_entry["seeds"]
     n_seeds = len(seeds)
 
-    real_maes, real_l2s, real_corrs = [], [], []
-    lhs_maes, lhs_l2s = [], []
+    # 1. 结构化汇总全部指标
+    # 结构: stats[split][var_set][metric] = [val_seed1, val_seed2, ...]
+    splits = ["real_mutants", "lhs_test", "all_test"]
+    var_subsets = ["all_39_vars", "core_9_vars"]
+    metric_keys = ["MAE", "Relative L2", "Correlation", "MSE"]
+
+    collected_metrics = {sp: {vs: {mk: [] for mk in metric_keys} for vs in var_subsets} for sp in splits}
+    sample_counts = {sp: None for sp in splits}
 
     for s in seeds:
         m = s["metrics"]
-        real_dict = extract_submetrics(m.get("real_mutants", m))
-        if real_dict and "MAE" in real_dict:
-            real_maes.append(float(real_dict.get("MAE", float("nan"))))
-            real_l2s.append(float(real_dict.get("Relative L2", float("nan"))))
-            real_corrs.append(float(real_dict.get("Correlation", float("nan"))))
+        for sp in splits:
+            if sp in m and isinstance(m[sp], dict):
+                if sample_counts[sp] is None and "count" in m[sp]:
+                    sample_counts[sp] = m[sp]["count"]
+                for vs in var_subsets:
+                    if vs in m[sp] and isinstance(m[sp][vs], dict):
+                        for mk in metric_keys:
+                            if mk in m[sp][vs]:
+                                try:
+                                    val = float(m[sp][vs][mk])
+                                    collected_metrics[sp][vs][mk].append(val)
+                                except (ValueError, TypeError):
+                                    pass
 
-        lhs_dict = extract_submetrics(m.get("lhs_test", {}))
-        if lhs_dict and "MAE" in lhs_dict:
-            lhs_maes.append(float(lhs_dict.get("MAE", float("nan"))))
-            lhs_l2s.append(float(lhs_dict.get("Relative L2", float("nan"))))
+    # 2. 生成结构化 summary_metrics 字典
+    summary_metrics = {}
+    for sp in splits:
+        summary_metrics[sp] = {}
+        for vs in var_subsets:
+            summary_metrics[sp][vs] = {}
+            for mk in metric_keys:
+                vals = collected_metrics[sp][vs][mk]
+                if vals:
+                    summary_metrics[sp][vs][mk] = {
+                        "mean": float(np.nanmean(vals)),
+                        "std": float(np.nanstd(vals)) if len(vals) > 1 else 0.0
+                    }
+        if sample_counts[sp] is not None:
+            summary_metrics[sp]["count"] = sample_counts[sp]
+
+    # 3. 构造扁平快捷指标 (方便排行榜与快速索引)
+    real_39 = summary_metrics.get("real_mutants", {}).get("all_39_vars", {})
+    real_c9 = summary_metrics.get("real_mutants", {}).get("core_9_vars", {})
+    lhs_39 = summary_metrics.get("lhs_test", {}).get("all_39_vars", {})
+    all_39 = summary_metrics.get("all_test", {}).get("all_39_vars", {})
 
     summary = {
         "dataset": group_entry["dataset_tag"],
@@ -172,26 +206,43 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
         "hparam_signature": group_entry["hparam_sig"],
         "n_seeds": n_seeds,
         "seeds_evaluated": [s["seed"] for s in seeds],
-        "real_mae_mean": float(np.nanmean(real_maes)) if real_maes else float("nan"),
-        "real_mae_std": float(np.nanstd(real_maes)) if len(real_maes) > 1 else 0.0,
-        "real_l2_mean": float(np.nanmean(real_l2s)) if real_l2s else float("nan"),
-        "real_l2_std": float(np.nanstd(real_l2s)) if len(real_l2s) > 1 else 0.0,
-        "real_corr_mean": float(np.nanmean(real_corrs)) if real_corrs else float("nan"),
-        "real_corr_std": float(np.nanstd(real_corrs)) if len(real_corrs) > 1 else 0.0,
+        
+        # Real Mutants (全部 39 变量)
+        "real_mae_mean": real_39.get("MAE", {}).get("mean", float("nan")),
+        "real_mae_std": real_39.get("MAE", {}).get("std", 0.0),
+        "real_l2_mean": real_39.get("Relative L2", {}).get("mean", float("nan")),
+        "real_l2_std": real_39.get("Relative L2", {}).get("std", 0.0),
+        "real_corr_mean": real_39.get("Correlation", {}).get("mean", float("nan")),
+        "real_corr_std": real_39.get("Correlation", {}).get("std", 0.0),
+        "real_mse_mean": real_39.get("MSE", {}).get("mean", float("nan")),
+        "real_mse_std": real_39.get("MSE", {}).get("std", 0.0),
+
+        # Real Mutants (核心 9 变量)
+        "real_core9_mae_mean": real_c9.get("MAE", {}).get("mean", float("nan")),
+        "real_core9_mae_std": real_c9.get("MAE", {}).get("std", 0.0),
+        "real_core9_l2_mean": real_c9.get("Relative L2", {}).get("mean", float("nan")),
+        "real_core9_l2_std": real_c9.get("Relative L2", {}).get("std", 0.0),
+        "real_core9_corr_mean": real_c9.get("Correlation", {}).get("mean", float("nan")),
+        "real_core9_corr_std": real_c9.get("Correlation", {}).get("std", 0.0),
+
+        # LHS Test & All Test 关键指标
+        "lhs_mae_mean": lhs_39.get("MAE", {}).get("mean", float("nan")),
+        "lhs_mae_std": lhs_39.get("MAE", {}).get("std", 0.0),
+        "all_test_mae_mean": all_39.get("MAE", {}).get("mean", float("nan")),
+        "all_test_mae_std": all_39.get("MAE", {}).get("std", 0.0),
+
+        # 完整分层结构化指标
+        "detailed_metrics": summary_metrics
     }
 
-    if lhs_maes:
-        summary["lhs_mae_mean"] = float(np.nanmean(lhs_maes))
-        summary["lhs_mae_std"] = float(np.nanstd(lhs_maes)) if len(lhs_maes) > 1 else 0.0
-
-    # 若是新版分层目录，将 summary 保存到 hparam_dir 下
+    # 若是分层目录，写入到 Level 4 超参根目录下
     if group_entry["type"] == "hierarchical" and os.path.exists(group_entry["hparam_dir"]):
         sum_path = os.path.join(group_entry["hparam_dir"], "seed_summary.json")
         try:
             with open(sum_path, "w", encoding="utf-8") as f:
                 json.dump(summary, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ 保存 {sum_path} 失败: {e}")
 
     return summary
 

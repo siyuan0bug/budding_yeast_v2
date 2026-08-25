@@ -188,7 +188,7 @@ def main():
                         help='验证/测试的 batch size（不影响训练，设大加速评估，默认 256）')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--devices', type=int, default=1)
-    parser.add_argument('--project', type=str, default='budding_yeast_v2_active')
+    parser.add_argument('--project', type=str, default='budding_yeast_v2_mass')
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument('--no_wandb', action='store_true', default=False,
                         help='禁用 W&B 上传，仅本地日志')

@@ -56,14 +56,6 @@ except ImportError:
         is_duplicate_real_mutant,
     )
 
-# 默认导出目录
-if os.name == 'nt':
-    DEFAULT_OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
-else:
-    DEFAULT_OUTPUT_DIR = "/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast"
-
-DEFAULT_DATASET_NAME = "mass_random_dataset_210min_500steps_dual_labels.npz"
-
 
 def sample_mass_random(level=1):
     """
@@ -148,18 +140,21 @@ def sample_mass_random(level=1):
     return ovr, desc_str
 
 
-def generate_mass_random_dataset(n_synthetic=100000, max_attempts=None, num_workers=60,
-                                  output_name=DEFAULT_DATASET_NAME, output_dir=DEFAULT_OUTPUT_DIR):
+def generate_mass_random_dataset(n_synthetic=100000, level_ratios=[0.25, 0.35, 0.25, 0.15],
+                                  max_attempts=None, num_workers=60,
+                                  output_name=None, output_dir=None):
     """
     Generate complete PURE RANDOM dataset (126 Real Mutants + n_synthetic Random MASS Mutants)
     and export into a single .npz file with exact field alignment to mass_dataset_generator.py.
     """
-    print("=" * 85)
-    print("MASS PURE RANDOM Dataset Generator Protocol (No-Motif Exploratory Sampling)")
-    print("=" * 85)
+    if output_name is None:
+        output_name = f"mass_{n_synthetic}_random_dataset_210min_500steps_dual_labels.npz"
 
-    if max_attempts is None:
-        max_attempts = max(50000, n_synthetic * 10)
+    if output_dir is None:
+        if os.name == 'nt':
+            output_dir = os.path.dirname(os.path.abspath(__file__))
+        else:
+            output_dir = "/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast"
 
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -167,6 +162,14 @@ def generate_mass_random_dataset(n_synthetic=100000, max_attempts=None, num_work
         pass
 
     dataset_path = os.path.join(output_dir, output_name)
+
+    print("=" * 85)
+    print("MASS PURE RANDOM Dataset Generator Protocol (No-Motif Exploratory Sampling)")
+    print(f"Target Output: {dataset_path}")
+    print("=" * 85)
+
+    if max_attempts is None:
+        max_attempts = max(50000, n_synthetic * 10)
 
     defaults = get_default_params()
     defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
@@ -188,12 +191,16 @@ def generate_mass_random_dataset(n_synthetic=100000, max_attempts=None, num_work
 
     # Phase 2: Sample Pure Random Synthetic Mutants (No Motif)
     print(f"\n[Phase 2/4] Sampling {n_synthetic} Pure Random Mutants (No Rescue Motifs)...")
-    n_l1 = int(math.floor(0.25 * n_synthetic))
-    n_l2 = int(math.floor(0.35 * n_synthetic))
-    n_l3 = int(math.floor(0.25 * n_synthetic))
+    r1, r2, r3, r4 = level_ratios
+    total_r = r1 + r2 + r3 + r4
+    r1, r2, r3, r4 = r1 / total_r, r2 / total_r, r3 / total_r, r4 / total_r
+
+    n_l1 = int(math.floor(r1 * n_synthetic))
+    n_l2 = int(math.floor(r2 * n_synthetic))
+    n_l3 = int(math.floor(r3 * n_synthetic))
     n_l4 = n_synthetic - n_l1 - n_l2 - n_l3
 
-    print(f" -> Target Level Distribution: L1 (ki=1): {n_l1} | L2 (ki=2): {n_l2} | L3 (ki=3~5): {n_l3} | L4 (ki=4~6): {n_l4}")
+    print(f" -> Target Level Distribution: L1 (ki=1): {n_l1} ({r1*100:.1f}%) | L2 (ki=2): {n_l2} ({r2*100:.1f}%) | L3 (ki=3~5): {n_l3} ({r3*100:.1f}%) | L4 (ki=4~6): {n_l4} ({r4*100:.1f}%)")
 
     level_assignments = [1]*n_l1 + [2]*n_l2 + [3]*n_l3 + [4]*n_l4
     np.random.shuffle(level_assignments)
@@ -343,22 +350,59 @@ def generate_mass_random_dataset(n_synthetic=100000, max_attempts=None, num_work
     print(f"Total Validated Samples Saved     : {total_valid} ({total_valid / len(ordered_names) * 100:.2f}% yield)", flush=True)
     print("-" * 85, flush=True)
 
-    # Quality Audit & Sample Composition Breakdown
-    print(f"\n[Quality Audit]")
-    print(f"  * D_real Deduplication Blocked : {duplicates_blocked:5d} candidates")
-    print(f"  * Discarded (Mass > 10.0)      : {total_disc:5d} tasks")
-    print(f"  * Failed Solvers               : {total_fail:5d} tasks")
-    print(f"  * Valid Saved Real Mutants     : {len(real_final_names):5d} / {len(REAL_MUTANTS)}")
-    print(f"  * Valid Saved Synthetic Samples: {len(synth_final_names):5d} / {synth_success}")
+    # 1. Filtering & Quality Control Audit
+    print("\n[1. Filtering & Quality Control Audit]", flush=True)
+    print(f"  * Filter 1 [D_real Deduplication Blocked] : {duplicates_blocked:5d} synthetic candidates")
+    print(f"  * Filter 2 [Mass Divergence (Mass > 10)]  : {total_disc:5d} tasks (Real: {sim_counts['discarded_real']}, Synth: {sim_counts['discarded_synth']})")
+    print(f"  * Filter 3 [ODE Solver Failures]          : {total_fail:5d} tasks (Real: {sim_counts['failed_real']}, Synth: {sim_counts['failed_synth']})")
+    print(f"  * Valid Sample Yield Rate                 : {total_valid:5d} / {len(ordered_names)} ({total_valid / len(ordered_names) * 100:.1f}%)")
 
+    # 2. Sample Composition Breakdown
+    print("\n[2. Sample Composition Breakdown]", flush=True)
+    print(f"  * Real Mutants (Appendix B Table S5)      : {len(real_final_names):5d} / {len(REAL_MUTANTS)} ({len(real_final_names)/len(REAL_MUTANTS)*100:.1f}%)")
+    print(f"  * Synthetic Mutants (MASS Random Multi-Level): {len(synth_final_names):5d} / {synth_success} ({len(synth_final_names)/synth_success*100:.1f}%)")
     if synth_levels:
         u_lvl, c_lvl = np.unique(synth_levels, return_counts=True)
         for l_idx, count in zip(u_lvl, c_lvl):
             target_n = [n_l1, n_l2, n_l3, n_l4][l_idx-1] if 1 <= l_idx <= 4 else -1
-            print(f"    - Level {l_idx} Random Mutants       : {count:5d} / {target_n} ({count/target_n*100:.1f}%)")
+            print(f"    - Level {l_idx} Random Mutants         : {count:5d} / {target_n} ({count/target_n*100:.1f}%)")
+
+    # 3. Mass Growth Pattern Distribution (Real vs Synth vs Total)
+    print("\n[3. Mass Growth Pattern Labels Distribution (Real vs Synth)]", flush=True)
+    pattern_categories = [
+        "Pattern_A: Multi-Division (>=2)",
+        "Pattern_B: Single-Division (==1)",
+        "Pattern_C: Exponential-Arrest (==0)"
+    ]
+    header = f"  {'Pattern Label':<36} | {'Real Mutants':<15} | {'Synthetic Mutants':<18} | {'Overall Dataset':<18}"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for pat in pattern_categories:
+        c_r = real_pattern_labels.count(pat)
+        pct_r = (c_r / max(1, len(real_pattern_labels))) * 100
+        c_s = synth_pattern_labels.count(pat)
+        pct_s = (c_s / max(1, len(synth_pattern_labels))) * 100
+        c_t = list(all_pattern_labels).count(pat)
+        pct_t = (c_t / max(1, len(all_pattern_labels))) * 100
+        print(f"  {pat:<36} | {c_r:5d} ({pct_r:5.1f}%)   | {c_s:7d} ({pct_s:5.1f}%)    | {c_t:7d} ({pct_t:5.1f}%)")
+
+    # 4. Biological Viability Labels Distribution (Real vs Synth vs Total)
+    print("\n[4. Biological Viability Labels Distribution (Real vs Synth)]", flush=True)
+    all_bio_unique = sorted(list(set(all_bio_labels)))
+    v_header = f"  {'Viability Label':<32} | {'Real Mutants':<15} | {'Synthetic Mutants':<18} | {'Overall Dataset':<18}"
+    print(v_header)
+    print("  " + "-" * (len(v_header) - 2))
+    for bio in all_bio_unique:
+        c_r = real_bio_labels.count(bio)
+        pct_r = (c_r / max(1, len(real_bio_labels))) * 100
+        c_s = synth_bio_labels.count(bio)
+        pct_s = (c_s / max(1, len(synth_bio_labels))) * 100
+        c_t = list(all_bio_labels).count(bio)
+        pct_t = (c_t / max(1, len(all_bio_labels))) * 100
+        print(f"  {bio:<32} | {c_r:5d} ({pct_r:5.1f}%)   | {c_s:7d} ({pct_s:5.1f}%)    | {c_t:7d} ({pct_t:5.1f}%)")
 
     print("\n" + "=" * 85, flush=True)
-    print("Sample Mutant Names Demonstration:")
+    print("Sample Mutant Names Demonstration:", flush=True)
     for name in real_final_names[:3]:
         print(f"  - [Real]  {name}", flush=True)
     for name in synth_final_names[:5]:
@@ -369,19 +413,47 @@ def generate_mass_random_dataset(n_synthetic=100000, max_attempts=None, num_work
 
 
 if __name__ == '__main__':
+    # =========================================================================
+    # 用户可调参数配置区 (随时在此处直接修改，或通过命令行参数指定)
+    # =========================================================================
+    NUM_SAMPLES = 100000                           # 生成的采样样本数量
+    NUM_WORKERS = 60                              # 并行调用的 CPU 核心数 (当前服务器共有 64 核，设为 60 进行高并发并行加速)
+    LEVEL_RATIOS = [0.25, 0.35, 0.25, 0.15]       # Level 1~4 目标采样占比 (L1:单突变25%, L2:双突变35%, L3:多突变25%, L4:高阶突变15%)
+    
+    # 导出的数据集文件名 (默认自动携带样本数，也可直接在此自定义修改)
+    DATASET_NAME = f"mass_{NUM_SAMPLES}_random_dataset_210min_500steps_dual_labels.npz"
+
+    # 导出的数据集目录路径 (自动适配系统环境，也可直接在此自定义写死绝对路径)
+    if os.name == 'nt':
+        OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+    else:
+        OUTPUT_DIR = "/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast"
+    # =========================================================================
+
     import argparse
     parser = argparse.ArgumentParser(description="MASS Pure Random Dataset Generator (No-Motif)")
-    parser.add_argument("--samples", type=int, default=100000, help="Number of synthetic samples to generate")
-    parser.add_argument("--workers", type=int, default=60, help="Number of parallel CPU worker processes")
-    parser.add_argument("--output_name", type=str, default=DEFAULT_DATASET_NAME, help="Export dataset .npz filename")
-    parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR, help="Export directory path")
+    parser.add_argument("--samples", type=int, default=NUM_SAMPLES, help="Number of synthetic samples to generate")
+    parser.add_argument("--workers", type=int, default=NUM_WORKERS, help="Number of parallel CPU worker processes")
+    parser.add_argument("--level_ratios", type=float, nargs=4, default=LEVEL_RATIOS, help="Proportions for Level 1, 2, 3, 4 tiers")
+    parser.add_argument("--output_name", type=str, default=None, help="Export dataset .npz filename (default: auto with sample count)")
+    parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR, help="Export directory path")
     args = parser.parse_args()
 
-    print(f"Executing MASS Pure Random Dataset Generator (Samples: {args.samples}, Workers: {args.workers})...", flush=True)
+    # 动态确定输出文件名：如果命令行显式指定了 --output_name 则使用指定的；否则自动使用基于 args.samples 的文件名
+    if args.output_name is not None:
+        final_output_name = args.output_name
+    else:
+        if args.samples == NUM_SAMPLES:
+            final_output_name = DATASET_NAME
+        else:
+            final_output_name = f"mass_{args.samples}_random_dataset_210min_500steps_dual_labels.npz"
+
+    print(f"Executing MASS Pure Random Dataset Generator (Samples: {args.samples}, Workers: {args.workers}, Output: {final_output_name})...", flush=True)
     generate_mass_random_dataset(
         n_synthetic=args.samples,
+        level_ratios=args.level_ratios,
         num_workers=args.workers,
-        output_name=args.output_name,
+        output_name=final_output_name,
         output_dir=args.output_dir
     )
     print("\n[SUCCESS] MASS Random Dataset Generator Execution Finished Cleanly!", flush=True)
