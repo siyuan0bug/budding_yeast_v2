@@ -32,3 +32,10 @@ from .bio_refiner_plus import (
     BioRefinerBase, BioRefinerCurvature,
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus
 )
+from .fno1d import FNO1d_Standard
+from .unet1d import UNet1d
+from .galerkin_transformer1d import GalerkinTransformer1d
+from .cno1d import CNO1d
+from .mwt1d import MWT1d
+from .transolver1d import Transolver1d
+from .dpot1d import DPOT1d

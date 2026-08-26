@@ -25,7 +25,9 @@ from budding_yeast_v2.models.components import (
     BioMechanisticOperator, BioMechFull,
     BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly,
     BioRefiner, BioRefinerCurvature,
-    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus
+    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
+    FNO1d_Standard, UNet1d, GalerkinTransformer1d,
+    CNO1d, MWT1d, Transolver1d, DPOT1d
 )
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
@@ -34,6 +36,21 @@ from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 MODEL_REGISTRY = {
     'pure_fno': PureFNO_ICLR2021,
     'pure_wno': PureWNO_2022,
+    'fno1d': FNO1d_Standard,
+    'fno1d_standard': FNO1d_Standard,
+    'unet1d': UNet1d,
+    'unet': UNet1d,
+    'galerkin_transformer1d': GalerkinTransformer1d,
+    'galerkin_transformer': GalerkinTransformer1d,
+    'galerkin': GalerkinTransformer1d,
+    'cno1d': CNO1d,
+    'cno': CNO1d,
+    'mwt1d': MWT1d,
+    'mwt': MWT1d,
+    'transolver1d': Transolver1d,
+    'transolver': Transolver1d,
+    'dpot1d': DPOT1d,
+    'dpot': DPOT1d,
     'cross_fno': NIPSYeastFNO,
     'ultimate_fno': UltimateFNO,
     'wno': NIPSYeastWNO,
@@ -132,6 +149,27 @@ class YeastLitModule(pl.LightningModule):
                                     width=width, n_blocks=n_blocks, adj_matrix=adj_matrix)
         elif model_name == 'pure_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes, width=width)
+        elif model_name in ('fno1d', 'fno1d_standard'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
+                                    width=width, n_blocks=n_blocks)
+        elif model_name in ('unet1d', 'unet'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
+                                    n_blocks=n_blocks)
+        elif model_name in ('galerkin_transformer1d', 'galerkin_transformer', 'galerkin'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
+                                    n_blocks=n_blocks)
+        elif model_name in ('cno1d', 'cno'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
+                                    n_blocks=n_blocks)
+        elif model_name in ('mwt1d', 'mwt'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
+                                    n_blocks=n_blocks)
+        elif model_name in ('transolver1d', 'transolver'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
+                                    n_blocks=n_blocks)
+        elif model_name in ('dpot1d', 'dpot'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, hidden_size=width,
+                                    modes=modes, depth=n_blocks)
         elif model_name == 'pure_wno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
                                     n_blocks=n_blocks, wavelet=wavelet)

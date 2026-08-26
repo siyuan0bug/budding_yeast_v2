@@ -55,14 +55,13 @@ class DeepONet(nn.Module):
         # 2. Compute Branch coefficients (B, num_vars, p_basis)
         branch_out = self.branch_net(branch_in).reshape(B, V, self.p_basis)
 
-        # 3. Extract time coordinates (T_steps, 1)
-        # Take the time coordinate from the first batch and first variable channel
-        t_coords = ic_time_grid[0, 0, 1, :].unsqueeze(-1) # (T_steps, 1)
+        # 3. Extract time coordinates: (B, T_steps, 1)
+        t_coords = ic_time_grid[:, 0, 1, :].unsqueeze(-1)  # (B, T_steps, 1)
 
-        # 4. Compute Trunk continuous basis functions (T_steps, p_basis)
-        trunk_out = self.trunk_net(t_coords) # (T_steps, p_basis)
+        # 4. Compute Trunk continuous basis functions: (B, T_steps, p_basis)
+        trunk_out = self.trunk_net(t_coords)  # (B, T_steps, p_basis)
 
-        # 5. One-shot contraction: B_{b, v, k} * T_{t, k} -> (B, V, T_steps)
-        out = torch.einsum('bvk, tk -> bvt', branch_out, trunk_out) + self.bias.unsqueeze(0).unsqueeze(-1)
+        # 5. One-shot contraction: B_{b, v, k} * T_{b, t, k} -> (B, V, T_steps)
+        out = torch.einsum('bvk, btk -> bvt', branch_out, trunk_out) + self.bias.unsqueeze(0).unsqueeze(-1)
 
         return out
