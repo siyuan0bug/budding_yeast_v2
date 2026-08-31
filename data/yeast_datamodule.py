@@ -79,29 +79,32 @@ class YeastDataModule(pl.LightningDataModule):
         num_mutants, num_vars, T_STEPS = Y.shape
 
         # ================================================================
-        #  数据集类型识别 (LHS 家族数据集 vs MASS 数据集)
-        #  - LHS 数据集: 合成样本名含 '_LHS_' 前缀 (如 3_cln1_cln2_KO_LHS_083),
-        #    按"母体家族"分层划分 (下方两级分层)。
-        #  - MASS 数据集 (mass_dataset_generator.py 生成): 合成样本名以 'MASS_' 开头
-        #    (如 MASS_00001), 无 '_LHS_' 家族结构; 真实突变体仍以原名保留 (如 1_WT_Glc)。
-        #    此时跳过家族分层, 仅按 Pattern 做宏观 train/val/test 划分。
-        #  两类数据集都严格将 real mutants 全部划入测试集 (test_real), 避免数据泄露;
-        #  归一化统计量也只用合成样本 (lhs_indices)。
+        #  数据集类型通用智能识别:
+        #  - LHS 数据集: 合成样本名含 '_LHS_' (按母体家族两级分层划分)。
+        #  - 非 LHS 数据集 (MASS / WB-MASS / 任意未来自定义生成数据集):
+        #    自动按真实突变体特征 (如 1_WT_Glc, 15_cln3Δ...) 区分真实测试集与合成样本，
+        #    跳过家族分层, 仅按 Pattern 宏观划分。两类数据集都严格将 real mutants
+        #    全部划入测试集 (test_real), 避免数据泄露; 归一化统计量只用合成样本。
         # ================================================================
-        lhs_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' in str(name)]
-        real_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' not in str(name)]
+        has_lhs = any('_LHS_' in str(name) for name in mutant_names)
+        self.is_mass_dataset = not has_lhs
 
-        # 无任何 '_LHS_' 样本但存在 'MASS_' 前缀样本 → 判定为 MASS 数据集,
-        # 用 'MASS_' 前缀区分合成训练样本与 real mutants (复用下游 lhs_indices 变量名)。
-        self.is_mass_dataset = (len(lhs_indices) == 0) and any(
-            str(name).startswith('MASS_') for name in mutant_names)
-        if self.is_mass_dataset:
-            lhs_indices = [i for i, name in enumerate(mutant_names) if str(name).startswith('MASS_')]
-            real_indices = [i for i, name in enumerate(mutant_names) if not str(name).startswith('MASS_')]
-            print(f"📊 [MASS 数据集] 合成训练样本(MASS_*): {len(lhs_indices)} 个 | "
-                  f"真实测试突变体: {len(real_indices)} 个 (跳过 LHS 家族分层, 仅按 Pattern 宏观划分)")
+        if has_lhs:
+            lhs_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' in str(name)]
+            real_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' not in str(name)]
+            print(f"📊 [LHS 家族数据集] 提取到 LHS 训练样本: {len(lhs_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
         else:
-            print(f"📊 [数据划分成功] 提取到 LHS 训练样本: {len(lhs_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
+            # 通用非 LHS 识别逻辑:
+            # 真实突变体均为 Chen(2004) 标准命名 (如 1_WT_Glc, 15_cln3Δ..., 126_...), 均以纯数字+下划线开头
+            # 合成样本为 MASS_..., WB-MASS_..., Random_..., Synth_... 等自定义命名
+            def _is_real_mutant(n):
+                s = str(n)
+                return bool(re.match(r'^\d+_', s)) and not any(s.startswith(p) for p in ('MASS_', 'WB-MASS_', 'WB_', 'SYNTH_', 'RANDOM_'))
+
+            real_indices = [i for i, name in enumerate(mutant_names) if _is_real_mutant(name)]
+            lhs_indices = [i for i, name in enumerate(mutant_names) if not _is_real_mutant(name)]
+            print(f"📊 [通用非 LHS 数据集] 提取到合成样本: {len(lhs_indices)} 个 | "
+                  f"真实测试突变体: {len(real_indices)} 个 (跳过 LHS 家族分层, 仅按 Pattern 宏观划分)")
 
         if len(real_indices) == 0:
             print("⚠️ 警告: 未在数据集中发现任何真实评估样本！自动切出最后 10 个样本作为测试集。")
