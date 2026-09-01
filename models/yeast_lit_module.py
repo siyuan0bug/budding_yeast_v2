@@ -26,6 +26,7 @@ from budding_yeast_v2.models.components import (
     BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly,
     BioRefiner, BioRefinerCurvature,
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
+    HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual,
     FNO1d_Standard, UNet1d, GalerkinTransformer1d,
     CNO1d, MWT1d, Transolver1d, DPOT1d
 )
@@ -92,6 +93,12 @@ MODEL_REGISTRY = {
     'biom_refiner_graph': BioRefinerGraph,
     'biom_refiner_graph_attn': BioRefinerGraph,
     'biom_refiner_plus': BioRefinerPlus,
+    'hano': HANO,
+    'hano_no_event': HANO_NoEvent,
+    'hano_no_flux': HANO_NoFlux,
+    'hano_no_graph': HANO_NoGraph,
+    'hano_refine': HANO_Refine,
+    'hano_dual': HANO_Dual,
 }
 
 
@@ -231,6 +238,9 @@ class YeastLitModule(pl.LightningModule):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks,
                                     adj_matrix=adj_matrix)
+        elif model_name in ('hano', 'hano_no_event', 'hano_no_flux', 'hano_no_graph', 'hano_refine', 'hano_dual'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    width=width, n_blocks=n_blocks)
         else:
             raise ValueError(f"Unknown model_name: {model_name}")
 
@@ -262,7 +272,25 @@ class YeastLitModule(pl.LightningModule):
         self.max_epochs = max_epochs
         self.adj_matrix = adj_matrix
 
+    def setup(self, stage=None):
+        # HANO 等结构保持模型需要在真实空间完成通量积分/事件跳变,
+        # 注入 datamodule 归一化统计量 (persistent buffer, 随 checkpoint 持久化)
+        self._inject_model_stats()
+
+    def _inject_model_stats(self):
+        if not hasattr(self.model, 'set_stats'):
+            return
+        dm = getattr(self.trainer, 'datamodule', None)
+        if dm is None or not hasattr(dm, 'mean_y'):
+            return
+        try:
+            self.model.set_stats(dm.mean_y, dm.std_y, dm.p_mean, dm.p_std, float(dm.t_max))
+        except Exception as e:
+            print(f"[YeastLitModule] 统计量注入失败 (将在 on_train_start 重试): {e}")
+
     def on_train_start(self):
+        # 统计量注入兜底 (setup 时 datamodule 统计量可能尚未就绪)
+        self._inject_model_stats()
         if self.trainer.datamodule is not None:
             dm = self.trainer.datamodule
             loss_type = self.hparams.loss_type
@@ -367,7 +395,27 @@ class YeastLitModule(pl.LightningModule):
 
         weights = torch.ones(len(x), dtype=torch.float32, device=self.device)
 
-        if self.hparams.model_name.startswith(('biom_refiner', 'bio_refiner')) and self.training:
+        if self.hparams.model_name.startswith('hano') and self.training:
+            out_full, aux = self.model(x, p, return_aux=True)
+            if self.hparams.loss_type in ('pinn_residual', 'pino'):
+                self.criterion.set_epoch(self.current_epoch)
+                loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
+            else:
+                loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
+                # 双路径融合: 物理路径独立辅助损失 (防止门控偏向直接路径后物理分支梯度饿死)
+                if 'physics_out' in aux:
+                    phys_loss = self.criterion(aux['physics_out'], y, weights, lam_pen, lam_sm)
+                    loss = loss + self.model.lambda_phys * phys_loss
+                    self.log('train_phys_loss', phys_loss, on_step=False, on_epoch=True,
+                             prog_bar=True, sync_dist=True)
+            # 事件辅助损失: 事件时钟热图 logits vs 从目标轨迹自动提取的事件标签 (免费监督)
+            if 'event_logits' in aux:
+                labels = self.model.compute_event_labels(y)          # (B, 4, T)
+                ev_loss = F.binary_cross_entropy_with_logits(aux['event_logits'], labels)
+                loss = loss + self.model.lambda_event * ev_loss
+                self.log('train_event_loss', ev_loss, on_step=False, on_epoch=True,
+                         prog_bar=True, sync_dist=True)
+        elif self.hparams.model_name.startswith(('biom_refiner', 'bio_refiner')) and self.training:
             out_full, out_coarse = self.model(x, p, return_coarse=True)
             loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm)
             loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm)

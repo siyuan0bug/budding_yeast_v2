@@ -32,6 +32,9 @@ from .bio_refiner_plus import (
     BioRefinerBase, BioRefinerCurvature,
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus
 )
+from .hano import (
+    HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
+)
 from .fno1d import FNO1d_Standard
 from .unet1d import UNet1d
 from .galerkin_transformer1d import GalerkinTransformer1d

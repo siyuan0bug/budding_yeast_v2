@@ -57,6 +57,11 @@ M_BIRTH = 1.2060194   # initial MASS from Chen(2004) Table 2B (Tier 2 spec)
 M_M     = 2 * M_BIRTH # late-cycle mass = exact structural doubling of birth
 SIM_WINDOW = 210.0    # Tier 2 (engine simulate_mutant tf=210)
 N_BINS = 5            # ledger bins per D dimension
+TRAJ_MAX = 1e3        # numerical validity gate (v3.7, Tier 2): physiological
+                      # states are O(1) (event thresholds <=1, mass limit 10);
+                      # any |y| > 1e3 means the integrator diverged on this
+                      # combo — no biological meaning, rolled back at
+                      # generation time and replaced by a resample.
 N_LOG_BANDS = 8       # fold / effect log10 bands
 BOUNDARY_LO, BOUNDARY_HI = 0.5, 2.0   # structural threshold band (Tier 2)
 MASS_LIMIT = 10.0     # engine mass-divergence discard bound (max_m > 10)
@@ -108,6 +113,17 @@ else:
     _s = sum(_raw.values())
     P_BIO = {n: _raw[n] / _s for n in GENE_NAMES}
 _BIO_SUM = sum(P_BIO.values())
+
+# Ablation A switch (Scheme §9.6): mode-frequency source.
+#   'flat' — uniform over modes given gene (anti-leak default, §3.1.4)
+#   's5'   — Table S5-fitted mode weights (BINDING_GROUPS[g]['modes']), the
+#            same source mass_random_sampler uses. DIAGNOSTIC ARM ONLY: this
+#            re-introduces the real-genotype-list leak ON PURPOSE, to isolate
+#            the mode-frequency channel's contribution to real-mutant metrics
+#            (prediction: rescues the Pattern_C KO-stack cluster 13/17/21/26/88/89).
+# All other machinery (ledger, level quotas, folds, GAL inversion, dup bans)
+# is untouched in both arms; the 'flat' arm consumes the exact same RNG calls.
+MODE_FREQ = 'flat'
 
 ADJ = {n: set() for n in GENE_NAMES}
 for a, b, s in MODULE_EDGES:
@@ -552,6 +568,64 @@ def compute_D(p, mdt):
 # Part 6: GAL-OE self-consistent effect inversion (Scheme §3.2.2)
 # =============================================================================
 
+# --- GAL alpha biophysical cap (v3.7 fix: parameter pollution) ---------------
+# GAL promoter overexpression is bounded by promoter strength: Chen (2004)'s own
+# GAL constructs sit at ~1-10x the gene's native synthesis capacity (GAL-CLN2
+# 0.12 vs native 0.15; GAL-CLN3 2.0 vs 0.4; GAL-SIC1 10x k's,c1), the strongest
+# GAL/plasmid systems reach ~100x. Tier 2 biophysical bound (Scheme §1
+# whitelist item 4). Without it, multi-mutation backgrounds distort the fixed
+# point and the algebraic inversion emits 1e8..1e28 alphas that (a) enter the
+# npz even on the NaN-bucket path and (b) blow up dataset-level param std.
+GAL_ALPHA_CAP_MULT = 100.0
+_NATIVE_SCALE_PARAMS = {
+    'CLN2': ('ksn2p', 'ksn2pp'),
+    'CLN3': ('C0',),
+    'CLB5': ('ksb5p', 'ksb5pp'),
+    'CLB2': ('ksb2p', 'ksb2pp'),
+    'SIC1': ('ksc1p', 'ksc1pp'),
+    'CDC6': ('ksf6p', 'ksf6pp', 'ksf6ppp'),
+    'SWI5': ('ksswip', 'ksswipp'),
+    'CDC20': ('ks20p', 'ks20pp'),
+    'CDC14': ('ks14',),
+    'NET1': ('ksnet',),
+    'TEM1': ('Tem1T',),
+    'CDC15': ('Cdc15T',),
+    'PPX': ('ksppx',),
+    'CDC5_Proxy': ('ksppx',),
+    'PDS1': ('kspdsp', 'ks1pdspp', 'ks2pdspp'),
+    'ESP1': ('ESP1T',),
+}
+
+def gal_alpha_cap(gene, p_wt):
+    """alpha_cap = 100 x gene's native maximum synthesis capacity (Tier 2)."""
+    scale = sum(max(p_wt.get(k, 0.0), 0.0)
+                for k in _NATIVE_SCALE_PARAMS.get(gene, ()))
+    if scale <= 0.0:
+        scale = 1.0   # unreachable: every gene has a nonzero native term
+    return GAL_ALPHA_CAP_MULT * scale
+
+# v3.8: per-gene GAL promoter-strength bio-ranges (Tier 2 white-list item 4:
+# "GAL promoter induction strength, plasmid copy number, and other literature
+# magnitude ranges" — the same documented ranges the engine's own
+# sample_scaling_factor encodes). Empirical motivation (see Scheme §9.6):
+# the pure effect-inversion mis-scales alpha by orders of magnitude on
+# several genes (PDS1/CDC6 -> alpha~0, i.e. GAL degenerates to KO; CLN2 ->
+# pegged at the 100x cap), leaving the bio-realistic alpha region EMPTY in
+# the dataset — real GAL constructs (e.g. GAL-PDS1 kspdsp=0.1) then sit
+# >400 std away from the training support and become unlearnable.
+GAL_ALPHA_BIO = {
+    'CDC20': (0.50, 12.0), 'CLB2': (0.002, 1.50), 'SIC1': (0.03, 0.36),
+    'CDC6': (0.10, 0.60), 'CLB5': (0.004, 0.030), 'PDS1': (0.02, 0.25),
+    'CLN2': (0.03, 0.30), 'CLN3': (1.0, 5.0), 'TEM1': (2.0, 8.0),
+    'CDC15': (3.0, 20.0), 'ESP1': (1.5, 6.0), 'CDC14': (0.30, 1.20),
+    'NET1': (0.15, 0.60), 'PPX': (0.20, 0.60), 'CDC5': (0.20, 0.60),
+    'CDC5_Proxy': (0.20, 0.60), 'SWI5': (0.02, 0.10),
+}
+GAL_BIO_FALLBACK = (2.0, 30.0)   # undocumented genes: engine's own fallback
+
+# module-level counters, reset per run, reported in the audit
+GAL_STATS = {'eff_guided': 0, 'bio_draw': 0}
+
 def _gal_theta_and_invert(gene, E, p, fpG1, fpM):
     """Per-gene structural threshold theta (Tier 2 / own fixed point) and the
     one-step algebraic inversion alpha(E). All concentrations are the
@@ -611,9 +685,14 @@ def _gal_theta_and_invert(gene, E, p, fpG1, fpM):
     return 1.0, E  # unreachable fallback
 
 def apply_gal_inversions(gal_list, p_wt, p_mut, ovr):
-    """Iterative self-consistency (Scheme §3.2.2 v3.4 patch):
-    alpha and the fixed point are mutually dependent -> 2-3 damped rounds.
-    gal_list: [(gene, E)]. Returns (converged, alphas)."""
+    """v3.8 hybrid: effect-guided alpha bounded by the per-gene promoter-
+    strength bio-range (Tier 2). Iterative self-consistency is kept (2-3
+    damped rounds), but the inverted alpha is accepted ONLY when it lands
+    inside the bio-range; otherwise a log-uniform draw WITHIN the bio-range
+    replaces it (physical prior). This removes the v3.7 pathology where a
+    mis-scaled inversion collapsed alpha to ~0 (PDS1/CDC6: GAL == KO) or
+    pegged it at the 100x cap (CLN2), leaving the bio-realistic region
+    empty. gal_list: [(gene, E)]. Returns (converged, alphas)."""
     if not gal_list:
         return True, {}
     alphas = {g: 0.0 for g, _ in gal_list}
@@ -621,6 +700,13 @@ def apply_gal_inversions(gal_list, p_wt, p_mut, ovr):
     for g, _ in gal_list:
         apply_gene_mutation(g, 'GAL-OE', 0.0, p_wt, p_mut, ovr)
     converged = False
+    frozen = {}   # v3.8.1: gene -> bio-range draw, drawn ONCE and frozen.
+    # A physical prior needs no self-consistency: re-drawing every round made
+    # the 5% convergence test fail almost surely for every out-of-range gene
+    # (80.7% of inversions), flagging those candidates gal_conv=False ->
+    # pilot NaN 6.2% -> 24.4% and ~20% of main-phase attempts wasted after
+    # the NaN cap filled. Frozen draws repeat exactly (delta=0), so only the
+    # effect-guided (in-range) genes must satisfy the 5% stability test.
     for _round in range(3):
         p_eff = p_wt.copy(); p_eff.update(ovr)
         fpG1 = qss_g1(p_eff, M_BIRTH)
@@ -629,8 +715,22 @@ def apply_gal_inversions(gal_list, p_wt, p_mut, ovr):
             return False, alphas
         new_alphas = {}
         for g, E in gal_list:
+            if g in frozen:
+                new_alphas[g] = frozen[g]
+                continue
             _, a = _gal_theta_and_invert(g, E, p_eff, fpG1, fpM)
-            new_alphas[g] = max(a, 0.0)
+            a = max(a, 0.0)
+            lo, hi = GAL_ALPHA_BIO.get(g, GAL_BIO_FALLBACK)
+            if lo <= a <= hi:
+                GAL_STATS['eff_guided'] += 1   # effect-guided, in bio-range
+            else:
+                # inversion out of the physically meaningful range -> replace
+                # with a log-uniform draw inside the bio-range (Tier 2 prior),
+                # drawn once and frozen for the rest of this candidate
+                a = float(10.0 ** np.random.uniform(np.log10(lo), np.log10(hi)))
+                frozen[g] = a
+                GAL_STATS['bio_draw'] += 1
+            new_alphas[g] = a
         # convergence: all relative changes < 5%. Check every gene with a
         # NONZERO NEW alpha — skipping genes by old-alpha silently ignores
         # 0 -> large jumps and could declare premature convergence.
@@ -791,6 +891,9 @@ PRIMARY_COORDS = {   # gene -> 1-2 primary D dims (1-indexed), Scheme §3.5-3
 
 def _sample_mode(gene):
     modes = list(GROUP_BY_NAME[gene]['modes'].keys())
+    if MODE_FREQ == 's5':   # Ablation A: Table S5-fitted mode weights (leaks by design)
+        w = np.array([GROUP_BY_NAME[gene]['modes'][m] for m in modes], dtype=float)
+        return str(np.random.choice(modes, p=w / w.sum()))
     return str(np.random.choice(modes))   # flattened uniform (anti-leak, §3.1.4)
 
 def _resolve_conflicts(pairs):
@@ -825,6 +928,10 @@ def build_candidate(level, samplers, boost=None, fold_bias_fn=None):
     genes, struct_class = sample_skeleton(level, boost)
     if level == 1:
         g0, m0 = next_L1_cell()
+        if MODE_FREQ == 's5':
+            # Ablation A: keep the grid's gene marginal, re-draw the mode from
+            # S5 weights — only the mode-frequency channel changes
+            m0 = _sample_mode(g0)
         genes, pairs = [g0], [(g0, m0)]
     else:
         pairs = [(g, _sample_mode(g)) for g in genes]
@@ -1038,13 +1145,17 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
                               num_workers=None, output_name=None,
                               output_dir=None, max_attempts_mult=30,
                               level_quotas=None, nan_cap_frac=0.05,
-                              backlog_thresh=0.20, include_real=True):
+                              backlog_thresh=0.20, include_real=True,
+                              mode_freq='flat'):
+    global MODE_FREQ
+    MODE_FREQ = mode_freq
     if level_quotas is None:
         level_quotas = LEVEL_QUOTAS
     np.random.seed(seed)
     t00 = time.time()
     if output_name is None:
-        output_name = f"wb_mass_{n_synthetic}_dataset_210min_500steps_dual_labels.npz"
+        suffix = "_s5mode" if MODE_FREQ == 's5' else ""
+        output_name = f"wb_mass_{n_synthetic}{suffix}_dataset_210min_500steps_dual_labels.npz"
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(output_dir, exist_ok=True)
@@ -1052,7 +1163,8 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
 
     print("=" * 85)
     print(f"MASS v6.0 WB-MASS WT-Blind Sampler (Scheme v3.5) | target={n_synthetic} "
-          f"| pilot={n_pilot} | seed={seed}")
+          f"| pilot={n_pilot} | seed={seed} | mode_freq={MODE_FREQ}"
+          + ("  [ABLATION A: S5 mode freq = leak by design]" if MODE_FREQ == 's5' else ""))
     print("=" * 85)
 
     defaults = get_default_params()
@@ -1061,6 +1173,8 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
 
     # ---- Phase 0: pilot (uniform skeleton, no WT run, no acceptance) ----
     print(f"\n[Phase 0] Pilot: {n_pilot} candidates -> D bin edges ...", flush=True)
+    GAL_STATS['eff_guided'] = 0
+    GAL_STATS['bio_draw'] = 0
     samplers = make_samplers()
     D_mat = np.full((n_pilot, 10), np.nan)
     pilot_nan = 0
@@ -1108,6 +1222,8 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
     accept_window = []
     backlog_mode = False
     stats = {'struct': {}, 'gal_nonconv': 0, 'nan_rejected': 0}
+    # log ~25 lines regardless of scale (attempts run ~2-3x n_synthetic)
+    log_every = max(500, n_synthetic // 10)
 
     while len(accepted) < n_synthetic and attempts < max_attempts:
         attempts += 1
@@ -1224,7 +1340,7 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
         if len(accept_window) == 200 and attempts % 50 == 0:
             rate = np.mean(accept_window)
             backlog_mode = rate < backlog_thresh
-        if attempts % 500 == 0:
+        if attempts % log_every == 0:
             print(f"  |-- attempts={attempts} accepted={len(accepted)} "
                   f"| dup_blocked={blocked_dup} | dup_internal={dup_internal} "
                   f"| nan={ledger.nan_count} "
@@ -1261,9 +1377,12 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
         cand['name'] = name
         tasks[name] = cand['ovr']
     t_sim = time.time()
+    # log ~50 progress lines regardless of dataset size
+    sim_log_every = max(50, len(tasks) // 50)
     results, bio, pat = {}, {}, {}
     sim_fail = 0
     mass_disc = 0
+    div_traj = 0
     real_fail = 0
     real_disc = 0
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as ex:
@@ -1278,7 +1397,22 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
                 else: sim_fail += 1
                 continue
             if yu is not None:
-                results[name] = yu; bio[name] = bio_l; pat[name] = pat_l
+                if is_real:
+                    # D_real export block: stored as the engine returns it
+                    # (engine already applies its own mass>10 discard).
+                    results[name] = yu; bio[name] = bio_l; pat[name] = pat_l
+                elif (not np.isfinite(yu).all()) or \
+                        (np.nanmax(np.abs(yu)) > TRAJ_MAX):
+                    # v3.7 numerical validity gate: combinatorial positive
+                    # feedback can make the ODE itself diverge (|y| up to
+                    # 1e268 observed). Such trajectories are integrator blow-up,
+                    # not biology -> rolled back like mass divergence and
+                    # replaced by a resample (keeps traj stats & training
+                    # gradients sane at the dataset level).
+                    div_traj += 1
+                    _rollback(accepted, name, ledger, seen_sigs)
+                else:
+                    results[name] = yu; bio[name] = bio_l; pat[name] = pat_l
             elif bio_l == "Discarded_Mass":
                 if is_real: real_disc += 1
                 else:
@@ -1289,7 +1423,7 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
                 else:
                     sim_fail += 1
                     _rollback(accepted, name, ledger, seen_sigs)
-            if (k + 1) % 50 == 0:
+            if (k + 1) % sim_log_every == 0:
                 print(f"  |-- {k+1}/{len(tasks)} simulated "
                       f"({(k+1)/max(1e-9,time.time()-t_sim):.1f}/s)", flush=True)
 
@@ -1321,7 +1455,8 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
     print(f"Dataset path                : {dataset_path}")
     print(f"Samples saved               : {len(names_all)} total = {len(real_ok)} real "
           f"+ {len(ordered)} synthetic / {len(accepted)} accepted "
-          f"({sim_fail} numerical failures rolled back, {mass_disc} mass-discarded rolled back)"
+          f"({sim_fail} numerical failures rolled back, {mass_disc} mass-discarded rolled back, "
+          f"{div_traj} divergent-trajectory rolled back |TRAJ_MAX|={TRAJ_MAX:g})"
           f"\n                              real block: {real_fail} failed, "
           f"{real_disc} mass-discarded (not rolled back — D_real is an export block)")
     print(f"Real-mutant duplicates blocked (pure exclusion): {blocked_dup}")
@@ -1329,6 +1464,17 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
           f"(cap {ledger.nan_cap}) | pilot NaN rate "
           f"{pilot_nan/max(1,n_pilot)*100:.1f}%")
     print(f"GAL inversion non-converged : {stats['gal_nonconv']}")
+    _gt = GAL_STATS['eff_guided'] + GAL_STATS['bio_draw']
+    if _gt:
+        print(f"GAL alpha source            : effect-guided(in-range) "
+              f"{GAL_STATS['eff_guided']}/{_gt} "
+              f"({GAL_STATS['eff_guided']/_gt*100:.1f}%), "
+              f"bio-range draw {GAL_STATS['bio_draw']}/{_gt}")
+    if len(names_all):
+        print(f"Sanity: max|params|         : {np.nanmax(np.abs(params)):.3g} "
+              f"(GAL cap = {GAL_ALPHA_CAP_MULT:g}x native synthesis)")
+        print(f"Sanity: max|traj| (synth)   : "
+              f"{np.nanmax(np.abs(tensors[~is_real])):.3g} (gate {TRAJ_MAX:g})")
     print("\n[Structure class distribution]")
     for k, v in sorted(stats['struct'].items(), key=lambda x: -x[1]):
         print(f"  {k:<14}: {v}")
@@ -1415,6 +1561,10 @@ if __name__ == '__main__':
     parser.add_argument("--output_name", type=str, default=None, help="Export dataset .npz filename (default: auto with sample count)")
     parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR, help="Export directory path")
     parser.add_argument("--no_real", action="store_true", default=not INCLUDE_REAL, help="Skip simulating/packaging the 126 real mutants into the final npz")
+    parser.add_argument("--mode_freq", choices=['flat', 's5'], default='s5',
+                        help="Mode frequency source: 'flat' = uniform anti-leak (default) | "
+                             "'s5' = Table S5-fitted weights (Ablation A: re-introduces the leak by design, "
+                             "auto-suffixes output filename with _s5mode)")
     args = parser.parse_args()
 
     # 动态确定输出文件名：如果命令行显式指定了 --output_name 则使用指定的；否则自动使用基于 args.samples 的文件名
@@ -1425,6 +1575,8 @@ if __name__ == '__main__':
             final_output_name = DATASET_NAME
         else:
             final_output_name = f"wb_mass_{args.samples}_dataset_210min_500steps_dual_labels.npz"
+        if args.mode_freq == 's5':
+            final_output_name = final_output_name.replace('.npz', '_s5mode.npz')
 
     workers = args.workers if args.workers and args.workers > 0 else None
     print(f"Executing MASS v6.0 WB-MASS WT-Blind Sampler (Samples: {args.samples}, Pilot: {args.pilot}, "
@@ -1440,6 +1592,7 @@ if __name__ == '__main__':
         max_attempts_mult=args.max_attempts_mult,
         include_real=(not args.no_real),
         output_name=final_output_name,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        mode_freq=args.mode_freq
     )
     print("\n[SUCCESS] WB-MASS WT-Blind Sampler Execution Finished Cleanly!", flush=True)
