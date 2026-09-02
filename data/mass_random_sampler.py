@@ -418,10 +418,11 @@ if __name__ == '__main__':
     # =========================================================================
     NUM_SAMPLES = 100000                           # 生成的采样样本数量
     NUM_WORKERS = 60                              # 并行调用的 CPU 核心数 (当前服务器共有 64 核，设为 60 进行高并发并行加速)
-    LEVEL_RATIOS = [0.25, 0.35, 0.25, 0.15]       # Level 1~4 目标采样占比 (L1:单突变25%, L2:双突变35%, L3:多突变25%, L4:高阶突变15%)
+    #LEVEL_RATIOS = [0.25, 0.35, 0.25, 0.15]       # Level 1~4 目标采样占比 (L1:单突变25%, L2:双突变35%, L3:多突变25%, L4:高阶突变15%)
+    LEVEL_RATIOS = [0.40, 0.30, 0.20, 0.10]       #no data leak
     
     # 导出的数据集文件名 (默认自动携带样本数，也可直接在此自定义修改)
-    DATASET_NAME = f"mass_{NUM_SAMPLES}_random_dataset_210min_500steps_dual_labels.npz"
+    DATASET_NAME = f"mass_{NUM_SAMPLES}_random_level_dataset_210min_500steps_dual_labels.npz"
 
     # 导出的数据集目录路径 (自动适配系统环境，也可直接在此自定义写死绝对路径)
     if os.name == 'nt':

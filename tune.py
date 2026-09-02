@@ -64,20 +64,20 @@ def sample_model_aware_hparams(trial: optuna.Trial, model_name: str) -> Dict[str
         hparams["wavelet"] = trial.suggest_categorical("wavelet", ["haar", "db2", "sym2"])
         hparams["modes"] = 32
     elif "biom_refiner" in m_lower:
-        # Refiner 机制算子
-        hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512])
+        # Refiner 机制算子 (支持探索大 batch 256, 512, 1024)
+        hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024])
         hparams["width"] = trial.suggest_categorical("width", [64, 128, 192])
         hparams["modes"] = trial.suggest_categorical("modes", [16, 24, 32])
         hparams["wavelet"] = "haar"
     elif "fno" in m_lower:
-        # FNO 算子
-        hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024])
+        # FNO 算子轻量高效 (支持探索激进大 batch 256, 512, 1024, 2048)
+        hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024, 2048])
         hparams["width"] = trial.suggest_categorical("width", [32, 64, 128])
         hparams["modes"] = trial.suggest_categorical("modes", [16, 24, 32, 48, 64])
         hparams["wavelet"] = "haar"
     else:
-        # ResNetFiLM / DeepONet / 其它基线
-        hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024])
+        # ResNetFiLM / DeepONet / UNet1D / 其它基线 (支持大 batch 256, 512, 1024, 2048)
+        hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024, 2048])
         hparams["width"] = trial.suggest_categorical("width", [64, 128, 256])
         hparams["modes"] = trial.suggest_categorical("modes", [16, 32])
         hparams["wavelet"] = "haar"
@@ -114,8 +114,9 @@ def make_objective(args):
         )
 
         # 3. 构建 DataModule
+        dataset_path = args.dataset_name if os.path.isabs(args.dataset_name) else os.path.join(args.data_dir, args.dataset_name)
         datamodule = YeastDataModule(
-            dataset_path=os.path.join(args.data_dir, args.dataset_name),
+            dataset_path=dataset_path,
             adj_matrix_path=args.adj_matrix_path if args.adj_matrix_path else "mydata/yeast_signed_adjacency_matrix.npy",
             batch_size_lhs=hp["batch_size"],
             val_batch_size=256,
@@ -168,57 +169,91 @@ def make_objective(args):
             enable_progress_bar=False,  # 避免多卡并行互相抢占终端刷新
         )
 
-        trainer.fit(model, datamodule=datamodule)
+        try:
+            trainer.fit(model, datamodule=datamodule)
 
-        # 7. 检测剪枝
-        if trainer.current_epoch + 1 < hp["max_epochs"]:
-            raise optuna.TrialPruned()
+            # 7. 检测剪枝 (中途被早停淘汰)
+            if trainer.current_epoch + 1 < hp["max_epochs"]:
+                raise optuna.TrialPruned()
 
-        # 8. 评测 Real Mutants MAE
-        best_ckpt = checkpoint_callback.best_model_path
-        if not best_ckpt or not os.path.exists(best_ckpt):
-            raise optuna.TrialPruned()
+            # 8. 评测 Real Mutants MAE
+            best_ckpt = checkpoint_callback.best_model_path
+            if not best_ckpt or not os.path.exists(best_ckpt):
+                raise optuna.TrialPruned()
 
-        best_model = YeastLitModule.load_from_checkpoint(best_ckpt)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        best_model = best_model.to(device)
-        best_model.eval()
+            best_model = YeastLitModule.load_from_checkpoint(best_ckpt)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            best_model = best_model.to(device)
+            best_model.eval()
 
-        datamodule.setup("test")
-        mean_y = datamodule.mean_y.to(device)
-        std_y = datamodule.std_y.to(device)
+            datamodule.setup("test")
+            mean_y = datamodule.mean_y.to(device)
+            std_y = datamodule.std_y.to(device)
 
-        all_preds, all_targets = [], []
-        with torch.no_grad():
-            for batch in datamodule.test_dataset_real:
-                x, p, y = [b.unsqueeze(0).to(device) for b in batch]
-                pred_denorm = (best_model.forward_ic_time(x, p) * std_y + mean_y).cpu()
-                target_denorm = (y * std_y + mean_y).cpu()
-                all_preds.append(pred_denorm)
-                all_targets.append(target_denorm)
+            all_preds, all_targets = [], []
+            with torch.no_grad():
+                for batch in datamodule.test_dataset_real:
+                    x, p, y = [b.unsqueeze(0).to(device) for b in batch]
+                    pred_denorm = (best_model.forward_ic_time(x, p) * std_y + mean_y).cpu()
+                    target_denorm = (y * std_y + mean_y).cpu()
+                    all_preds.append(pred_denorm)
+                    all_targets.append(target_denorm)
 
-        all_preds = torch.cat(all_preds, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
-        metrics = calculate_metrics(all_preds, all_targets)
-        real_mae = float(metrics["MAE"])
-        real_l2 = float(metrics["Relative L2"])
-        real_corr = float(metrics["Correlation"])
+            all_preds = torch.cat(all_preds, dim=0)
+            all_targets = torch.cat(all_targets, dim=0)
+            metrics = calculate_metrics(all_preds, all_targets)
+            real_mae = float(metrics["MAE"])
+            real_l2 = float(metrics["Relative L2"])
+            real_corr = float(metrics["Correlation"])
 
-        trial.set_user_attr("real_mae", real_mae)
-        trial.set_user_attr("real_l2", real_l2)
-        trial.set_user_attr("real_corr", real_corr)
-        trial.set_user_attr("best_ckpt", best_ckpt)
+            trial.set_user_attr("real_mae", real_mae)
+            trial.set_user_attr("real_l2", real_l2)
+            trial.set_user_attr("real_corr", real_corr)
+            trial.set_user_attr("best_ckpt", best_ckpt)
 
-        # 9. 清理临时 ckpt 省空间
-        if args.cleanup_ckpts:
-            shutil.rmtree(ckpt_dir, ignore_errors=True)
+            # 9. 清理临时 ckpt 省空间
+            if args.cleanup_ckpts:
+                shutil.rmtree(ckpt_dir, ignore_errors=True)
 
-        del best_model, model, trainer, datamodule
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            del best_model, model, trainer, datamodule
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        return real_mae
+            return real_mae
+
+        except optuna.TrialPruned:
+            # 正常剪枝，清理显存
+            if args.cleanup_ckpts:
+                shutil.rmtree(ckpt_dir, ignore_errors=True)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise
+
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            # 智能拦截爆显存 (CUDA OOM): 彻底释放显存并自动转为剪枝，防止进程崩溃
+            err_msg = str(e).lower()
+            if isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in err_msg or "cuda" in err_msg:
+                print(f"\n⚠️ [Trial #{trial.number} | Worker {args.worker_id}] 触发 CUDA 显存溢出 (OOM)!")
+                print(f"   超参: batch_size={hp.get('batch_size')}, width={hp.get('width')}, modes={hp.get('modes')}")
+                print(f"   执行防爆恢复: 彻底清空 GPU 显存缓存并自动剪枝该 Trial，继续下一轮探索...")
+                
+                # 显式清理对象与显存
+                if 'best_model' in locals(): del best_model
+                if 'model' in locals(): del model
+                if 'trainer' in locals(): del trainer
+                if 'datamodule' in locals(): del datamodule
+                if args.cleanup_ckpts:
+                    shutil.rmtree(ckpt_dir, ignore_errors=True)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                # 抛出剪枝信号，让 Optuna 记录该超参不可行并自动降权
+                raise optuna.TrialPruned(f"CUDA OOM (batch_size={hp.get('batch_size')})")
+            else:
+                raise e
 
     return objective
 
@@ -303,14 +338,28 @@ def main():
         interval_steps=1,
     )
 
-    study = optuna.create_study(
-        study_name=args.study_name,
-        storage=storage_url,
-        direction="minimize",
-        sampler=sampler,
-        pruner=pruner,
-        load_if_exists=True,
-    )
+    # 采用指数退避重试加载 study，防御多进程高并发初始化时的竞争
+    study = None
+    for attempt in range(6):
+        try:
+            study = optuna.create_study(
+                study_name=args.study_name,
+                storage=storage_url,
+                direction="minimize",
+                sampler=sampler,
+                pruner=pruner,
+                load_if_exists=True,
+            )
+            break
+        except Exception as e:
+            if "already exists" in str(e).lower() or "locked" in str(e).lower():
+                import time
+                time.sleep(1.0 + args.worker_id * 0.5)
+                continue
+            raise e
+
+    if study is None:
+        raise RuntimeError(f"Worker {args.worker_id} 无法连接或创建 Optuna Study: {args.study_name}")
 
     print(f"🚀 [Worker {args.worker_id}] 启动超参搜索 | Study: {args.study_name} | 目标 Trials: {args.n_trials}")
     objective = make_objective(args)

@@ -125,6 +125,37 @@ _BIO_SUM = sum(P_BIO.values())
 # is untouched in both arms; the 'flat' arm consumes the exact same RNG calls.
 MODE_FREQ = 'flat'
 
+# Fold-distribution switch (Scheme §9.8): strength-range channel.
+#   'flat'  — wide anti-concentrated log bands (default; RNG sequence unchanged)
+#   'tier2' — engine sample_scaling_factor Tier-2 literature ranges (LEGAL:
+#             construct biophysics documented in the literature — promoter
+#             strengths, ts residual fractions, plasmid copy numbers — the
+#             same source class as GAL_ALPHA_BIO. NOT Table S5 statistics.)
+FOLD_DIST = 'flat'
+
+def _tier2_fold(mode, gene):
+    """Tier-2 fold draw mirroring engine sample_scaling_factor semantics
+    (mass_dataset_generator.py:578). Real constructs cluster here because
+    they are typical biological constructs, not because the test-set list
+    was consulted."""
+    if mode == 'MC':
+        return float(10.0 ** np.random.uniform(np.log10(1.5), np.log10(30.0)))
+    if mode == 'ts':
+        if gene == 'CDC14':
+            return float(np.random.uniform(0.05, 0.35))
+        return float(0.20 * np.random.beta(0.5, 2.0))
+    if mode == 'DAmP':
+        return float(np.clip(np.random.normal(0.20, 0.05), 0.05, 0.40))
+    if mode == 'pLOF':
+        return float(np.random.uniform(0.10, 0.50))
+    if mode == 'db':
+        if gene == 'CLB2':
+            return float(np.random.uniform(0.04, 0.15))
+        if gene == 'PDS1':
+            return float(np.random.uniform(0.0, 0.05))
+        return 0.0   # engine hard-zero alleles (CLB5/SIC1/PPX/CDC5_Proxy db)
+    return 1.0
+
 ADJ = {n: set() for n in GENE_NAMES}
 for a, b, s in MODULE_EDGES:
     ADJ[a].add(b); ADJ[b].add(a)
@@ -969,16 +1000,23 @@ def build_candidate(level, samplers, boost=None, fold_bias_fn=None):
             gal_list.append((g, E))
             edits.append((g, m, E))
         elif (g, m) in FOLD_MODES:
-            f = samplers['f_res' if m in RESIDUAL_MODES else 'f_mc'].sample(
-                fold_bias_fn(m) if fold_bias_fn else None)
+            if FOLD_DIST == 'tier2':
+                # §9.8: engine Tier-2 literature fold range (legal channel)
+                f = _tier2_fold(m, g)
+            else:
+                f = samplers['f_res' if m in RESIDUAL_MODES else 'f_mc'].sample(
+                    fold_bias_fn(m) if fold_bias_fn else None)
             apply_gene_mutation(g, m, f, p_wt, p_mut, ovr)
             edits.append((g, m, f))
         else:
             apply_gene_mutation(g, m, 1.0, p_wt, p_mut, ovr)
             if (g, m) in ALLELE_RESIDUAL:
                 # allele-residual patch (§3.2.3): paper constant -> WT x f
-                f = samplers['f_res'].sample(
-                    fold_bias_fn(m) if fold_bias_fn else None)
+                if FOLD_DIST == 'tier2' and m in ('ts', 'db'):
+                    f = _tier2_fold(m, g)   # engine Tier-2 allele semantics
+                else:
+                    f = samplers['f_res'].sample(
+                        fold_bias_fn(m) if fold_bias_fn else None)
                 for pk in ALLELE_RESIDUAL[(g, m)]:
                     ovr[pk] = p_wt[pk] * f   # f=0 (zero-inflated) == paper allele
                 edits.append((g, m, f))
@@ -1146,15 +1184,17 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
                               output_dir=None, max_attempts_mult=30,
                               level_quotas=None, nan_cap_frac=0.05,
                               backlog_thresh=0.20, include_real=True,
-                              mode_freq='flat'):
-    global MODE_FREQ
+                              mode_freq='flat', fold_dist='flat'):
+    global MODE_FREQ, FOLD_DIST
     MODE_FREQ = mode_freq
+    FOLD_DIST = fold_dist
     if level_quotas is None:
         level_quotas = LEVEL_QUOTAS
     np.random.seed(seed)
     t00 = time.time()
     if output_name is None:
-        suffix = "_s5mode" if MODE_FREQ == 's5' else ""
+        suffix = (("_s5mode" if MODE_FREQ == 's5' else "")
+                  + ("_tier2fold" if FOLD_DIST == 'tier2' else ""))
         output_name = f"wb_mass_{n_synthetic}{suffix}_dataset_210min_500steps_dual_labels.npz"
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1163,8 +1203,9 @@ def generate_wt_blind_dataset(n_synthetic=200, n_pilot=1000, seed=42,
 
     print("=" * 85)
     print(f"MASS v6.0 WB-MASS WT-Blind Sampler (Scheme v3.5) | target={n_synthetic} "
-          f"| pilot={n_pilot} | seed={seed} | mode_freq={MODE_FREQ}"
-          + ("  [ABLATION A: S5 mode freq = leak by design]" if MODE_FREQ == 's5' else ""))
+          f"| pilot={n_pilot} | seed={seed} | mode_freq={MODE_FREQ} | fold_dist={FOLD_DIST}"
+          + ("  [ABLATION A: S5 mode freq = leak by design]" if MODE_FREQ == 's5' else "")
+          + ("  [TIER-2 FOLD: engine literature ranges (legal channel)]" if FOLD_DIST == 'tier2' else ""))
     print("=" * 85)
 
     defaults = get_default_params()
@@ -1532,6 +1573,7 @@ if __name__ == '__main__':
     NUM_WORKERS = 60                              # 并行调用的 CPU 核心数 (None = 自动取全部核心)
     SEED = 42                                     # 随机种子（同种子跨平台可复现）
     LEVEL_RATIOS = [0.40, 0.30, 0.20, 0.10]       # Level 1~4 目标采样占比 (机制化单调配额, §3.1.2)
+    #LEVEL_RATIOS = [0.25, 0.35, 0.25, 0.15]
     NAN_CAP_FRAC = 0.05                           # NaN 桶总量上限占目标样本数比例 (§3.5)
     BACKLOG_THRESH = 0.20                         # 接纳率低于此值时切换 backlog 定向生成 (§3.5)
     MAX_ATTEMPTS_MULT = 30                        # 最大尝试次数 = 该值 × 目标样本数
@@ -1561,10 +1603,14 @@ if __name__ == '__main__':
     parser.add_argument("--output_name", type=str, default=None, help="Export dataset .npz filename (default: auto with sample count)")
     parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR, help="Export directory path")
     parser.add_argument("--no_real", action="store_true", default=not INCLUDE_REAL, help="Skip simulating/packaging the 126 real mutants into the final npz")
-    parser.add_argument("--mode_freq", choices=['flat', 's5'], default='s5',
+    parser.add_argument("--mode_freq", choices=['flat', 's5'], default='flat',
                         help="Mode frequency source: 'flat' = uniform anti-leak (default) | "
                              "'s5' = Table S5-fitted weights (Ablation A: re-introduces the leak by design, "
                              "auto-suffixes output filename with _s5mode)")
+    parser.add_argument("--fold_dist", choices=['flat', 'tier2'], default='tier2',
+                        help="Fold strength distribution: 'flat' = wide anti-concentrated bands (default) | "
+                             "'tier2' = engine Tier-2 literature ranges (LEGAL channel, not a leak; "
+                             "auto-suffixes output filename with _tier2fold)")
     args = parser.parse_args()
 
     # 动态确定输出文件名：如果命令行显式指定了 --output_name 则使用指定的；否则自动使用基于 args.samples 的文件名
@@ -1577,6 +1623,8 @@ if __name__ == '__main__':
             final_output_name = f"wb_mass_{args.samples}_dataset_210min_500steps_dual_labels.npz"
         if args.mode_freq == 's5':
             final_output_name = final_output_name.replace('.npz', '_s5mode.npz')
+        if args.fold_dist == 'tier2':
+            final_output_name = final_output_name.replace('.npz', '_tier2fold.npz')
 
     workers = args.workers if args.workers and args.workers > 0 else None
     print(f"Executing MASS v6.0 WB-MASS WT-Blind Sampler (Samples: {args.samples}, Pilot: {args.pilot}, "
@@ -1593,6 +1641,7 @@ if __name__ == '__main__':
         include_real=(not args.no_real),
         output_name=final_output_name,
         output_dir=args.output_dir,
-        mode_freq=args.mode_freq
+        mode_freq=args.mode_freq,
+        fold_dist=args.fold_dist
     )
     print("\n[SUCCESS] WB-MASS WT-Blind Sampler Execution Finished Cleanly!", flush=True)

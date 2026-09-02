@@ -34,6 +34,8 @@ DATASET_MASS_V2="${DATA_DIR}/mass_v2_dataset_210min_500steps_dual_labels.npz"
 DATASET_MASS_100000="${DATA_DIR}/mass_100000_dataset_210min_500steps_dual_labels.npz"
 # MASS 100,000 Random 数据集 (无 Motif 纯随机基线, 10万样本对照数据集)
 DATASET_MASS_100000_RANDOM="${DATA_DIR}/mass_100000_random_dataset_210min_500steps_dual_labels.npz"
+
+DATASET_MASS_100000_RANDOM_LEVEL="${DATA_DIR}/mass_100000_random_l_dataset_210min_500steps_dual_labels.npz"
 # MASS 50,000 数据集 (5万样本规模对比数据集)
 DATASET_MASS_50000="${DATA_DIR}/mass_50000_dataset_210min_500steps_dual_labels.npz"
 
@@ -86,10 +88,11 @@ EXPERIMENTS=(
     # GPU 1: 损失消融 (triple_dynamic)
     #"hano_dual triple_dynamic false ${DATASET_MASS_100000_RANDOM} mass100k_hano_dual_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
     # GPU 2: WT-Blind 100k (对标 unet1d 0.490 / hano_v1 0.704, 验证 NaN 修复)
-    "hano_dual hybrid_mse_rel false ${DATASET_MASS_100000_BLIND_S5} blind100k_hano_dual_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    "hano_dual hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} blind100k_hano_dual_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
 
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_100000_BLIND_S5} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND_S5} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 1"
     # ====== (已完成) HANO v1 纯物理路径实验: mass relL2=0.266, wb relL2=0.704 + epoch75 NaN ======
     # "hano triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
     # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"

@@ -28,13 +28,13 @@ LOSS_TYPE="hybrid_mse_rel"             # 可选: hybrid_mse_rel, triple_dynamic,
 AL_STRATEGY="none"                     # 可选: none, al4pde_boundary, al4pde_diversity, rgs 等
 
 # --- 2. 数据集配置 ---
-DATA_DIR="/home/users/zsy/mydata/budding_yeast"
-DATASET="${DATA_DIR}/massv3_dataset_210min_500steps_dual_labels.npz"
-DATASET_TAG="massv3"
+DATA_DIR="/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast"
+DATASET="${DATA_DIR}/mass_100000_random_dataset_210min_500steps_dual_labels.npz"
+DATASET_TAG="mass_100000_random"
 
 # --- 3. 多 GPU 分布式资源调度 ---
 # 指定参与并行搜索的 GPU 编号列表 (例如 8 卡: 0 1 2 3 4 5 6 7; 或部分卡: 0 1 2 3)
-GPUS=(0 1 2 3 4 5 6 7)
+GPUS=(0 1 2 3)
 TOTAL_TRIALS=200                       # 总计划探索的 Trials 数 (由所有 GPU 共同分担)
 SAVE_DIR="./tune_results/${DATASET_TAG}_${MODEL}_${LOSS_TYPE}_${AL_STRATEGY}"
 STUDY_NAME="tune_${DATASET_TAG}_${MODEL}_${LOSS_TYPE}"
@@ -82,6 +82,18 @@ echo "  断点续跑:       $([ "$RESUME" = "true" ] && echo '开启' || echo '�
 echo "============================================================"
 echo ""
 
+# 步骤 0: 主进程单进程预初始化 SQLite 表结构与 Study (彻底避免多进程并发创建表时产生 DDL 冲突)
+echo "  🔧 预初始化 Optuna 数据库表结构..."
+$PYTHON_BIN -c "
+import sqlite3, optuna
+conn = sqlite3.connect('${DB_FILE}', timeout=60.0)
+conn.execute('PRAGMA journal_mode=WAL;')
+conn.close()
+optuna.create_study(study_name='${STUDY_NAME}', storage='${STORAGE_URL}', load_if_exists=True)
+" 2>/dev/null
+
+echo ""
+
 WORKER_PIDS=()
 
 # 优雅退出处理: 捕获 Ctrl+C 并杀掉所有子 worker 进程
@@ -120,6 +132,7 @@ for i in "${!GPUS[@]}"; do
         $NO_PRUNE_FLAG > "$LOG_FILE" 2>&1 &
 
     WORKER_PIDS+=($!)
+    sleep 1  # 错开启动，彻底杜绝瞬时并发争抢
 done
 
 echo ""

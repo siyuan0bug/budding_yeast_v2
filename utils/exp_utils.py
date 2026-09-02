@@ -204,14 +204,15 @@ def setup_wandb_logger(
     # 2. 运行名称精炼化
     run_name = f"seed_{seed}" if not is_tune else f"trial_{getattr(args, 'trial_number', 0)}"
 
-    # 3. 结构化标签
-    tags = [
+    # 3. 结构化标签 (W&B 限制单个 Tag 长度必须在 1~64 字符之间)
+    raw_tags = [
         f"data:{dataset_tag}",
         f"model:{model_name}",
         f"loss:{loss_type}",
         f"al:{al_strategy}",
         f"seed:{seed}"
     ]
+    tags = [str(t)[:64] for t in raw_tags if t]
 
     no_wandb = getattr(args, "no_wandb", False)
     if no_wandb:
