@@ -30,6 +30,12 @@ DATA_DIR="/home/users/zsy/mydata/budding_yeast"
 DATASET_MASS="${DATA_DIR}/mass_dataset_210min_500steps_dual_labels.npz"
 # MASS v4.5 / v2 数据集 (全新升级: 结构化生物救援基序扩充 + 高阶多突变占比提升至75%)
 DATASET_MASS_V2="${DATA_DIR}/mass_v2_dataset_210min_500steps_dual_labels.npz"
+# MASS Mutant-Aware 100,000 数据集 (mutant_aware.py v5.0 生成: 零泄露分层采样 + 126 Real Mutants, 10万样本全量高精数据集)
+DATASET_MUTANT_AWARE_100000="${DATA_DIR}/mutant_aware_100000_210m_500s.npz"
+# MASS Mutant-Aware 100,000 Role-mode 数据集 (mutant_aware.py: Tier 2/3 affinity 角色模式采样 + 126 Real Mutants)
+DATASET_MUTANT_AWARE_100000_ROLE="${DATA_DIR}/mutant_aware_100000_210m_500s_rolemode.npz"
+# MASS Mutant-Aware 100,000 Leak-Level 数据集 (mutant_aware.py: 40/30/20/10 level 配额采样 + 126 Real Mutants)
+DATASET_MUTANT_AWARE_100000_LEAKLEVEL="${DATA_DIR}/mutant_aware_100000_leaklevel_210m_500s.npz"
 # MASS 100,000 数据集 (含生物救援基序 Motif, 10万样本全量高精数据集)
 DATASET_MASS_100000="${DATA_DIR}/mass_100000_dataset_210min_500steps_dual_labels.npz"
 # MASS 100,000 Random 数据集 (无 Motif 纯随机基线, 10万样本对照数据集)
@@ -75,6 +81,22 @@ SEEDS=(42) #42,1024,3407
 EXPERIMENTS=(
     # 格式 (17列，空格分隔):
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mutant_aware_role_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # ====== 🏆🏆🏆 全新 Mutant-Aware 100,000 对比实验 (Role-mode vs Leak-level) 🏆🏆🏆 ======
+    # GPU 0: 👑 biom_refiner_plus 在 Role-mode (Tier 2/3 affinity 角色模式) 数据集上的实验
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_ROLE} mutant_aware_role_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # GPU 1: 👑 biom_refiner_plus 在 Leak-Level (分层等级配额采样) 数据集上的实验
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_LEAKLEVEL} mutant_aware_leaklevel_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # GPU 0 (备选基准): biom_refiner_plus 在 Flat 默认数据集上的实验
+    # "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # GPU 1: 👑 最强机制模型 2 - biom_refiner_curvature (二阶加速度曲率机制算子)
+    #"biom_refiner_curvature hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_curv_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # GPU 2: 👑 最强机制模型 3 - hano_dual (双路径门控物理通量融合算子)
+    #"hano_dual hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_hano_dual_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
     # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} random100k_blind_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
 
@@ -83,95 +105,95 @@ EXPERIMENTS=(
     # mass100k 上 relL2=0.266 vs unet1d 0.168; 且 bf16 下 epoch 75+ NaN (已修: 物理路径强制 float32)。
     # HANO_Dual: out = g·物理路径(通量积分+事件跳变) + (1-g)·直接路径(归一化残差回归),
     # 下限 unet 水平, 上限物理增强; 物理路径有独立辅助损失 (lambda_phys=0.3)。
-    # GPU 0: 主战场 mass100k 对标 unet1d 0.168 (hybrid_mse_rel 与 unet 同损失, 公平对比)
-    #"hano_dual hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mass100k_hano_dual_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # GPU 0: 主战场 mass100k 对标 unet1d (hybrid_mse_rel 与 unet 同损失, 公平对比)
+    #"hano_dual hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mass100k_hano_dual_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
     # GPU 1: 损失消融 (triple_dynamic)
-    #"hano_dual triple_dynamic false ${DATASET_MASS_100000_RANDOM} mass100k_hano_dual_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
-    # GPU 2: WT-Blind 100k (对标 unet1d 0.490 / hano_v1 0.704, 验证 NaN 修复)
-    "hano_dual hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} blind100k_hano_dual_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    #"hano_dual triple_dynamic false ${DATASET_MASS_100000_RANDOM} mass100k_hano_dual_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # GPU 2: WT-Blind 100k (对标 unet1d / hano_v1, 验证 NaN 修复)
+    # "hano_dual hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} blind100k_hano_dual_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 0"
-    "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 1"
-    # ====== (已完成) HANO v1 纯物理路径实验: mass relL2=0.266, wb relL2=0.704 + epoch75 NaN ======
-    # "hano triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
-    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_biom_refiner_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
-    # "hano triple_dynamic false ${DATASET_MASS_100000} blind100k_hano_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} blind100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM_LEVEL} blind100k_unet1d_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mass100k_unet1d_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # ====== (已完成) HANO v1 纯物理路径实验 ======
+    # "hano triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} mass100k_unet1d_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_biom_refiner_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # "hano triple_dynamic false ${DATASET_MASS_100000} blind100k_hano_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
     # ---- HANO 消融实验 (需要时取消注释) ----
-    # "hano_no_event triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_no_event_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # "hano_no_flux triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_no_flux_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # "hano_no_graph triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_no_graph_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
-    # "hano_refine triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_refine_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    # "hano_no_event triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_no_event_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # "hano_no_flux triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_no_flux_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # "hano_no_graph triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_no_graph_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
+    # "hano_refine triple_dynamic false ${DATASET_MASS_100000_BLIND} blind100k_hano_refine_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
     # # ====== 👑👑👑 1. 旗舰最强机制模型在 MASS 100,000 (含 Motif) 数据集上的决战配置 👑👑👑 ======
     # # GPU 0: 👑 全项目最高精三元动力学终极大融合旗舰 biom_refiner_plus + Triple-Dynamic 复合损失
-    # "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000} mass100k_biom_refiner_plus_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000} mass100k_biom_refiner_plus_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
     # # GPU 1: 👑 超高精破百纪录保持者 biom_refiner_curvature + Triple-Dynamic 复合损失 (二阶曲率加速度模型)
-    # "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_100000} mass100k_biom_refiner_curv_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_100000} mass100k_biom_refiner_curv_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
     # # GPU 2: 👑 生物化学计量反应图拓扑注意力模型 biom_refiner_graph + Hybrid 损失
-    # "biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_biom_refiner_graph_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # "biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_biom_refiner_graph_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
     # # GPU 3: 👑 经典双阶粗精细化基准模型 BioRefiner + Hybrid 损失
-    # "biom_refiner hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_biom_refiner_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # "biom_refiner hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_biom_refiner_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
 
     # # ====== 🌟🌟🌟 2. RealPDEBench & 经典基线神经算子全家桶 (MASS 100,000 含 Motif 数据集) 🌟🌟🌟 ======
     # # GPU 4: RealPDEBench 标准 1D FNO (通道级频域交互 + FiLM 参数调制)
-    # "fno1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_fno1d_standard_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
-    # # GPU 5: RealPDEBench / PDEBench 标准 1D U-Net 算子 (多尺度残差跳跃连接)
-    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    # "fno1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_fno1d_standard_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
+    # # GPU 5: RealPDEBench / PDEBench 标准 1D U-Net 算子 (多尺度残差跳跃连接, width=64 保持轻量)
+    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_unet1d_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 5"
     # # GPU 6: RealPDEBench 连续希尔伯特函数空间线性注意力 Galerkin Transformer
-    # "galerkin_transformer1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_galerkin_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    # "galerkin_transformer1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_galerkin_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 6"
     # # GPU 7: Lu Lu et al. 经典 DeepONet (Branch-Trunk 深度算子网络)
-    # "deeponet hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_deeponet_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+    # "deeponet hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_deeponet_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
     # # GPU 4: ICLR 2023 RealPDEBench 连续带限抗混叠卷积神经算子 (CNO1d)
-    # "cno1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_cno1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 4"
+    # "cno1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_cno1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
     # # GPU 5: NeurIPS 2021 RealPDEBench 多小波连续神经算子 (MWT1d)
-    # "mwt1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_mwt1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 5"
+    # "mwt1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_mwt1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 5"
     # # GPU 6: RealPDEBench 物理切片注意力算子 (Transolver1d)
-    # "transolver1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_transolver1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 6"
+    # "transolver1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_transolver1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 6"
     # # GPU 1: ICLR/NeurIPS 2024 RealPDEBench 双路径算子 Transformer (DPOT1d / AFNO)
-    # "dpot1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_dpot1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # "dpot1d hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_dpot1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
     # # GPU 7: 1D 空洞残差网络 (ResNetFiLM + 通道注意力)
-    # "resnet_film hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_resnet_film_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 7"
+    # "resnet_film hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_resnet_film_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
     # # GPU 2: 超网络调制傅里叶神经算子 (HyperFNO)
-    # "hyper_fno hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_hyper_fno_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
-    # # GPU 3: ICLR 2021 原版单场 FNO (PureFNO, 单变量展开 BS=256 安全防 OOM)
-    # "pure_fno hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_pure_fno_hybrid_w64 32 64 256 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # # GPU 0: CMAME 2022 原版小波算子 (PureWNO, BS=256 安全防 OOM)
-    # "pure_wno hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_pure_wno_hybrid_w64 32 64 256 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # "hyper_fno hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_hyper_fno_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    # # GPU 3: ICLR 2021 原版单场 FNO (PureFNO)
+    # "pure_fno hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_pure_fno_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # # GPU 0: CMAME 2022 原版小波算子 (PureWNO, width=64 防小波树 OOM)
+    # "pure_wno hybrid_mse_rel false ${DATASET_MASS_100000} mass100k_pure_wno_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 
     # # ====== 🎲🎲🎲 3. 全模型在 MASS 100,000 Random (无 Motif 纯随机基线) 数据集上的消融对照 🎲🎲🎲 ======
     # # GPU 0: 👑 大融合旗舰 biom_refiner_plus (Random 100k 对照)
-    # "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_plus_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_plus_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
     # # GPU 1: 👑 二阶曲率模型 biom_refiner_curvature (Random 100k 对照)
-    # "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_curv_triple_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # "biom_refiner_curvature triple_dynamic false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_curv_triple_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
     # # GPU 2: 👑 生物化学计量图拓扑注意力 biom_refiner_graph (Random 100k 对照)
-    # "biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_graph_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # "biom_refiner_graph hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_graph_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
     # # GPU 3: 👑 双阶粗精细化基准 BioRefiner (Random 100k 对照)
-    # "biom_refiner hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
-    # GPU 4: RealPDEBench 标准 1D FNO (Random 100k 对照)
-    # "fno1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_fno1d_standard_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # "biom_refiner hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_biom_refiner_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # # GPU 4: RealPDEBench 标准 1D FNO (Random 100k 对照)
+    # "fno1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_fno1d_standard_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
     # # GPU 5: RealPDEBench 1D U-Net (Random 100k 对照)
-    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_unet1d_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 2"
     # # GPU 6: RealPDEBench Galerkin Transformer (Random 100k 对照)
-    # "galerkin_transformer1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_galerkin_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # "galerkin_transformer1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_galerkin_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
     # # GPU 7: Lu Lu 经典 DeepONet (Random 100k 对照)
-    # "deeponet hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_deeponet_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # "deeponet hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_deeponet_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
     # # GPU 4: RealPDEBench CNO1d (Random 100k 对照)
-    # "cno1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_cno1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # "cno1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_cno1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
     # # GPU 5: RealPDEBench MWT1d (Random 100k 对照)
-    # "mwt1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_mwt1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # "mwt1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_mwt1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
     # # GPU 6: RealPDEBench Transolver1d (Random 100k 对照)
-    # "transolver1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_transolver1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 2"
+    # "transolver1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_transolver1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
     # # GPU 1: RealPDEBench DPOT1d (Random 100k 对照)
-    # "dpot1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_dpot1d_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # "dpot1d hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_dpot1d_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
     # # GPU 7: ResNetFiLM (Random 100k 对照)
-    # "resnet_film hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_resnet_film_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
+    # "resnet_film hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_resnet_film_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
     # # GPU 2: HyperFNO (Random 100k 对照)
-    # "hyper_fno hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_hyper_fno_hybrid_w128 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # # GPU 3: PureFNO (Random 100k 对照, BS=256)
-    # "pure_fno hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_pure_fno_hybrid_w64 32 64 256 100 none 1.7e-3 10 0 0 0 one_time 3"
-    # # GPU 0: PureWNO (Random 100k 对照, BS=256)
-    # "pure_wno hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_pure_wno_hybrid_w64 32 64 256 100 none 1.7e-3 10 0 0 0 one_time 0"
+    # "hyper_fno hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_hyper_fno_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # # GPU 3: PureFNO (Random 100k 对照)
+    # "pure_fno hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_pure_fno_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # # GPU 0: PureWNO (Random 100k 对照, width=64 防 OOM)
+    # "pure_wno hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} random100k_pure_wno_hybrid_w64 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 )
 
 # ==========================================

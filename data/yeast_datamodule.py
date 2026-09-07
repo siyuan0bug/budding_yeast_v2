@@ -99,7 +99,7 @@ class YeastDataModule(pl.LightningDataModule):
             # 合成样本为 MASS_..., WB-MASS_..., Random_..., Synth_... 等自定义命名
             def _is_real_mutant(n):
                 s = str(n)
-                return bool(re.match(r'^\d+_', s)) and not any(s.startswith(p) for p in ('MASS_', 'WB-MASS_', 'WB_', 'SYNTH_', 'RANDOM_'))
+                return bool(re.match(r'^\d+(\.\d+)?_', s)) and not any(s.startswith(p) for p in ('MASS_', 'WB-MASS_', 'WB_', 'SYNTH_', 'RANDOM_'))
 
             real_indices = [i for i, name in enumerate(mutant_names) if _is_real_mutant(name)]
             lhs_indices = [i for i, name in enumerate(mutant_names) if not _is_real_mutant(name)]
