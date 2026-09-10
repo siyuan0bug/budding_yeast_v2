@@ -40,6 +40,8 @@ DATASET_MUTANT_AWARE_100000_LEAKLEVEL="${DATA_DIR}/mutant_aware_100000_leaklevel
 DATASET_MASS_100000="${DATA_DIR}/mass_100000_dataset_210min_500steps_dual_labels.npz"
 # MASS 100,000 Random 数据集 (无 Motif 纯随机基线, 10万样本对照数据集)
 DATASET_MASS_100000_RANDOM="${DATA_DIR}/mass_100000_random_dataset_210min_500steps_dual_labels.npz"
+# MASS Random + Mutant-Aware Parameter Distribution 100,000 数据集 (mass_random_mutant_dist.py 生成: mass_random_sampler 突变选取逻辑 + mutant_aware 连续物理参数分布采样消融实验)
+DATASET_MASS_RANDOM_DIST_100000="${DATA_DIR}/mass_random_dist_100000_210m_500s.npz"
 
 DATASET_MASS_100000_RANDOM_LEVEL="${DATA_DIR}/mass_100000_random_l_dataset_210min_500steps_dual_labels.npz"
 # MASS 50,000 数据集 (5万样本规模对比数据集)
@@ -81,22 +83,25 @@ SEEDS=(42) #42,1024,3407
 EXPERIMENTS=(
     # 格式 (17列，空格分隔):
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_100000_RANDOM} mutant_aware_role_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
-    # ====== 🏆🏆🏆 全新 Mutant-Aware 100,000 对比实验 (Role-mode vs Leak-level) 🏆🏆🏆 ======
-    # GPU 0: 👑 biom_refiner_plus 在 Role-mode (Tier 2/3 affinity 角色模式) 数据集上的实验
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_ROLE} mutant_aware_role_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
-
-    # GPU 1: 👑 biom_refiner_plus 在 Leak-Level (分层等级配额采样) 数据集上的实验
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_LEAKLEVEL} mutant_aware_leaklevel_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
-
-    # GPU 0 (备选基准): biom_refiner_plus 在 Flat 默认数据集上的实验
-    # "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # ====== 🏆🏆🏆 全新 MASS Random + Mutant-Aware Parameter Distribution 100,000 消融实验 🏆🏆🏆 ======
+    # GPU 0: 👑 最强机制模型 1 - biom_refiner_plus (黄金超参: w192, m24, b256, ep100, lr8.8e-4, warmup8)
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_RANDOM_DIST_100000} mass_random_dist_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 
     # GPU 1: 👑 最强机制模型 2 - biom_refiner_curvature (二阶加速度曲率机制算子)
-    #"biom_refiner_curvature hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_curv_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"biom_refiner_curvature hybrid_mse_rel false ${DATASET_MASS_RANDOM_DIST_100000} mass_random_dist_100k_biom_refiner_curv_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # GPU 2: 👑 最强机制模型 3 - hano_dual (双路径门控物理通量融合算子)
-    #"hano_dual hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_hano_dual_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"hano_dual hybrid_mse_rel false ${DATASET_MASS_RANDOM_DIST_100000} mass_random_dist_100k_hano_dual_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # ====== 🏆🏆🏆 全新 Mutant-Aware 100,000 对比实验 (Role-mode vs Leak-level) 🏆🏆🏆 ======
+    # GPU 0: biom_refiner_plus 在 Role-mode (Tier 2/3 affinity 角色模式) 数据集上的实验
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_ROLE} mutant_aware_role_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # GPU 1: biom_refiner_plus 在 Leak-Level (分层等级配额采样) 数据集上的实验
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_LEAKLEVEL} mutant_aware_leaklevel_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # GPU 0 (备选基准): biom_refiner_plus 在 Flat 默认数据集上的实验
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} random100k_blind_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
 

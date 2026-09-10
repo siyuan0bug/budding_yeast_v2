@@ -1,9 +1,11 @@
 """
-MASS (Mutant-Aware Stratified Sampling v5.0) Dataset Generator - UNIFIED MAIN
+MASS (Mutant-Aware Stratified Sampling v5.1) Dataset Generator - UNIFIED MAIN
 ================================================================================
-This is the single canonical engine + sampler (2026-09-06). Fully
-self-contained: no imports from sibling project modules. The structure-aware
-skeleton (module-graph degree weights, structure-class quotas, L1 grid
+This is the single canonical engine + sampler (2026-09-06; v5.1 2026-09-08
+real-mutant failure audit: R1-R5 composition rebalancing + ts/db anchor
+envelopes). Fully self-contained: no imports from sibling project modules.
+The structure-aware skeleton (uniform gene weights with degree/engine
+ablation arms, structure-class quotas with random-arm mixing, L1 grid
 rotation, mode-frequency arms, touch-set conflict resolution) is inlined in
 Part 5.5 below.
 
@@ -16,22 +18,36 @@ Lineage (retired versions archived under codes/a6000v1/, never modify):
   v3  THIS FILE                 - v2 engine + sampler skeleton merged into
                                    one leak-free, dependency-free file
 
-Zero-leakage selection rules (spec: Zero_Data_Leakage_and_Sampling_Specification.md):
-  - gene weights  : module-graph degree + 1 (Tier 3 hub prior)
+Zero-leakage selection rules (spec: Zero_Data_Leakage_and_Sampling_Specification.md v2.3):
+  - gene weights  : uniform over 27 modules (v5.1 R2; degree+1 hub prior and
+                    engine P_bio_G retained as ablation arms)
   - L1            : shuffled 84-cell (gene, mode) grid rotation (coverage)
-  - L2/L3/L4      : structure-class quotas from the 36-edge module graph
+  - L2/L3/L4      : 50% structure-class quotas from the 36-edge module graph
                     (C-A/C-B/C-C/C-D; cascade/star/antag_core/orthogonal)
-  - mode          : --mode_freq {flat, role, s5} (flat = anti-leak default;
-                    role = Tier 2/3 affinity arm; s5 = LEAKS BY DESIGN,
-                    negative-control ablation only)
+                    + 50% i.i.d. uniform genes (v5.1 R3 softening)
+  - mode          : --mode_freq {class, flat, role, s5} (class = mode-class
+                    quota arm, v5.1 R1 DEFAULT; flat = uniform anti-leak;
+                    role = Tier 2/3 affinity; s5 = LEAKS BY DESIGN control)
   - conflicts     : touch-set collision check + cross-redraw (Sect 3.1.6)
   - composite     : same-gene expression x structure dual mode, 25% on
                     mechanism-eligible genes (COMPOSITE_ELIGIBLE below)
-  - carbon rule   : GAL -> mdt=150 forced; else {90,150,160} w.p. (0.70,0.15,0.15)
+  - carbon rule   : GAL -> mdt=150 forced; else {90,150,160} w.p. (0.75,0.18,0.07)
   - level quotas  : 40/30/20/10 mechanized (spec rule 4)
 Strength values: sample_scaling_factor (Tier 2 literature bands, spec ch.6).
-Allele-residual pairs (ESP1-ts, Mcm1-ts, PPX-ts, PDS1-db, ... ) are
-reparameterized as WT x f per spec sect 8.5 (PATCH channel, v2.1).
+Allele-residual pairs are reparameterized as WT x f per spec sect 8.5
+(PATCH channel, v2.1). v5.1: TEM1/ESP1/NET1 ts use anchor envelopes
+LogU[anchor/4, anchor x 2] (declared E-Anchor exception, spec §5.5/§11.4);
+PDS1-db residual band U[0, 0.01]; MC integer support {2..50}.
+v5.2 (ts/db dedup-collapse audit fixes): (a) boundary-anchor buffer
+f ~ U[0, 0.01] for the exact-zero ts/db/APC-A/TAB6-1 alleles whose fixed
+constants collapsed L1 cells onto real-mutant points (CDC20-ts vs #73,
+CDC14-ts Mode A vs #99, CLB5-db vs #68, TAB6-1 vs #108, APC-A vs #115;
+70-84% dedup interception at Glc -> zero Glc-condition axis coverage);
+(b) CLB2-db fold alpha ~ U[0.02125, 0.170] (2.1% - 17% WT) -> kdb2pp = 0.4*alpha
+    in [0.0085, 0.068] = [anchor/4, anchor x 2] (real anchor kdb2pp=0.034 / alpha=0.085
+    sits cleanly interior at 42.9th percentile, 9 strains #55-#62);
+(c) TAB6-1 unified with the NET1-ts anchor envelope (same allele);
+(d) MDT-cell carbon weights aligned to R5 (0.75,0.18,0.07).
 
 Runs unchanged on the A6000 server (Linux: 60 workers, server output path)
 and on a local Windows machine (auto: local core count, script-dir output);
@@ -282,6 +298,8 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
 
     if is_mad2_ko: p['Vi20_active'] = 0.01
     if is_bub2_ko: p['BUB2_active'] = 0.0; y0[nBUB2] = 0.0
+    if p.get('Tem1T', 1.0) == 0.0: y0[nTEM1] = 0.0
+    if p.get('Cdc15T', 1.0) == 0.0: y0[nCDC15] = 0.0
 
     tr, yr = [0], [y0]; eh = []; bd = []; md = []; t0 = 0; lc = 0
     try:
@@ -419,10 +437,10 @@ REAL_MUTANTS = {
     '85': ('GAL-ESP1 cdc20-ts', {'ks20p': 0.0, 'ks20pp': 0.0, 'ESP1T': 3.0, 'mdt': 150.0}),
     '86': ('tem1Δ', {'Tem1T': 0.0, 'ka15pp': 0.0, 'init_Tem1': 0.0}),
     '87': ('GAL-TEM1', {'Tem1T': 5.0, 'mdt': 150.0}),
-    '88': ('tem1-ts multi-copy CDC15', {'ka15pp': 0.002, 'Tem1T': 0.0, 'Cdc15T': 5.0}),
-    '89': ('tem1-ts GAL-CDC15', {'ka15pp': 0.002, 'Tem1T': 0.0, 'Cdc15T': 15.0, 'mdt': 150.0}),
-    '90': ('tem1-ts net1-ts', {'ka15pp': 0.002, 'Tem1T': 0.0, 'kasrent': 10.0, 'kasrentp': 0.05}),
-    '91': ('tem1-ts multi-copy CDC14', {'ka15pp': 0.002, 'Tem1T': 0.0, 'ks14': 0.40}),
+    '88': ('tem1-ts multi-copy CDC15', {'ka15pp': 0.002, 'Tem1T': 0.0, 'init_Tem1': 0.0, 'Cdc15T': 5.0}),
+    '89': ('tem1-ts GAL-CDC15', {'ka15pp': 0.002, 'Tem1T': 0.0, 'init_Tem1': 0.0, 'Cdc15T': 15.0, 'mdt': 150.0}),
+    '90': ('tem1-ts net1-ts', {'ka15pp': 0.002, 'Tem1T': 0.0, 'init_Tem1': 0.0, 'kasrent': 10.0, 'kasrentp': 0.05}),
+    '91': ('tem1-ts multi-copy CDC14', {'ka15pp': 0.002, 'Tem1T': 0.0, 'init_Tem1': 0.0, 'ks14': 0.40}),
     '92': ('cdc15Δ', {'Cdc15T': 0.0, 'kkpnetpp': 0.0, 'init_Cdc15': 0.0}),
     '93': ('multi-copy CDC15', {'Cdc15T': 5.0}),
     '94': ('cdc15Δ multi-copy TEM1', {'Cdc15T': 0.0, 'kkpnetpp': 0.0, 'init_Cdc15': 0.0, 'Tem1T': 5.0}),
@@ -526,12 +544,12 @@ BINDING_GROUPS = {
         'modes': {'TAB6-1': 0.375, 'GAL-OE': 0.125, 'ts': 0.375, 'DAmP': 0.125}
     },
     'G13': {
-        'name': 'TEM1', 'params': ['Tem1T', 'ka15pp'],
+        'name': 'TEM1', 'params': ['Tem1T', 'ka15pp', 'init_Tem1'],
         'P_bio_G': 0.035,
         'modes': {'KO': 0.200, 'GAL-OE': 0.200, 'MC': 0.200, 'ts': 0.200, 'DAmP': 0.200}
     },
     'G14': {
-        'name': 'CDC15', 'params': ['Cdc15T', 'kkpnetpp'],
+        'name': 'CDC15', 'params': ['Cdc15T', 'kkpnetpp', 'init_Cdc15'],
         'P_bio_G': 0.035,
         'modes': {'KO': 0.200, 'GAL-OE': 0.200, 'MC': 0.200, 'ts': 0.200, 'DAmP': 0.200}
     },
@@ -651,14 +669,50 @@ def sample_scaling_factor(mode, g_name=None):
     elif mode == 'MC':
         # Chen 2004 Methods p.3848: "multiply ... by an integer, depending on
         # the number of additional copies" -> discrete integer copy count
-        # n in {2..30}, P(n) ~ 1/n (discrete log-uniform).
-        # Spec: §5.3 FOLD-M / §8.3 (2026-09-07, was continuous LogU[1.5, 30]).
-        ns = np.arange(2, 31)
+        # n in {2..50}, P(n) ~ 1/n (discrete log-uniform).
+        # Spec: §5.3 FOLD-M / §8.3 (v2.3; was {2..30} in v2.2, LogU[1.5,30]
+        # before that). Upper endpoint 50 = 2u high-copy plasmid burden
+        # (2u circles are maintained at 10-40+ copies/cell in S. cerevisiae,
+        # E-Mech); real MC anchors top out at 25x (#122 CDC20 15.0/0.6).
+        ns = np.arange(2, 51)
         w = 1.0 / ns
         return float(np.random.choice(ns, p=w / w.sum()))
     elif mode == 'ts':
         if g_name == 'CDC14':
             return float(np.random.uniform(0.05, 0.35))
+        if g_name in ('TEM1', 'ESP1'):
+            # v5.1 anchor envelope (spec §5.4 T3 / §11.4, v2.3 declared
+            # E-Anchor exception, same epistemic status as the GAL bands):
+            # Chen 2004 picked these constants for phenotype consistency
+            # (ka15pp 1.0->0.002; kasesp 50->0.1, kdiesp 0.5->0.001, f=0.002),
+            # i.e. calibration constants, not measurements. Under the generic
+            # 0.2*Beta(0.5,2) arm the anchors sit at the 15th percentile
+            # (median f=0.024 = 12x anchor), so the model's conditional mean
+            # was ~20x the real residual -> catastrophic eval errors
+            # (#89 tem1-ts MAE 22010 vs 0.1 for the fixed-constant engine).
+            # Envelope LogU[anchor/4, anchor*2] (GAL band convention): anchor
+            # is an interior point (P(f=anchor)=0), full-dim dedup still
+            # blocks the real composites (#81/#84/#88-91 all carry partners).
+            return 10.0 ** float(np.random.uniform(np.log10(0.0005), np.log10(0.004)))
+        if g_name == 'NET1':
+            # v5.1 anchor envelope: net1-ts / tab6-1 anchors kasrent 200->10,
+            # kasrentp 1.0->0.05 (f=0.05, 69th percentile of the Beta arm).
+            # Envelope LogU[0.0125, 0.10] = [anchor/4, anchor*2] concentrates
+            # the conditional mean (0.042) near the anchor and cuts the
+            # conditional spread (kasrent in [2.5, 20] instead of (0, 40]).
+            return 10.0 ** float(np.random.uniform(np.log10(0.0125), np.log10(0.10)))
+        if g_name in ('CDC20', 'CDC15', 'APC_Core'):
+            # v5.2 boundary-anchor buffer (spec §5.4 T3, same rule as PDS1-db
+            # D2): paper ts anchors for these alleles are exact zeros
+            # (#73/#78/#79/#85 cdc20-ts; #95/#96 cdc15-ts; #26 apc-ts).
+            # Exact-zero edits collapsed L1 CDC20[ts] onto real #73 (70% dedup
+            # interception at Glc) -> the Glc-condition cdc20-ts axis had ZERO
+            # training support (the a6000v1 baseline sampled random folds and
+            # had no collapse -- this asymmetry, not the fold range itself,
+            # is why base beat ma on the cdc20-ts family). f ~ U[0, 0.01] =
+            # declared <=1% thermal-inactivation residual buffer; f=0 boundary
+            # anchor unreachable (P=0), conditional mean 0.005 x WT.
+            return float(np.random.uniform(0.0, 0.01))
         u = np.random.beta(a=0.5, b=2.0)
         return float(0.20 * u)
     elif mode == 'DAmP':
@@ -668,13 +722,29 @@ def sample_scaling_factor(mode, g_name=None):
         return float(np.random.uniform(0.10, 0.50))
     elif mode == 'db':
         if g_name == 'CLB2':
-            return float(np.random.uniform(0.04, 0.15))
+            # v5.2.1 / v2.3-calib (spec §5.4 D1, E-Anchor): real anchor kdb2pp=0.034
+            # (all 9 CLB2-dbΔ strains #55-#62 share the paper constant; WT=0.40 ->
+            # anchor fold alpha=0.085 = 8.5% WT). The target physical envelope is
+            # kdb2pp in [anchor/4, anchor*2] = [0.0085, 0.068] (2.125% - 17.0% WT).
+            # Since apply_gene_mutation sets kdb2pp = p_wt['kdb2pp'] * alpha (0.4 * alpha),
+            # alpha must be sampled from [0.0085/0.4, 0.068/0.4] = U[0.02125, 0.170].
+            # Real anchor alpha=0.085 sits at the 42.86% percentile (interior, P=0, dedup-safe).
+            return float(np.random.uniform(0.02125, 0.170))
         elif g_name == 'PDS1':
-            return float(np.random.uniform(0.0, 0.05))
-        elif g_name == 'CLB5':
-            return 0.0
-        elif g_name == 'SIC1':
-            return 0.0
+            # v5.1 (spec §5.4 D2, v2.3): residual band tightened U[0,0.05] ->
+            # U[0, 0.01]. Pds1 has no KEN-box, so D-box deletion removes the
+            # only APC recognition signal (mechanism-preferred value f=0 ==
+            # paper anchor, boundary point); <=1% residual = declared
+            # modelling buffer for unknown degradation-signal redundancy.
+            # Conditional mean Vdpds 0.011 vs real anchor 0.010 (was 0.015).
+            return float(np.random.uniform(0.0, 0.01))
+        elif g_name in ('CLB5', 'SIC1', 'PPX', 'CDC5_Proxy'):
+            # v5.2: exact-zero db alleles -> <=1% residual buffer (same D2
+            # rule as PDS1). The fixed f=0 collapsed L1 CLB5[db] onto real
+            # #68 CLB5-dbΔ (84% dedup interception at Glc) and left the
+            # low-residual kd*pp axis with only 3 carbon-condition support
+            # points per allele. Boundary anchors stay unreachable (P=0).
+            return float(np.random.uniform(0.0, 0.01))
         else:
             return 0.0
     return 1.0
@@ -818,14 +888,22 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         elif g_name == 'CLB2':
             ovr['ksb2p'] = p_wt['ksb2p'] * alpha; ovr['ksb2pp'] = p_wt['ksb2pp'] * alpha
         elif g_name == 'CDC20':
-            # cdc20-1 ts at restrictive temp = complete loss (real #73: ks20p=ks20pp=0)
-            ovr['ks20p'] = 0.0; ovr['ks20pp'] = 0.0
+            # cdc20-1 ts at restrictive temp ~= complete loss (real #73:
+            # ks20p=ks20pp=0, boundary anchor). v5.2: alpha ~ U[0,0.01]
+            # buffer replaces the exact zeros -- exact-zero edits made every
+            # Glc L1 draw an exact copy of #73 (dedup collapse, 70%
+            # interception; the a6000v1 baseline's random-fold arm had no
+            # collapse, which is why base outperformed ma on this family).
+            ovr['ks20p'] = p_wt['ks20p'] * alpha; ovr['ks20pp'] = p_wt['ks20pp'] * alpha
         elif g_name == 'CDC14':
             # CDC14-ts dual physiological representations:
-            # Mode A (50% prob): Restrictive temp (37°C) complete arrest: ks14 = 0.0, catalytic rates nominal WT
+            # Mode A (50% prob): Restrictive temp (37°C) complete arrest:
+            #   ks14 ~ WT x U[0,0.01] (v5.2 buffer; was exact 0.0, which
+            #   collapsed onto real #99 cdc14-ts at Glc -> 50% x 75% dedup
+            #   interception of the L1 CDC14[ts] cell), catalytic rates WT
             # Mode B (50% prob): Semi-permissive temp (30-34°C) catalytic attenuation: ks14 = WT, 4 catalytic rates scaled by alpha in [0.05, 0.35]
             if np.random.rand() < 0.50:
-                ovr['ks14'] = 0.0
+                ovr['ks14'] = p_wt['ks14'] * np.random.uniform(0.0, 0.01)
             else:
                 ovr['ks14'] = p_wt['ks14']
                 ovr['kppc1'] = p_wt['kppc1'] * alpha
@@ -842,18 +920,29 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
             # f ~ 0.20*Beta(0.5, 2.0), support (0, 0.20]
             ovr['kppnetpp'] = p_wt['kppnetpp'] * alpha
         elif g_name == 'CDC15':
-            ovr['kkpnetpp'] = 0.0
+            # cdc15-ts anchor kkpnetpp=0 (boundary, #95/#96). v5.2 buffer
+            # alpha ~ U[0,0.01] x WT (exact 0.0 also thinned the #96 pair
+            # ~17% whenever the MC copy count hit the anchor integer at Glc).
+            ovr['kkpnetpp'] = p_wt['kkpnetpp'] * alpha
         elif g_name == 'TEM1':
             # tem1-2 ts: Tem1 pool absent (binary 0) + Tem1->Cdc15 activation
-            # residual as a fold (paper anchor ka15pp=0.002 = WT 1.0 x f, f=0.002)
-            ovr['Tem1T'] = 0.0; ovr['ka15pp'] = p_wt['ka15pp'] * alpha
+            # residual as a fold (paper anchor ka15pp=0.002 = WT 1.0 x f, f=0.002;
+            # v5.1 envelope f ~ LogU[0.0005, 0.004], spec §5.4 T3 / §11.4)
+            # Ban 2.1: Tem1T=0 requires init_Tem1=0 to prevent negative concentration (0 - 0.904 < 0)
+            ovr['Tem1T'] = 0.0; ovr['ka15pp'] = p_wt['ka15pp'] * alpha; ovr['init_Tem1'] = 0.0
         elif g_name == 'ESP1':
             # PATCH (spec §8.5-2): paper constants {0.1, 0.001} = {50, 0.5} x
-            # f (anchor f=0.002 in-band); reparameterized as WT x f,
-            # f ~ 0.20*Beta(0.5, 2.0), support (0, 0.20]
+            # f (anchor f=0.002); v5.1 envelope f ~ LogU[0.0005, 0.004]
             ovr['kasesp'] = p_wt['kasesp'] * alpha; ovr['kdiesp'] = p_wt['kdiesp'] * alpha
         elif g_name == 'APC_Core':
-            ovr['ks20p'] = 0.0; ovr['ks20pp'] = 0.0; ovr['kscdh'] = 0.0; ovr['init_CDH1T'] = 0.0; ovr['init_CDH1'] = 0.0
+            # apc-ts anchors (#26): ks20p/ks20pp/kscdh = 0 (boundary) and
+            # CDH1 pools emptied. v5.2: the three rate constants share the
+            # U[0,0.01] buffer alpha (exact zeros made the L3 analog of #26
+            # an exact real copy -> dedup-blocked); init_CDH1T/init_CDH1
+            # stay 0 (initial conditions, no residual concept).
+            ovr['ks20p'] = p_wt['ks20p'] * alpha; ovr['ks20pp'] = p_wt['ks20pp'] * alpha
+            ovr['kscdh'] = p_wt['kscdh'] * alpha
+            ovr['init_CDH1T'] = 0.0; ovr['init_CDH1'] = 0.0
         elif g_name == 'Mcm1':
             # PATCH (spec §8.5-2): paper constant 0.13 = WT 1.0 x f (anchor
             # f=0.13 in-band); reparameterized as WT x f, f ~ 0.20*Beta(0.5, 2.0)
@@ -865,20 +954,27 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
     # 5. db (Destruction Box Degradation Resistance)
     elif m_chosen == 'db':
         if g_name == 'CLB2':
-            # CLB2-dbΔ: kdb2P=0.0 (D-box lost, Cdc20 degradation eliminated), kdb2pp scaled by alpha (KEN-box residual, alpha~0.085 -> 0.034)
+            # CLB2-dbΔ: kdb2P=0.0 (D-box lost, Cdc20 degradation eliminated),
+            # kdb2pp = WT x alpha. alpha ~ U[0.02125, 0.170] -> kdb2pp in [0.0085, 0.068]
+            # (v2.3 E-Anchor band [anchor/4, anchor*2]; real anchor 0.034 = WT 0.4 x 0.085 interior)
             ovr['kdb2P'] = 0.0; ovr['kdb2pp'] = p_wt['kdb2pp'] * alpha
         elif g_name == 'CLB5':
-            # PATCH (spec §8.5-2): dbΔ paper zero = WT 0.16 x f, f=0 (exact-zero allele)
+            # dbΔ paper zero = WT 0.16 x f; v5.2: f ~ U[0,0.01] boundary
+            # buffer (was exact-zero allele; collapsed onto real #68)
             ovr['kdb5pp'] = p_wt['kdb5pp'] * alpha
         elif g_name == 'PDS1':
-            # PATCH (spec §8.5-2): dbΔ paper zeros = WT {0.2, 0.04} x f, f ~ U[0, 0.05]
-            # (f=0 anchor == paper allele; continuous residual semantics)
+            # PATCH (spec §8.5-2 / §5.4 D2): dbΔ paper zeros = WT {0.2, 0.04} x f,
+            # f ~ U[0, 0.01] (v5.1; was U[0, 0.05]) — f=0 boundary anchor ==
+            # paper allele, <=1% residual = declared modelling buffer
             ovr['kd2pdspp'] = p_wt['kd2pdspp'] * alpha; ovr['kd3pdspp'] = p_wt['kd3pdspp'] * alpha
         elif g_name == 'SIC1':
-            # PATCH (spec §8.5-2): dbΔ paper zero = WT 1.0 x f, f=0 (exact-zero allele)
+            # dbΔ paper zero = WT 1.0 x f; v5.2: f ~ U[0,0.01] boundary
+            # buffer (same D2 rule; #29 GAL-SIC1dbΔ anchor stays interior
+            # via the continuous GAL partner)
             ovr['kd3c1'] = p_wt['kd3c1'] * alpha
         elif g_name in ['PPX', 'CDC5_Proxy']:
-            # PATCH (spec §8.5-2): dbΔ paper zero = WT 2.0 x f, f=0 (exact-zero allele)
+            # dbΔ paper zero = WT 2.0 x f; v5.2: f ~ U[0,0.01] boundary
+            # buffer (no real anchor in D_real; consistency with D2)
             ovr['kdppxpp'] = p_wt['kdppxpp'] * alpha
 
     # 6. KO (Knockout: complete loss of gene function)
@@ -938,9 +1034,20 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
     elif m_chosen == 'CKO':
         ovr['kbub2'] = 0.0; ovr['BUB2_active'] = 0.0; ovr['init_BUB2'] = 0.0
     elif m_chosen == 'APC-A' or (g_name in ['CDC20', 'APC_Core'] and m_chosen == 'APC-A'):
-        ovr['ka20pp'] = 0.0
+        # v5.2: APC-A anchor ka20pp=0 (boundary, #115/#116/#117); buffer
+        # U[0,0.01] x WT replaces the exact 0.0 (fixed zero collapsed L1
+        # CDC20[APC-A] / APC_Core[APC-A] onto #115, 72-79% dedup
+        # interception; the L2 analogs of #116/#117 were likewise blocked)
+        ovr['ka20pp'] = p_wt['ka20pp'] * np.random.uniform(0.0, 0.01)
     elif m_chosen == 'TAB6-1':
-        ovr['kasrent'] = 10.0; ovr['kasrentp'] = 0.05
+        # v5.2: tab6-1 IS the net1-ts allele (real #97 'net1-ts' and #108
+        # 'TAB6-1' share the anchors kasrent 200->10, kasrentp 1.0->0.05,
+        # i.e. f=0.05). Fixed constants made every Glc L1 draw an exact copy
+        # of #108 (dedup collapse, 75% interception) and blocked the L2
+        # analogs of #109/#110. Reuse the NET1 ts anchor envelope
+        # LogU[anchor/4, anchor*2] (f interior, dedup-safe).
+        f = 10.0 ** float(np.random.uniform(np.log10(0.0125), np.log10(0.10)))
+        ovr['kasrent'] = p_wt['kasrent'] * f; ovr['kasrentp'] = p_wt['kasrentp'] * f
     elif m_chosen == 'scc1-RR':
         ovr['kasesp'] = 0.0
     elif m_chosen == 'PM':
@@ -959,7 +1066,9 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         ovr['ksspn'] = 0.0
     elif m_chosen == 'MDT':
         # Glc = standard lab medium (dominant); Gal/Raff = GAL-workflow media
-        ovr['mdt'] = float(np.random.choice([90.0, 150.0, 160.0], p=[0.70, 0.15, 0.15]))
+        # v5.2: weights aligned with the R5 carbon rule (was 0.70/0.15/0.15,
+        # inconsistent with the main-branch 0.75/0.18/0.07)
+        ovr['mdt'] = float(np.random.choice([90.0, 150.0, 160.0], p=[0.75, 0.18, 0.07]))
 
 # ==============================================================================
 # Part 5.5: Structure-aware skeleton (inlined from mass_wt_blind_sampler v1.6,
@@ -992,15 +1101,20 @@ MODULE_EDGES = [
 
 GROUP_BY_NAME = {g['name']: g for g in BINDING_GROUPS.values()}
 GENE_NAMES = sorted(GROUP_BY_NAME.keys())
-# P_bio: mechanized degree centrality on the 36-edge module graph (Tier 3 —
-# pure equation-derived topology). w(G) = (undirected degree + 1), normalized;
-# the +1 is Laplace smoothing so isolated modules keep a uniform-prior weight.
-# The engine's hand-set P_bio_G values (0.03-0.06, no verifiable derivation)
-# stay reachable below as an ablation switch (Scheme §8-4c).
-USE_ENGINE_P_BIO = False
-if USE_ENGINE_P_BIO:
+# v5.1 (R2): default gene-weight arm = UNIFORM over the 27 modules.
+# The v5.0 degree+1 arm over-sampled graph hubs (CLB2 8/113, CDC28 6/113 of
+# total weight) and starved zero-degree modules (APC_Core 1/113 -> the
+# APC-A channel was trained at ~1/4 of its uniform share; composition audit
+# 2026-09-08: APC-A 1.3% vs 5.6% in the v1r baseline). Degree+1 and the
+# engine's hand-set P_bio_G (0.03-0.06, no verifiable derivation) both stay
+# reachable below as ablation arms (Scheme §8-4c).
+GENE_WEIGHT_ARM = 'uniform'      # 'uniform' (v5.1 default) | 'degree' | 'engine'
+if GENE_WEIGHT_ARM == 'engine':
     P_BIO = {n: GROUP_BY_NAME[n]['P_bio_G'] for n in GENE_NAMES}
-else:
+elif GENE_WEIGHT_ARM == 'degree':
+    # P_bio: mechanized degree centrality on the 36-edge module graph (Tier 3
+    # — pure equation-derived topology). w(G) = (undirected degree + 1),
+    # normalized; +1 = Laplace smoothing for isolated modules.
     _deg = {n: 0 for n in GENE_NAMES}
     for _a, _b, _s in MODULE_EDGES:
         _deg[_a] += 1
@@ -1008,6 +1122,8 @@ else:
     _raw = {n: _deg[n] + 1.0 for n in GENE_NAMES}
     _s = sum(_raw.values())
     P_BIO = {n: _raw[n] / _s for n in GENE_NAMES}
+else:
+    P_BIO = {n: 1.0 / len(GENE_NAMES) for n in GENE_NAMES}
 _BIO_SUM = sum(P_BIO.values())
 
 ADJ = {n: set() for n in GENE_NAMES}
@@ -1059,18 +1175,23 @@ STAR_LEAVES = {'CDC28': sorted(ADJ['CDC28']), 'CLB2': sorted(ADJ['CLB2']),
 
 # --- 5.5c: Mode-frequency arms (Scheme §9.6 / spec §6.8.2) ---
 # MODE_FREQ is set by the CLI --mode_freq switch:
-#   'flat' — uniform over modes given gene (anti-leak DEFAULT, §3.1.4)
-#   'role' — role-aware affinity weights (Tier 2/3, leak-free ablation B):
-#            gene molecule-class x mode experiment-family affinity from the
-#            Chen (2004) model structure; the qualitative map is Tier 2 model
-#            knowledge, the x2 multiplier is a declared design constant. The
-#            rule is SYSTEMATIC (class-level, never tuned per gene toward the
-#            test set) — that is what keeps this arm leak-free while s5 is not.
-#   's5'   — Table-S5-fitted mode weights (BINDING_GROUPS[g]['modes']).
-#            DIAGNOSTIC ARM ONLY: re-introduces the real-genotype composition
-#            leak ON PURPOSE (ban-3 negative control, quantifies leakage harm).
+#   'class' — mode-class quotas, P(m|g) ∝ QUOTA[class(m)] (v5.1 DEFAULT;
+#             class-level declared constants, anti-leak by construction —
+#             the quota never sees per-gene test-set statistics)
+#   'flat'  — uniform over modes given gene (v5.0 default, §3.1.4; kept as
+#             ablation arm — its 1/k rule over-weights rare classes on
+#             low-mode-count genes, e.g. CDH1[CA] at 50%)
+#   'role'  — role-aware affinity weights (Tier 2/3, leak-free ablation B):
+#             gene molecule-class x mode experiment-family affinity from the
+#             Chen (2004) model structure; the qualitative map is Tier 2 model
+#             knowledge, the x2 multiplier is a declared design constant. The
+#             rule is SYSTEMATIC (class-level, never tuned per gene toward the
+#             test set) — that is what keeps this arm leak-free while s5 is not.
+#   's5'    — Table-S5-fitted mode weights (BINDING_GROUPS[g]['modes']).
+#             DIAGNOSTIC ARM ONLY: re-introduces the real-genotype composition
+#             leak ON PURPOSE (ban-3 negative control, quantifies leakage harm).
 # All arms consume the exact same RNG call count; only the weights differ.
-MODE_FREQ = 'flat'
+MODE_FREQ = 'class'
 
 # Gene molecule classes from the Chen (2004) model structure (Tier 2; the
 # classification is class-level only — never adjusted per gene toward the
@@ -1089,11 +1210,29 @@ GENE_ROLE = {
 MODE_CLASS = {
     'KO': 'loss', 'GAL-OE': 'expression', 'MC': 'expression',
     'ts': 'activity', 'DAmP': 'activity', 'pLOF': 'activity',
+    'APC-A': 'activity',   # v5.1 reclass (was 'event'): APC-A zeroes ka20pp =
+                           # catalytic inactivation of APC core activation —
+                           # a loss-of-activity allele (same mechanism family
+                           # as ts), not a switch/event mode. 10 real mutants
+                           # (#115-124) ride this token.
     'db': 'stability', 'PM': 'stability',
-    'CA': 'structure', 'CSL': 'event', 'CKO': 'event', 'APC-A': 'event',
+    'CA': 'structure', 'CSL': 'event', 'CKO': 'event',
     'scc1-RR': 'event', 'TAB6-1': 'event', 'cdc24Δ': 'event',
     'cdc45Δ': 'event', 'spindle_defect': 'event', 'MDT': 'event',
     'perturb': 'event',
+}
+# v5.1 (R1): 'class' arm = mode-class quotas. P(m|g) ∝ QUOTA[class(m)],
+# renormalized within each gene's legal mode table. Class-level DECLARED
+# design constants (Tier 2 systematic rule, zero per-gene test-set contact —
+# the same anti-leak standard as ROLE_AFFINITY): the classical-genetics
+# vocabulary is loss/expression-dominant (KO and overexpression are the
+# workhorses), ts is the classic yeast toolbox, db/PM residuals are rarer,
+# CA is rarest. Fixes the flat arm's 1/k imbalance (CDH1[CA] 50% of CDH1
+# draws, CA 9.9% overall vs 2.6% in the v1r baseline; composition audit
+# 2026-09-08).
+MODE_CLASS_QUOTA = {
+    'loss': 0.30, 'expression': 0.30, 'activity': 0.20,
+    'stability': 0.10, 'structure': 0.05, 'event': 0.05,
 }
 # role x mode-class affinity: affine classes x2 (declared soft-prior constant),
 # all others x1. 'event' role genes keep flat (all their modes are event-class).
@@ -1142,7 +1281,7 @@ TOUCH = {
  ('NET1','TAB6-1'): {'kasrent','kasrentp'}, ('NET1','GAL-OE'): {'ksnet'},
  ('NET1','ts'): {'kasrent','kasrentp'}, ('NET1','DAmP'): {'ksnet'},
  ('TEM1','KO'): {'Tem1T','ka15pp','init_Tem1'}, ('TEM1','GAL-OE'): {'Tem1T'},
- ('TEM1','MC'): {'Tem1T'}, ('TEM1','ts'): {'Tem1T','ka15pp'},
+ ('TEM1','MC'): {'Tem1T'}, ('TEM1','ts'): {'Tem1T','ka15pp','init_Tem1'},
  ('TEM1','DAmP'): {'Tem1T'},
  ('CDC15','KO'): {'Cdc15T','kkpnetpp','init_Cdc15'},
  ('CDC15','GAL-OE'): {'Cdc15T'}, ('CDC15','MC'): {'Cdc15T'},
@@ -1208,6 +1347,21 @@ STRUCT_L2 = {'C-A': 0.30, 'C-B': 0.30, 'C-C': 0.15, 'C-D': 0.25}
 STRUCT_L34 = {'cascade': 0.45, 'star': 0.25, 'antag_core': 0.20, 'orthogonal': 0.10}
 _L2_PICKER = QuotaPicker(list(STRUCT_L2.keys()), list(STRUCT_L2.values()))
 _L34_PICKER = QuotaPicker(list(STRUCT_L34.keys()), list(STRUCT_L34.values()))
+# v5.1 (R3): structure-mix softening. The pure structure skeleton concentrates
+# every L2+ draw on mechanistic pair geometry (adjacent/antagonistic edges,
+# cascades, stars), which the 2026-09-08 composition audit flagged as
+# over-concentrated relative to the unconstrained combination space the
+# eval composites explore. 50% (declared constant) of L2/L3/L4 skeletons keep
+# the structure-aware arm; the other 50% are i.i.d. uniform gene draws
+# without replacement — the union spans both mechanistic structure and
+# unconstrained combination space. L1 is unaffected (grid rotation).
+STRUCT_MIX_P = 0.50
+
+def _sample_random_genes(ki, boost=None):
+    out = []
+    while len(out) < ki:
+        out.append(_weighted_gene(boost, exclude=tuple(out)))
+    return out
 
 def _weighted_gene(weights=None, exclude=()):
     names = [n for n in GENE_NAMES if n not in exclude]
@@ -1303,9 +1457,19 @@ def _sample_orthogonal(ki, boost=None):
     return out
 
 def sample_skeleton(level, boost=None):
-    """Returns (genes list, structure_class). Level quotas are exact."""
+    """Returns (genes list, structure_class). Level quotas are exact.
+    v5.1 (R3): L2/L3/L4 draw the structure-aware arm with prob STRUCT_MIX_P
+    (0.50), else the i.i.d. uniform 'random' arm."""
     if level == 1:
         return [_weighted_gene(boost)], 'L1'
+    if np.random.rand() >= STRUCT_MIX_P:   # v5.1 random arm (R3)
+        if level == 2:
+            ki = 2
+        elif level == 3:
+            ki = int(np.random.randint(3, 6))
+        else:
+            ki = int(np.random.randint(4, 7))
+        return _sample_random_genes(ki, boost), 'random'
     if level == 2:
         return _sample_L2(boost)
     ki = int(np.random.randint(3, 6)) if level == 3 else int(np.random.randint(4, 7))
@@ -1339,6 +1503,10 @@ def _sample_mode(gene):
                           for m in modes], dtype=float)
             return str(np.random.choice(modes, p=w / w.sum()))
         # event-role genes (or unmapped): flat, same RNG call as the flat arm
+    if MODE_FREQ == 'class':  # v5.1 main arm: mode-class quotas (R1)
+        w = np.array([MODE_CLASS_QUOTA.get(MODE_CLASS.get(m, 'event'), 1.0)
+                      for m in modes], dtype=float)
+        return str(np.random.choice(modes, p=w / w.sum()))
     return str(np.random.choice(modes))   # flattened uniform (anti-leak, §3.1.4)
 
 def _resolve_conflicts(pairs):
@@ -1395,16 +1563,21 @@ def sample_mass_mutant(level=1):
 
     Selection = the structure-aware skeleton inlined in Part 5.5 above
     (all Tier 2/3 sources, zero test-set contact):
-      - gene weights  : module-graph degree + 1 (Tier 3 hub prior)
+      - gene weights  : uniform over 27 modules (v5.1 R2; degree+1 and engine
+                        P_bio_G retained as ablation arms)
       - L1            : shuffled 84-cell (gene, mode) grid rotation (coverage)
-      - L2/L3/L4      : structure-class quotas from the 36-edge module graph
-                        (C-A/C-B/C-C/C-D; cascade/star/antag_core/orthogonal)
-      - mode          : --mode_freq arm (flat uniform DEFAULT = anti-leak;
-                        role = Tier 2/3 affinity; s5 = leak-by-design control)
+      - L2/L3/L4      : 50% structure-class quotas from the 36-edge module
+                        graph (C-A/C-B/C-C/C-D; cascade/star/antag_core/
+                        orthogonal) + 50% i.i.d. uniform genes (v5.1 R3)
+      - mode          : --mode_freq arm (class quotas DEFAULT = v5.1 R1;
+                        flat = uniform anti-leak; role = Tier 2/3 affinity;
+                        s5 = leak-by-design control)
       - conflicts     : touch-set collision check + mode redraw (Sect 3.1.6)
       - carbon rule   : GAL -> mdt=150 forced; else {90,150,160}
-                        w.p. (0.70, 0.15, 0.15) (v1.5 Glc-dominant weights)
-    Strength values: engine sample_scaling_factor (Tier 2 literature bands).
+                        w.p. (0.75,0.18,0.07) (v5.1 R5, v1r-aligned)
+    Strength values: engine sample_scaling_factor (Tier 2 literature bands;
+    v5.1: TEM1/ESP1/NET1 ts anchor envelopes LogU[anchor/4, anchor x 2],
+    PDS1-db residual U[0, 0.01], MC integer support {2..50}).
     Level quotas: set by generate_mass_dataset (40/30/20/10 mechanized).
     """
     p_wt = get_default_params()
@@ -1455,12 +1628,15 @@ def sample_mass_mutant(level=1):
             if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
         apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
 
-    # carbon source rule (v1.5): GAL -> Gal forced; else Glc-dominant weighted
+    # carbon source rule (v5.1 / R5): GAL -> Gal forced; else Glc-dominant
+    # weights aligned with the v1r baseline (mass_random_sampler.py):
+    # Glc 0.75 / Gal 0.18 / Raff 0.07 (was 0.70/0.15/0.15 — the flatter Raff
+    # share over-trained a carbon source carried by only 2/126 real strains)
     if has_gal_oe:
         ovr['mdt'] = 150.0
     elif 'mdt' not in ovr:
         ovr['mdt'] = float(np.random.choice([90.0, 150.0, 160.0],
-                                            p=[0.70, 0.15, 0.15]))
+                                            p=[0.75, 0.18, 0.07]))
 
     desc_str = "+".join(mut_descriptions)
     return ovr, desc_str
@@ -1765,8 +1941,8 @@ if __name__ == '__main__':
     parser.add_argument("--samples", type=int, default=NUM_SAMPLES, help="Number of synthetic samples to generate")
     parser.add_argument("--workers", type=int, default=NUM_WORKERS, help="Number of parallel CPU worker processes")
     parser.add_argument("--level_ratios", type=float, nargs=4, default=LEVEL_RATIOS, help="Proportions for Level 1, 2, 3, 4 tiers")
-    parser.add_argument("--mode_freq", choices=['flat', 'role', 's5'], default='flat',
-                        help="Mode-frequency arm: flat=uniform (anti-leak DEFAULT); role=role-aware affinity weights (Tier 2/3, leak-free ablation B); s5=Table-S5-fitted weights (LEAKS BY DESIGN, ban-3 negative-control ablation A)")
+    parser.add_argument("--mode_freq", choices=['class', 'flat', 'role', 's5'], default='class',
+                        help="Mode-frequency arm: class=mode-class quotas (v5.1/v5.2 DEFAULT, R1; class-level declared constants, anti-leak); flat=uniform 1/k (ablation baseline, v5.0 default); role=role-aware affinity weights (Tier 2/3, leak-free ablation B); s5=Table-S5-fitted weights (LEAKS BY DESIGN, ban-3 negative-control ablation A)")
     parser.add_argument("--output_name", type=str, default=None, help="Export dataset .npz filename (default: auto with sample count)")
     parser.add_argument("--output_dir", type=str, default=OUTPUT_DIR, help="Export directory path")
     args = parser.parse_args()
@@ -1783,7 +1959,9 @@ if __name__ == '__main__':
     # mode-frequency arm (spec §6.8.2): module-level switch consumed by
     # _sample_mode / next_L1_cell path inside sample_mass_mutant
     MODE_FREQ = args.mode_freq
-    if args.mode_freq == 'role' and not final_output_name.endswith('_rolemode.npz'):
+    if args.mode_freq == 'flat' and not final_output_name.endswith('_flatmode.npz'):
+        final_output_name = final_output_name.replace('.npz', '_flatmode.npz')
+    elif args.mode_freq == 'role' and not final_output_name.endswith('_rolemode.npz'):
         final_output_name = final_output_name.replace('.npz', '_rolemode.npz')
     elif args.mode_freq == 's5' and not final_output_name.endswith('_s5mode.npz'):
         final_output_name = final_output_name.replace('.npz', '_s5mode.npz')
