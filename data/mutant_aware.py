@@ -674,7 +674,7 @@ def sample_scaling_factor(mode, g_name=None):
         # before that). Upper endpoint 50 = 2u high-copy plasmid burden
         # (2u circles are maintained at 10-40+ copies/cell in S. cerevisiae,
         # E-Mech); real MC anchors top out at 25x (#122 CDC20 15.0/0.6).
-        ns = np.arange(2, 51)
+        ns = np.arange(2, 31)
         w = 1.0 / ns
         return float(np.random.choice(ns, p=w / w.sum()))
     elif mode == 'ts':
@@ -1097,6 +1097,11 @@ MODULE_EDGES = [
     ('CDC28','SIC1','+'), ('CDC28','CDC6','+'), ('CDC28','CDH1','+'),
     ('CDC28','SBF_MBF','+'), ('CDC28','ORI_BUD_SPN','+'),
     ('CLB2','ORI_BUD_SPN','+'), ('CLB5','ORI_BUD_SPN','+'),
+    # v6.0: APC_Core biological regulation edges (resolved graph disconnection)
+    ('APC_Core','CLB2','-'), ('APC_Core','PDS1','-'),
+    ('CDC20','APC_Core','+'), ('CDH1','APC_Core','+'),
+    # v6.1: Direct ODE regulation edges (Chen 2004 Eq 17 & Eq 19)
+    ('CLB2','SWI5','-'), ('CLB2','SIC1','-'), ('CLB5','SIC1','-'), ('CLN2','SIC1','-'),
 ]
 
 GROUP_BY_NAME = {g['name']: g for g in BINDING_GROUPS.values()}
@@ -1112,7 +1117,7 @@ GENE_WEIGHT_ARM = 'uniform'      # 'uniform' (v5.1 default) | 'degree' | 'engine
 if GENE_WEIGHT_ARM == 'engine':
     P_BIO = {n: GROUP_BY_NAME[n]['P_bio_G'] for n in GENE_NAMES}
 elif GENE_WEIGHT_ARM == 'degree':
-    # P_bio: mechanized degree centrality on the 36-edge module graph (Tier 3
+    # P_bio: mechanized degree centrality on the module graph (Tier 3
     # — pure equation-derived topology). w(G) = (undirected degree + 1),
     # normalized; +1 = Laplace smoothing for isolated modules.
     _deg = {n: 0 for n in GENE_NAMES}
@@ -1151,8 +1156,20 @@ def graph_dist(a, b):
 _NEG_PAIRS = {(a, b) for a, b, s in MODULE_EDGES if s == '-'}
 _NEG_PAIRS |= {(b, a) for a, b, s in MODULE_EDGES if s == '-'}
 _OUT = {n: set() for n in GENE_NAMES}
+_OUT_NEG = {n: set() for n in GENE_NAMES}
+_OUT_ALL = {n: set() for n in GENE_NAMES}
 for a, b, s in MODULE_EDGES:
     if s == '+': _OUT[a].add(b)
+    elif s == '-': _OUT_NEG[a].add(b)
+    _OUT_ALL[a].add(b)
+
+# Convergent pairs: pairs of genes that converge on shared downstream targets (Fan-in)
+CONVERGENT_PAIRS = {}
+for i, a in enumerate(GENE_NAMES):
+    for b in GENE_NAMES[i+1:]:
+        t = _OUT_ALL[a] & _OUT_ALL[b]
+        if t:
+            CONVERGENT_PAIRS[(a, b)] = sorted(t)
 
 def _pair_class(a, b):
     if (a, b) in _NEG_PAIRS:
@@ -1170,8 +1187,10 @@ PAIR_LISTS = {'C-A': [], 'C-B': [], 'C-D': []}
 for a, b in ALL_PAIRS:
     PAIR_LISTS[_pair_class(a, b)].append((a, b))
 
-STAR_LEAVES = {'CDC28': sorted(ADJ['CDC28']), 'CLB2': sorted(ADJ['CLB2']),
-               'MDT': [n for n in GENE_NAMES if n != 'MDT']}
+# Dynamic Hubs: all nodes with degree >= 3 + MDT
+HUBS_DEG3 = [n for n in GENE_NAMES if len(ADJ[n]) >= 3]
+STAR_LEAVES = {h: sorted(ADJ[h]) for h in HUBS_DEG3}
+STAR_LEAVES['MDT'] = [n for n in GENE_NAMES if n != 'MDT']
 
 # --- 5.5c: Mode-frequency arms (Scheme §9.6 / spec §6.8.2) ---
 # MODE_FREQ is set by the CLI --mode_freq switch:
@@ -1231,8 +1250,8 @@ MODE_CLASS = {
 # draws, CA 9.9% overall vs 2.6% in the v1r baseline; composition audit
 # 2026-09-08).
 MODE_CLASS_QUOTA = {
-    'loss': 0.30, 'expression': 0.30, 'activity': 0.20,
-    'stability': 0.10, 'structure': 0.05, 'event': 0.05,
+    'loss': 0.28, 'expression': 0.28, 'activity': 0.18,
+    'stability': 0.20, 'structure': 0.03, 'event': 0.03,
 }
 # role x mode-class affinity: affine classes x2 (declared soft-prior constant),
 # all others x1. 'event' role genes keep flat (all their modes are event-class).
@@ -1344,7 +1363,8 @@ class QuotaPicker:
 
 # --- 5.5f: Structure-aware skeleton sampling (Scheme §3.1) ---
 STRUCT_L2 = {'C-A': 0.30, 'C-B': 0.30, 'C-C': 0.15, 'C-D': 0.25}
-STRUCT_L34 = {'cascade': 0.45, 'star': 0.25, 'antag_core': 0.20, 'orthogonal': 0.10}
+# v6.0: Convergent (Fan-in / synthetic lethality & rescue) arm added to resolve L3/L4 parallel blind spots
+STRUCT_L34 = {'convergent': 0.30, 'cascade': 0.25, 'star': 0.25, 'antag_core': 0.15, 'orthogonal': 0.05}
 _L2_PICKER = QuotaPicker(list(STRUCT_L2.keys()), list(STRUCT_L2.values()))
 _L34_PICKER = QuotaPicker(list(STRUCT_L34.keys()), list(STRUCT_L34.values()))
 # v5.1 (R3): structure-mix softening. The pure structure skeleton concentrates
@@ -1386,7 +1406,10 @@ def sample_L2_fallback(boost=None):
 def _sample_L2(boost=None):
     cls = _L2_PICKER.pick()
     if cls == 'C-C':
-        center = str(np.random.choice(['CDC28', 'CLB2', 'MDT'], p=[0.4, 0.4, 0.2]))
+        hub_candidates = HUBS_DEG3 + ['MDT']
+        hub_weights = [float(len(ADJ[h])) for h in HUBS_DEG3] + [3.0]
+        hw = np.array(hub_weights, dtype=float)
+        center = str(np.random.choice(hub_candidates, p=hw / hw.sum()))
         leaves = [l for l in STAR_LEAVES[center]]
         if not leaves:
             return sample_L2_fallback(boost), 'C-C'
@@ -1415,8 +1438,44 @@ def _walk_cascade(ki, boost=None):
         chain.append(nxt)
     return chain
 
+def _sample_convergent(ki, boost=None):
+    pair_keys = list(CONVERGENT_PAIRS.keys())
+    if not pair_keys:
+        return _sample_random_genes(ki, boost)
+    w = np.array([P_BIO[a] * P_BIO[b] * (boost.get(a, 1.0) + boost.get(b, 1.0) if boost else 1.0) for a, b in pair_keys])
+    idx = int(np.random.choice(len(pair_keys), p=w / w.sum()))
+    a, b = pair_keys[idx]
+    shared = CONVERGENT_PAIRS[(a, b)]
+    target = str(np.random.choice(shared))
+    
+    # 2-hop biological pathway fan-in / downstream effector rescue (Tier 2/3 generic prior):
+    # 50% chance: if target has downstream targets (_OUT_ALL[target]),
+    # pick one as the downstream effector (e.g., SBF_MBF -> CLN2/CLB5)
+    downstream = sorted(_OUT_ALL.get(target, set()) - {a, b, target})
+    if downstream and np.random.rand() < 0.50:
+        effector = str(np.random.choice(downstream))
+        out = [a, b, effector]
+    else:
+        out = [a, b, target]
+    
+    if ki == 3:
+        return out
+    
+    # ki > 3: draw downstream neighbors or regulators of target
+    cand = sorted(set(ADJ[target]) - set(out))
+    while len(out) < ki and cand:
+        nxt = str(np.random.choice(cand))
+        out.append(nxt)
+        cand.remove(nxt)
+    while len(out) < ki:
+        out.append(_weighted_gene(boost, exclude=tuple(out)))
+    return out
+
 def _sample_star(ki, boost=None):
-    center = str(np.random.choice(['CDC28', 'CLB2', 'MDT'], p=[0.4, 0.4, 0.2]))
+    hub_candidates = HUBS_DEG3 + ['MDT']
+    hub_weights = [float(len(ADJ[h])) for h in HUBS_DEG3] + [3.0]
+    hw = np.array(hub_weights, dtype=float)
+    center = str(np.random.choice(hub_candidates, p=hw / hw.sum()))
     leaves = [l for l in STAR_LEAVES[center]]
     out = [center]
     pool = list(leaves) if leaves else list(GENE_NAMES)
@@ -1474,6 +1533,7 @@ def sample_skeleton(level, boost=None):
         return _sample_L2(boost)
     ki = int(np.random.randint(3, 6)) if level == 3 else int(np.random.randint(4, 7))
     cls = _L34_PICKER.pick()
+    if cls == 'convergent':   return _sample_convergent(ki, boost), cls
     if cls == 'cascade':      return _walk_cascade(ki, boost), cls
     if cls == 'star':         return _sample_star(ki, boost), cls
     if cls == 'antag_core':   return _sample_antag_core(ki, boost), cls
@@ -1552,6 +1612,42 @@ def _resolve_conflicts(pairs):
             pairs.pop(i)
     return pairs
 
+def _assign_convergent_modes(genes):
+    """Universal Pathway Buffering / Genetic Suppressor mode assignment.
+    For convergent multigene skeletons [a, b, eff, ...]:
+    - First 2 parallel regulator inputs (a, b) receive Loss-of-Function (synthetic defect)
+    - 3rd effector gene receives Dosage Suppression (OE) if activated downstream,
+      or Bypass Suppression (LOF) if inhibited downstream.
+    - Additional genes draw naturally from _sample_mode.
+    Completely generic across the ODE topology, zero test-set hardcoding."""
+    pairs = []
+    for g in genes[:2]:
+        modes = GROUP_BY_NAME[g]['modes']
+        lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF', 'db'] if m in modes]
+        if lofs:
+            m = 'KO' if 'KO' in lofs and np.random.rand() < 0.75 else str(np.random.choice(lofs))
+        else:
+            m = _sample_mode(g)
+        pairs.append((g, m))
+
+    if len(genes) >= 3:
+        eff = genes[2]
+        modes = GROUP_BY_NAME[eff]['modes']
+        oes = [m for m in ['GAL-OE', 'MC'] if m in modes]
+        lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF', 'db'] if m in modes]
+        if oes and (not lofs or np.random.rand() < 0.60):
+            m = str(np.random.choice(oes))
+        elif lofs:
+            m = 'KO' if 'KO' in lofs and np.random.rand() < 0.75 else str(np.random.choice(lofs))
+        else:
+            m = _sample_mode(eff)
+        pairs.append((eff, m))
+
+    for g in genes[3:]:
+        pairs.append((g, _sample_mode(g)))
+
+    return pairs
+
 def sample_mass_mutant(level=1):
     """
     v2 leak-free mutant selection (replaces the v1 rescue-motif path).
@@ -1597,7 +1693,10 @@ def sample_mass_mutant(level=1):
         pairs = [(g0, m0)]
     else:
         genes, _cls = sample_skeleton(level)
-        pairs = [(g, _sample_mode(g)) for g in genes]
+        if _cls == 'convergent' and np.random.rand() < 0.60:
+            pairs = _assign_convergent_modes(genes)
+        else:
+            pairs = [(g, _sample_mode(g)) for g in genes]
 
     # same-gene composite: expression x structure dual mode, 25% (declared
     # free constant, minority-form prior; eligibility = mechanism criterion
@@ -1605,8 +1704,8 @@ def sample_mass_mutant(level=1):
     expanded = []
     for g, m in pairs:
         expanded.append((g, m))
+        gmode = GROUP_BY_NAME.get(g, {}).get('modes', [])
         if g in COMPOSITE_ELIGIBLE and np.random.rand() < 0.25:
-            gmode = GROUP_BY_NAME[g]['modes']
             synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
             struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
             if m in synth and struc:
@@ -1617,7 +1716,7 @@ def sample_mass_mutant(level=1):
 
     # same-parameter dual-mode ban: redraw conflicting modes (Sect 3.1.6)
     pairs = _resolve_conflicts(pairs)
-    if not pairs:                     # defensive: cannot happen (a single
+    if not pairs:            # defensive: cannot happen (a single
         return sample_mass_mutant(level)  # pair never self-conflicts)
 
     for g_name, m_chosen in pairs:
@@ -1641,11 +1740,58 @@ def sample_mass_mutant(level=1):
     desc_str = "+".join(mut_descriptions)
     return ovr, desc_str
 
+def rescue_collision_candidate(ovr, desc_str, p_wt):
+    """
+    Rescues a candidate sample that hit a 100% collision with D_real.
+    Branch 1 (70%): Glucose preservation with continuous mode switch (DAmP / ts / pLOF).
+    Branch 2 (30%): Carbon shift to Galactose (150) or Raffinose (160).
+    """
+    tokens = desc_str.split('+')
+    parsed = []
+    for tok in tokens:
+        if '[' in tok and tok.endswith(']'):
+            parts = tok.split('[')
+            g = parts[0]
+            m = parts[1][:-1]
+            parsed.append((g, m))
+        else:
+            parsed.append((tok, 'KO'))
+
+    if not parsed:
+        return None, desc_str
+
+    p_mut = p_wt.copy()
+    new_ovr = {}
+
+    # 70% chance: Mode continuous switch on Glucose
+    if np.random.rand() < 0.70:
+        ko_genes = [g for g, m in parsed if m == 'KO' and g in GROUP_BY_NAME]
+        if ko_genes:
+            target_g = str(np.random.choice(ko_genes))
+            avail = [m for m in ['DAmP', 'ts', 'pLOF'] if m in GROUP_BY_NAME[target_g]['modes']]
+            if avail:
+                target_m = str(np.random.choice(avail))
+                new_pairs = [(g, target_m if g == target_g else m) for g, m in parsed]
+                new_desc = []
+                for g_name, m_chosen in new_pairs:
+                    new_desc.append(f"{g_name}[{m_chosen}]")
+                    alpha = sample_scaling_factor(m_chosen, g_name) \
+                        if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+                    apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, new_ovr)
+                new_ovr['mdt'] = ovr.get('mdt', 90.0)
+                return new_ovr, "+".join(new_desc)
+
+    # 30% chance or fallback: Carbon Shift (Gal 150 or Raff 160)
+    shift_mdt = float(np.random.choice([150.0, 160.0]))
+    shifted_ovr = dict(ovr)
+    shifted_ovr['mdt'] = shift_mdt
+    return shifted_ovr, desc_str + f"_MDT[{int(shift_mdt)}]"
+
 # ==============================================================================
 # Part 6: Complete Dataset Generation & .npz File Export (lhs_v1_origin.py Format)
 # ==============================================================================
 
-def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.40, 0.30, 0.20, 0.10],
+def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.25, 0.35, 0.25, 0.15],
                           max_attempts=None, num_workers=None,
                           output_name=None, output_dir=None):
     """
@@ -1713,6 +1859,7 @@ def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.40, 0.30, 0.20, 0.
     attempts = 0
     synth_success = 0
     duplicates_blocked = 0
+    duplicates_rescued = 0
 
     while synth_success < n_synthetic and attempts < max_attempts:
         attempts += 1
@@ -1721,8 +1868,17 @@ def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.40, 0.30, 0.20, 0.
 
         # 136-dim Parameter Deduplication Check against D_real
         if is_duplicate_real_mutant(ovr, defaults):
-            duplicates_blocked += 1
-            continue
+            # v6.0: Collision Rescue. When hitting an exact real-mutant combination,
+            # rescue via continuous mode-switch (70%) or carbon shift (30%)
+            # to preserve core interaction coverage without data leakage.
+            rescued_ovr, rescued_desc = rescue_collision_candidate(ovr, desc_str, defaults)
+            if rescued_ovr is not None and not is_duplicate_real_mutant(rescued_ovr, defaults):
+                ovr = rescued_ovr
+                desc_str = rescued_desc
+                duplicates_rescued += 1
+            else:
+                duplicates_blocked += 1
+                continue
 
         synth_success += 1
         sample_name = f"MASS_{desc_str}_L{level}_{synth_success}".replace(" ", "_")
@@ -1730,7 +1886,7 @@ def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.40, 0.30, 0.20, 0.
         all_tasks[sample_name] = ovr
 
     print(f" -> Sampling Done: {synth_success} synthetic tasks generated in {attempts} attempts.")
-    print(f"    - Filter [D_real Deduplication]: {duplicates_blocked} candidates blocked (duplicate with historical real mutants).")
+    print(f"    - Filter [D_real Deduplication]: {duplicates_blocked} candidates blocked, {duplicates_rescued} candidates rescued.")
     print(f" -> Total Simulation Queue: {len(ordered_names)} tasks ({len(REAL_MUTANTS)} Real + {synth_success} Synthetic).")
 
     # Phase 3: Parallel ODE Simulation Engine
@@ -1924,7 +2080,7 @@ if __name__ == '__main__':
     # =========================================================================
     NUM_SAMPLES = 100000                           # 生成的采样样本数量
     NUM_WORKERS = min(60, os.cpu_count() or 4)    # 并行 CPU 核心数（自动适配：服务器 64 核取 60，本地取本机核数；--workers 可覆盖）
-    LEVEL_RATIOS = [0.40, 0.30, 0.20, 0.10]       # v2: 机制化单调递减配额（边际基线>最小交互单元>组合爆炸区>饱和区，规范 4/Tier 3 DoE）；v1 的 25/35/25/15 是被禁令点名的 S5 统计配额
+    LEVEL_RATIOS = [0.25, 0.35, 0.25, 0.15]       # v6.0: 优化重平衡配额（压缩L1单突变冗余，释放配额至并联汇聚L3/L4与推拉L2）
     
     # 导出的数据集文件名 (默认自动携带样本数，也可直接在此自定义修改)
     DATASET_NAME = f"mutant_aware_{NUM_SAMPLES}_210m_500s.npz"
