@@ -36,6 +36,12 @@ DATASET_MUTANT_AWARE_100000="${DATA_DIR}/mutant_aware_100000_210m_500s.npz"
 DATASET_MUTANT_AWARE_100000_ROLE="${DATA_DIR}/mutant_aware_100000_210m_500s_rolemode.npz"
 # MASS Mutant-Aware 100,000 Leak-Level 数据集 (mutant_aware.py: 40/30/20/10 level 配额采样 + 126 Real Mutants)
 DATASET_MUTANT_AWARE_100000_LEAKLEVEL="${DATA_DIR}/mutant_aware_100000_leaklevel_210m_500s.npz"
+# MASS k-DPP Gated 100,000 V2 数据集 (generate_kdpp_gated_dataset.py: 图拉普拉斯扩散 k-DPP + 吸引子门控均衡 V2版, 75.1分最优配比 20/40/25/15)
+DATASET_KDPP_GATED_V2_100000="${DATA_DIR}/kdpp_gated_100000_210m_500s.npz"
+# MASS k-DPP Curv Gated 100,000 数据集 (generate_kdpp_curv_gated_dataset.py: 符号有向图拉普拉斯 k-DPP + 相空间曲率门控融合版)
+DATASET_KDPP_CURV_GATED_100000="${DATA_DIR}/kdpp_curv_gated_100000_210m_500s.npz"
+# MASS BAMS 100,000 数据集 (bams_dataset_generator.py: 基尔霍夫符号流守恒 + 闭环数值分岔二分逼近, 93.6分顶级无泄露数据集)
+DATASET_BAMS_100000="${DATA_DIR}/bams_100000_210m_500s.npz"
 # MASS 100,000 数据集 (含生物救援基序 Motif, 10万样本全量高精数据集)
 DATASET_MASS_100000="${DATA_DIR}/mass_100000_dataset_210min_500steps_dual_labels.npz"
 # MASS 100,000 Random 数据集 (无 Motif 纯随机基线, 10万样本对照数据集)
@@ -100,8 +106,32 @@ EXPERIMENTS=(
     # GPU 1: biom_refiner_plus 在 Leak-Level (分层等级配额采样) 数据集上的实验
     #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_LEAKLEVEL} mutant_aware_leaklevel_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
-    # GPU 0 (备选基准): biom_refiner_plus 在 Flat 默认数据集上的实验
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # GPU 6 (已完成基准): biom_refiner_plus 在 Flat 默认数据集上的实验
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 6"
+
+    # GPU 0: 👑 全新因果机制旗舰 - biom_refiner_causal_plus (Causal Adapter + Curvature + Pyramid + Graph Attention) [正在运行 Epoch 81+]
+    #"biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # ====== 🏆🏆🏆 全新 Graph Diffusion k-DPP Gated V2 (75.1分最优配比) 100,000 实验 (已完成) 🏆🏆🏆 ======
+    # GPU 4: 👑 旗舰粗精细化算子 - biom_refiner_plus 在 k-DPP Gated V2 数据集上的实验
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_KDPP_GATED_V2_100000} kdpp_gated_v2_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
+
+    # GPU 5: 👑 全新因果机制旗舰 - biom_refiner_causal_plus 在 k-DPP Gated V2 数据集上的实验
+    #"biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_KDPP_GATED_V2_100000} kdpp_gated_v2_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 5"
+
+    # ====== 🚀🚀🚀 全新 Signed k-DPP + Phase-Space Curvature Gated (方案 A+B 融合旗舰) 100,000 实验 🚀🚀🚀 ======
+    # GPU 4: 👑 旗舰粗精细化算子 - biom_refiner_plus 在 kdpp_curv_gated 数据集上的实验
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_KDPP_CURV_GATED_100000} kdpp_curv_gated_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # GPU 5: 👑 全新因果机制旗舰 - biom_refiner_causal_plus 在 kdpp_curv_gated 数据集上的实验
+    #"biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_KDPP_CURV_GATED_100000} kdpp_curv_gated_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # ====== 🏆🏆🏆 全新 BAMS 100,000 (93.6分 顶级无泄露数据集) 实验 🏆🏆🏆 ======
+    # GPU 5: 👑 旗舰粗精细化算子 - biom_refiner_plus 在 BAMS 100k 数据集上的实验
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_100000} bams_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # GPU 6: 👑 全新因果机制旗舰 - biom_refiner_causal_plus 在 BAMS 100k 数据集上的实验
+    "biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_BAMS_100000} bams_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} random100k_blind_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
 

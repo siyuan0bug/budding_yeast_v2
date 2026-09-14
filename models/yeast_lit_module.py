@@ -26,6 +26,9 @@ from budding_yeast_v2.models.components import (
     BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly,
     BioRefiner, BioRefinerCurvature,
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
+    BioRefinerCausalBase, BioRefinerCausalCurvature,
+    BioRefinerCausalPyramid, BioRefinerCausalGraph,
+    BioRefinerCausalPlus, BioRefinerCausal,
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual,
     FNO1d_Standard, UNet1d, GalerkinTransformer1d,
     CNO1d, MWT1d, Transolver1d, DPOT1d
@@ -93,6 +96,15 @@ MODEL_REGISTRY = {
     'biom_refiner_graph': BioRefinerGraph,
     'biom_refiner_graph_attn': BioRefinerGraph,
     'biom_refiner_plus': BioRefinerPlus,
+    'biom_refiner_causal_base': BioRefinerCausalBase,
+    'biom_refiner_causal_curvature': BioRefinerCausalCurvature,
+    'biom_refiner_causal_curv': BioRefinerCausalCurvature,
+    'biom_refiner_causal_pyramid': BioRefinerCausalPyramid,
+    'biom_refiner_causal_pyr': BioRefinerCausalPyramid,
+    'biom_refiner_causal_graph': BioRefinerCausalGraph,
+    'biom_refiner_causal_graph_attn': BioRefinerCausalGraph,
+    'biom_refiner_causal_plus': BioRefinerCausalPlus,
+    'biom_refiner_causal': BioRefinerCausal,
     'hano': HANO,
     'hano_no_event': HANO_NoEvent,
     'hano_no_flux': HANO_NoFlux,
@@ -142,7 +154,7 @@ class YeastLitModule(pl.LightningModule):
         self.save_hyperparameters()
 
         # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
-        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus'):
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal'):
             adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
             if os.path.exists(adj_path):
                 adj_matrix = np.load(adj_path)
@@ -231,10 +243,15 @@ class YeastLitModule(pl.LightningModule):
                             'biom_event', 'biom_titration', 'biom_pathway',
                             'biom_refiner', 'bio_refiner',
                             'biom_refiner_curvature', 'biom_refiner_curv',
-                            'biom_refiner_pyramid', 'biom_refiner_pyr'):
+                            'biom_refiner_pyramid', 'biom_refiner_pyr',
+                            'biom_refiner_causal_base',
+                            'biom_refiner_causal_curvature', 'biom_refiner_causal_curv',
+                            'biom_refiner_causal_pyramid', 'biom_refiner_causal_pyr'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks)
-        elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus'):
+        elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
+                            'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn',
+                            'biom_refiner_causal_plus', 'biom_refiner_causal'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks,
                                     adj_matrix=adj_matrix)
