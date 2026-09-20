@@ -30,7 +30,8 @@ from .bio_mechanistic_operator import (
 from .bio_refiner import BioRefiner
 from .bio_refiner_plus import (
     BioRefinerBase, BioRefinerCurvature,
-    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus
+    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
+    BioRefinerBifurcate, BioRefinerGraphFlux, BioRefinerMechanistic
 )
 from .bio_refiner_causal import (
     CausalMutantAdapter,
@@ -38,6 +39,7 @@ from .bio_refiner_causal import (
     BioRefinerCausalPyramid, BioRefinerCausalGraph,
     BioRefinerCausalPlus, BioRefinerCausal
 )
+from .bio_refiner_dynamic_causal import BioRefinerDynamicCausalPlus
 from .hano import (
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
 )

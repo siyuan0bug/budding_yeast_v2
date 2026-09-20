@@ -21,3 +21,8 @@ eval_result/
 eval_results*/
 /eval_result/**
 /eval_results*/**
+
+# --- AI 测试与临时探针脚本 ---
+tests/
+scratch_*.py
+data/test_*.py

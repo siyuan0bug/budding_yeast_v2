@@ -241,6 +241,17 @@ def main():
                         choices=['variance', 'entropy'],
                         help="不确定性度量方法 (variance=预测方差, entropy=预测熵)")
 
+    # 机制与分岔增强超参数 (方案 A, 方案 C, 方案 A+C)
+    parser.add_argument('--lambda_pattern', type=float, default=0.1,
+                        help="Pattern 表型分类交叉熵损失权重 (默认 0.1)")
+    parser.add_argument('--lambda_arrest', type=float, default=0.05,
+                        help="Pattern C 阻滞态末端平坦稳态正则权重 (默认 0.05)")
+    parser.add_argument('--pino_event_strategy', type=str, default='decoupled',
+                        choices=['decoupled', 'huber', 'full'],
+                        help="PINO ODE 残差处理 Event 跳变策略 (decoupled=33连续变量, huber=Huber截断, full=传统平方)")
+    parser.add_argument('--huber_delta', type=float, default=1.0,
+                        help="PINO 鲁棒 Huber 损失截断阈值 delta (默认 1.0)")
+
     # 实验管理与目录参数
     parser.add_argument('--exp_root', type=str, default='./experiments',
                         help='统一分层实验根目录 (默认 ./experiments)')
@@ -326,6 +337,10 @@ def main():
             event_weight=args.event_weight,
             lambda_h1=args.lambda_h1,
             h1_beta=args.h1_beta,
+            lambda_pattern=args.lambda_pattern,
+            lambda_arrest=args.lambda_arrest,
+            pino_event_strategy=args.pino_event_strategy,
+            huber_delta=args.huber_delta,
             rollout_type=args.rollout_type,
         )
 

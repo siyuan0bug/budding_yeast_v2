@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from .bio_mechanistic_operator import BioMechPathwayOnly
+from .bio_hetero_causal_graph import BioMutationFluxEncoder, load_multirelational_graphs
 
 
 # =========================================================================
@@ -131,6 +132,52 @@ class StoichiometricGraphAttention(nn.Module):
         return h + h_attn
 
 
+class DynamicReactionFluxGraphAttention(StoichiometricGraphAttention):
+    """
+    Reaction Flux Guided Cross-Variable Attention across 39 Biochemical Species.
+    Dynamically modulates the 6 relational graphs (Complex, Kinase, Phosphatase,
+    Transcription, Ubiquitination, GK-Switch) based on sample-specific kinetic mutation fluxes.
+    """
+    def __init__(self, channels=128, num_vars=39, head_dim=16, adj_matrix=None):
+        super().__init__(channels=channels, num_vars=num_vars, head_dim=head_dim, adj_matrix=adj_matrix)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        npz_path = os.path.join(current_dir, "../../data/yeast_multirelational_graphs.npz")
+        if os.path.exists(npz_path):
+            data = np.load(npz_path)
+            rel_graphs = torch.from_numpy(data['rel_graphs']).float()  # (6, 39, 39)
+        else:
+            rel_graphs = torch.zeros(6, 39, 39)
+            for r in range(6):
+                rel_graphs[r] = torch.eye(39)
+        self.register_buffer('rel_graphs', rel_graphs)
+
+    def forward(self, h, flux_w=None):
+        if flux_w is None:
+            return super().forward(h)
+        return self.forward_flux(h, flux_w)
+
+    def forward_flux(self, h, flux_w):
+        B, C, T = h.shape
+        h_t = h.permute(0, 2, 1)  # (B, T, channels)
+        vars_feat = self.to_vars(h_t).reshape(B, T, self.num_vars, self.head_dim)  # (B, T, 39, 16)
+
+        Q = self.q_proj(vars_feat)  # (B, T, 39, 16)
+        K = self.k_proj(vars_feat)  # (B, T, 39, 16)
+        V = self.v_proj(vars_feat)  # (B, T, 39, 16)
+
+        attn_raw = torch.matmul(Q, K.transpose(-1, -2)) / (self.head_dim ** 0.5)  # (B, T, 39, 39)
+
+        # flux_w: (B, 6), rel_graphs: (6, 39, 39)
+        dynamic_adj = torch.einsum('br,rvw->bvw', flux_w, self.rel_graphs.to(h.device))  # (B, 39, 39)
+        dynamic_adj = dynamic_adj + torch.eye(self.num_vars, device=h.device).unsqueeze(0)
+        dynamic_norm = dynamic_adj / dynamic_adj.sum(dim=-1, keepdim=True).clamp(min=1.0)
+
+        attn = F.softmax(attn_raw + 0.5 * dynamic_norm.unsqueeze(1), dim=-1)  # (B, T, 39, 39)
+        out_vars = torch.matmul(attn, V).reshape(B, T, self.num_vars * self.head_dim)
+        h_attn = self.from_vars(out_vars).permute(0, 2, 1)
+        return h + h_attn
+
+
 # =========================================================================
 # 4. 统一 Stage 2 Refiner: 支持任意子模块消融开关
 # =========================================================================
@@ -178,13 +225,16 @@ class ModularStiffRefiner(nn.Module):
             nn.Conv1d(width, num_vars, kernel_size=1)
         )
 
-    def forward(self, z, p):
+    def forward(self, z, p, flux_w=None):
         # z: (B, in_channels, T), p: (B, 141)
         h = self.stem(z)
         for block in self.blocks:
             h = block(h, p)
         if self.graph_attn is not None:
-            h = self.graph_attn(h)
+            if flux_w is not None and hasattr(self.graph_attn, 'forward_flux'):
+                h = self.graph_attn.forward_flux(h, flux_w)
+            else:
+                h = self.graph_attn(h)
         delta_y = self.head(h)
         return delta_y
 
@@ -306,3 +356,205 @@ class BioRefinerPlus(BioRefinerBase):
     """终极大融合旗舰: 三大子方向全开 (Curvature + Pyramid + Graph Attention)"""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, use_curvature=True, use_pyramid=True, use_graph_attn=True, **kwargs)
+
+
+# =========================================================================
+# 7. 机制与分岔增强新架构 (方案 A, 方案 B, 方案 A+B)
+# =========================================================================
+class BioRefinerBifurcate(BioRefinerBase):
+    """
+    方案 A: 两阶段分岔解耦模型 (表型分类前置 + 分岔表征注入)
+    - 增加轻量级 MLP 分类头 pattern_head，从 141 维动力学参数预测 Pattern A/B/C 分岔分类
+    - 将分岔概率表征投影注入 Stage 2 Refiner，防止阻滞态产生恶性伪振荡
+    - 支持返回 pattern_logits 供多任务表型交叉熵联合训练
+    """
+    def __init__(self, *args, num_vars=39, width=128, modes=32, param_dim=141, n_blocks=4, **kwargs):
+        super().__init__(
+            *args, num_vars=num_vars, width=width, modes=modes, param_dim=param_dim,
+            n_blocks=n_blocks, use_curvature=True, use_pyramid=True, use_graph_attn=True, **kwargs
+        )
+        self.pattern_head = nn.Sequential(
+            nn.Linear(param_dim, 64),
+            nn.GELU(),
+            nn.Linear(64, 32),
+            nn.GELU(),
+            nn.Linear(32, 3)
+        )
+        self.pattern_proj = nn.Linear(3, param_dim)
+
+    def forward(self, x, p, return_coarse=False, return_pattern=False):
+        pattern_logits = self.pattern_head(p)  # (B, 3)
+        pattern_probs = F.softmax(pattern_logits, dim=-1)
+        p_refined = p + self.pattern_proj(pattern_probs)
+
+        if x.dim() == 4:
+            B, V, F_in, T = x.shape
+            x_in = x.reshape(B, V * F_in, T)
+        else:
+            B, V, T = x.shape
+            time_grid = torch.linspace(0, 1, T, device=x.device).view(1, 1, T).repeat(B, V, 1)
+            x_in = torch.cat([x, time_grid], dim=1)
+
+        y_coarse = self.stage1_coarse(x, p)
+        dy_coarse = self._compute_1st_derivative(y_coarse)
+
+        if self.use_curvature:
+            d2y_coarse = self._compute_2nd_derivative(y_coarse)
+            z_refine = torch.cat([y_coarse, dy_coarse, d2y_coarse, x_in], dim=1)
+        else:
+            z_refine = torch.cat([y_coarse, dy_coarse, x_in], dim=1)
+
+        delta_y = self.stage2_refiner(z_refine, p_refined)
+        y_final = y_coarse + torch.tanh(self.gamma) * delta_y
+
+        if return_pattern:
+            if return_coarse:
+                return y_final, y_coarse, pattern_logits
+            return y_final, pattern_logits
+
+        if return_coarse:
+            return y_final, y_coarse
+        return y_final
+
+
+class BioRefinerGraphFlux(BioRefinerBase):
+    """
+    方案 B: 机制感知架构 (生化图路由替代全局扁平 FiLM)
+    - 引入 BioMutationFluxEncoder 将 141 维动力学参数编码为 6 种反应通量权重与 27 个基因活性
+    - 结合 27x39 基因二部图将扰动直接投影至各生化分子通道
+    - 采用 DynamicReactionFluxGraphAttention 实现通量自适应局部生化消息路由
+    """
+    def __init__(self, *args, num_vars=39, width=128, modes=32, param_dim=141, n_blocks=4, **kwargs):
+        super().__init__(
+            *args, num_vars=num_vars, width=width, modes=modes, param_dim=param_dim,
+            n_blocks=n_blocks, use_curvature=True, use_pyramid=True, use_graph_attn=True, **kwargs
+        )
+        self.flux_encoder = BioMutationFluxEncoder(param_dim=param_dim, hidden_dim=64)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        npz_path = os.path.join(current_dir, "../../data/yeast_multirelational_graphs.npz")
+        if os.path.exists(npz_path):
+            data = np.load(npz_path)
+            gene_bipartite = torch.from_numpy(data['gene_bipartite']).float()  # (27, 39)
+        else:
+            gene_bipartite = torch.zeros(27, 39)
+        self.register_buffer('gene_bipartite', gene_bipartite)
+
+        self.stage2_refiner.graph_attn = DynamicReactionFluxGraphAttention(
+            channels=width, num_vars=num_vars
+        )
+        self.flux_proj = nn.Sequential(
+            nn.Linear(6 + 39, 64),
+            nn.GELU(),
+            nn.Linear(64, param_dim)
+        )
+
+    def forward(self, x, p, return_coarse=False):
+        flux_w, gene_act = self.flux_encoder(p)
+        species_flux = torch.matmul(gene_act, self.gene_bipartite.to(p.device))  # (B, 39)
+        mech_feat = torch.cat([flux_w, species_flux], dim=-1)
+        p_mech = p + self.flux_proj(mech_feat)
+
+        if x.dim() == 4:
+            B, V, F_in, T = x.shape
+            x_in = x.reshape(B, V * F_in, T)
+        else:
+            B, V, T = x.shape
+            time_grid = torch.linspace(0, 1, T, device=x.device).view(1, 1, T).repeat(B, V, 1)
+            x_in = torch.cat([x, time_grid], dim=1)
+
+        y_coarse = self.stage1_coarse(x, p_mech)
+        dy_coarse = self._compute_1st_derivative(y_coarse)
+
+        if self.use_curvature:
+            d2y_coarse = self._compute_2nd_derivative(y_coarse)
+            z_refine = torch.cat([y_coarse, dy_coarse, d2y_coarse, x_in], dim=1)
+        else:
+            z_refine = torch.cat([y_coarse, dy_coarse, x_in], dim=1)
+
+        delta_y = self.stage2_refiner(z_refine, p_mech, flux_w=flux_w)
+        y_final = y_coarse + torch.tanh(self.gamma) * delta_y
+
+        if return_coarse:
+            return y_final, y_coarse
+        return y_final
+
+
+class BioRefinerMechanistic(BioRefinerBase):
+    """
+    方案 A + B 全融合机制旗舰模型:
+    1. 分岔先验: 轻量级 Pattern 分类头预测 A/B/C 表型，分岔概率调制 Stage 2 参数
+    2. 反应通量路由: BioMutationFluxEncoder 提取 6-relation flux + 27-gene activity + 39-species perturbation
+    3. 动态拓扑注意力: DynamicReactionFluxGraphAttention 根据突变通量动态缩放生化图连接
+    4. 二阶相空间曲率 + 多尺度时间金字塔 + 双阶粗精细化门控
+    """
+    def __init__(self, *args, num_vars=39, width=128, modes=32, param_dim=141, n_blocks=4, **kwargs):
+        super().__init__(
+            *args, num_vars=num_vars, width=width, modes=modes, param_dim=param_dim,
+            n_blocks=n_blocks, use_curvature=True, use_pyramid=True, use_graph_attn=True, **kwargs
+        )
+        self.pattern_head = nn.Sequential(
+            nn.Linear(param_dim, 64),
+            nn.GELU(),
+            nn.Linear(64, 32),
+            nn.GELU(),
+            nn.Linear(32, 3)
+        )
+        self.pattern_proj = nn.Linear(3, param_dim)
+
+        self.flux_encoder = BioMutationFluxEncoder(param_dim=param_dim, hidden_dim=64)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        npz_path = os.path.join(current_dir, "../../data/yeast_multirelational_graphs.npz")
+        if os.path.exists(npz_path):
+            data = np.load(npz_path)
+            gene_bipartite = torch.from_numpy(data['gene_bipartite']).float()
+        else:
+            gene_bipartite = torch.zeros(27, 39)
+        self.register_buffer('gene_bipartite', gene_bipartite)
+
+        self.stage2_refiner.graph_attn = DynamicReactionFluxGraphAttention(
+            channels=width, num_vars=num_vars
+        )
+        self.flux_proj = nn.Sequential(
+            nn.Linear(6 + 39, 64),
+            nn.GELU(),
+            nn.Linear(64, param_dim)
+        )
+
+    def forward(self, x, p, return_coarse=False, return_pattern=False):
+        pattern_logits = self.pattern_head(p)
+        pattern_probs = F.softmax(pattern_logits, dim=-1)
+
+        flux_w, gene_act = self.flux_encoder(p)
+        species_flux = torch.matmul(gene_act, self.gene_bipartite.to(p.device))
+        mech_feat = torch.cat([flux_w, species_flux], dim=-1)
+
+        p_refined = p + self.pattern_proj(pattern_probs) + self.flux_proj(mech_feat)
+
+        if x.dim() == 4:
+            B, V, F_in, T = x.shape
+            x_in = x.reshape(B, V * F_in, T)
+        else:
+            B, V, T = x.shape
+            time_grid = torch.linspace(0, 1, T, device=x.device).view(1, 1, T).repeat(B, V, 1)
+            x_in = torch.cat([x, time_grid], dim=1)
+
+        y_coarse = self.stage1_coarse(x, p)
+        dy_coarse = self._compute_1st_derivative(y_coarse)
+
+        if self.use_curvature:
+            d2y_coarse = self._compute_2nd_derivative(y_coarse)
+            z_refine = torch.cat([y_coarse, dy_coarse, d2y_coarse, x_in], dim=1)
+        else:
+            z_refine = torch.cat([y_coarse, dy_coarse, x_in], dim=1)
+
+        delta_y = self.stage2_refiner(z_refine, p_refined, flux_w=flux_w)
+        y_final = y_coarse + torch.tanh(self.gamma) * delta_y
+
+        if return_pattern:
+            if return_coarse:
+                return y_final, y_coarse, pattern_logits
+            return y_final, pattern_logits
+
+        if return_coarse:
+            return y_final, y_coarse
+        return y_final

@@ -26,9 +26,11 @@ from budding_yeast_v2.models.components import (
     BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly,
     BioRefiner, BioRefinerCurvature,
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
+    BioRefinerBifurcate, BioRefinerGraphFlux, BioRefinerMechanistic,
     BioRefinerCausalBase, BioRefinerCausalCurvature,
     BioRefinerCausalPyramid, BioRefinerCausalGraph,
     BioRefinerCausalPlus, BioRefinerCausal,
+    BioRefinerDynamicCausalPlus,
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual,
     FNO1d_Standard, UNet1d, GalerkinTransformer1d,
     CNO1d, MWT1d, Transolver1d, DPOT1d
@@ -96,6 +98,9 @@ MODEL_REGISTRY = {
     'biom_refiner_graph': BioRefinerGraph,
     'biom_refiner_graph_attn': BioRefinerGraph,
     'biom_refiner_plus': BioRefinerPlus,
+    'biom_refiner_bifurcate': BioRefinerBifurcate,
+    'biom_refiner_graph_flux': BioRefinerGraphFlux,
+    'biom_refiner_mechanistic': BioRefinerMechanistic,
     'biom_refiner_causal_base': BioRefinerCausalBase,
     'biom_refiner_causal_curvature': BioRefinerCausalCurvature,
     'biom_refiner_causal_curv': BioRefinerCausalCurvature,
@@ -105,6 +110,8 @@ MODEL_REGISTRY = {
     'biom_refiner_causal_graph_attn': BioRefinerCausalGraph,
     'biom_refiner_causal_plus': BioRefinerCausalPlus,
     'biom_refiner_causal': BioRefinerCausal,
+    'biom_refiner_dynamic_causal_plus': BioRefinerDynamicCausalPlus,
+    'biom_refiner_dynamic_causal': BioRefinerDynamicCausalPlus,
     'hano': HANO,
     'hano_no_event': HANO_NoEvent,
     'hano_no_flux': HANO_NoFlux,
@@ -147,6 +154,11 @@ class YeastLitModule(pl.LightningModule):
         # PINO 损失相关超参数 (loss_type='pino' 时生效)
         lambda_h1=0.1,
         h1_beta=1.0,
+        # 机制增强与分岔损失超参数 (方案 A, 方案 C, 方案 A+C)
+        lambda_pattern=0.1,
+        lambda_arrest=0.05,
+        pino_event_strategy='decoupled',
+        huber_delta=1.0,
         # 自回归滚动选项
         rollout_type='one_time',  # 'one_time' (默认, 一次性预测) 或 'autoregressive' (自回归滚动)
     ):
@@ -154,7 +166,7 @@ class YeastLitModule(pl.LightningModule):
         self.save_hyperparameters()
 
         # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
-        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal'):
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal'):
             adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
             if os.path.exists(adj_path):
                 adj_matrix = np.load(adj_path)
@@ -250,8 +262,10 @@ class YeastLitModule(pl.LightningModule):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks)
         elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
+                            'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic',
                             'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn',
-                            'biom_refiner_causal_plus', 'biom_refiner_causal'):
+                            'biom_refiner_causal_plus', 'biom_refiner_causal',
+                            'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks,
                                     adj_matrix=adj_matrix)
@@ -266,20 +280,41 @@ class YeastLitModule(pl.LightningModule):
                          'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw',
                          'triple_dynamic', 'hybrid_phase_dtw'):
             self.criterion = loss_class()
-        elif loss_type in ('pinn_residual', 'pino'):
+        elif loss_type == 'hybrid_bifurcate':
+            self.criterion = loss_class(lambda_pattern=lambda_pattern, lambda_arrest=lambda_arrest)
+        elif loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
             # 创建占位实例以在 ModelSummary 中显示损失类型
             # 真实参数在 on_train_start 中用 datamodule 统计量重建
             dummy_mean = torch.zeros(1, num_vars, 1)
             dummy_std = torch.ones(1, num_vars, 1)
             dummy_p_mean = torch.zeros(1, param_dim)
             dummy_p_std = torch.ones(1, param_dim)
+            pinn_kwargs = {
+                't_max': 210.0,
+                'lambda_phys': lambda_phys,
+                'lambda_jump': lambda_jump,
+                'lambda_penalty': lambda_penalty,
+                'event_window': event_window,
+                'event_tol': event_tol,
+                'jump_ratio': jump_ratio,
+                'residual_subsample': residual_subsample,
+                'event_weight': event_weight,
+            }
+            if loss_type == 'pino':
+                pinn_kwargs.update({'lambda_h1': lambda_h1, 'h1_beta': h1_beta})
+            elif loss_type in ('hybrid_pino_colloc', 'hybrid_all'):
+                pinn_kwargs.update({
+                    'event_strategy': pino_event_strategy,
+                    'huber_delta': huber_delta,
+                })
+                if loss_type == 'hybrid_all':
+                    pinn_kwargs.update({
+                        'lambda_pattern': lambda_pattern,
+                        'lambda_arrest': lambda_arrest,
+                    })
             self.criterion = loss_class(
                 dummy_mean, dummy_std, dummy_p_mean, dummy_p_std,
-                t_max=210.0, lambda_phys=lambda_phys, lambda_jump=lambda_jump,
-                event_window=event_window, event_tol=event_tol,
-                jump_ratio=jump_ratio, residual_subsample=residual_subsample,
-                event_weight=event_weight,
-                **({'lambda_h1': lambda_h1, 'h1_beta': h1_beta} if loss_type == 'pino' else {}),
+                **pinn_kwargs
             )
         else:
             self.criterion = None
@@ -312,23 +347,42 @@ class YeastLitModule(pl.LightningModule):
             dm = self.trainer.datamodule
             loss_type = self.hparams.loss_type
             loss_class = LOSS_REGISTRY[loss_type]
-            if loss_type in ('pinn_residual', 'pino'):
+            if loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
                 # 用 datamodule 真实统计量重建（替换 __init__ 中的占位实例）
+                pinn_kwargs = {
+                    't_max': float(dm.t_max),
+                    'lambda_phys': self.hparams.lambda_phys,
+                    'lambda_jump': self.hparams.lambda_jump,
+                    'lambda_penalty': self.hparams.lambda_penalty,
+                    'event_window': self.hparams.event_window,
+                    'event_tol': self.hparams.event_tol,
+                    'jump_ratio': self.hparams.jump_ratio,
+                    'residual_subsample': self.hparams.residual_subsample,
+                    'event_weight': self.hparams.event_weight,
+                }
+                if loss_type == 'pino':
+                    pinn_kwargs.update({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta})
+                elif loss_type in ('hybrid_pino_colloc', 'hybrid_all'):
+                    pinn_kwargs.update({
+                        'event_strategy': self.hparams.pino_event_strategy,
+                        'huber_delta': self.hparams.huber_delta,
+                    })
+                    if loss_type == 'hybrid_all':
+                        pinn_kwargs.update({
+                            'lambda_pattern': self.hparams.lambda_pattern,
+                            'lambda_arrest': self.hparams.lambda_arrest,
+                        })
                 self.criterion = loss_class(
                     dm.mean_y.to(self.device),
                     dm.std_y.to(self.device),
                     dm.p_mean.to(self.device),
                     dm.p_std.to(self.device),
-                    t_max=float(dm.t_max),
-                    lambda_phys=self.hparams.lambda_phys,
-                    lambda_jump=self.hparams.lambda_jump,
-                    lambda_penalty=self.hparams.lambda_penalty,
-                    event_window=self.hparams.event_window,
-                    event_tol=self.hparams.event_tol,
-                    jump_ratio=self.hparams.jump_ratio,
-                    residual_subsample=self.hparams.residual_subsample,
-                    event_weight=self.hparams.event_weight,
-                    **({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta} if loss_type == 'pino' else {}),
+                    **pinn_kwargs
+                )
+            elif loss_type == 'hybrid_bifurcate':
+                self.criterion = loss_class(
+                    lambda_pattern=self.hparams.lambda_pattern,
+                    lambda_arrest=self.hparams.lambda_arrest
                 )
             elif self.criterion is None:
                 if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel',
@@ -406,16 +460,21 @@ class YeastLitModule(pl.LightningModule):
         return trajectory
 
     def training_step(self, batch, batch_idx):
-        x, p, y = batch
+        if len(batch) == 4:
+            x, p, y, pat_id = batch
+        else:
+            x, p, y = batch
+            pat_id = None
 
-        lam_pen, lam_sm = get_curriculum_weights(self.current_epoch, self.max_epochs)
+        curr_ep = getattr(self, 'current_epoch', 0)
+        lam_pen, lam_sm = get_curriculum_weights(curr_ep, self.max_epochs)
 
         weights = torch.ones(len(x), dtype=torch.float32, device=self.device)
 
         if self.hparams.model_name.startswith('hano') and self.training:
             out_full, aux = self.model(x, p, return_aux=True)
-            if self.hparams.loss_type in ('pinn_residual', 'pino'):
-                self.criterion.set_epoch(self.current_epoch)
+            if self.hparams.loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
+                self.criterion.set_epoch(curr_ep)
                 loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
             else:
                 loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
@@ -433,25 +492,48 @@ class YeastLitModule(pl.LightningModule):
                 self.log('train_event_loss', ev_loss, on_step=False, on_epoch=True,
                          prog_bar=True, sync_dist=True)
         elif self.hparams.model_name.startswith(('biom_refiner', 'bio_refiner')) and self.training:
-            out_full, out_coarse = self.model(x, p, return_coarse=True)
-            loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm)
-            loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm)
-            loss = loss_final + 0.3 * loss_coarse
+            pattern_logits = None
+            if hasattr(self.model, 'pattern_head'):
+                out_full, out_coarse, pattern_logits = self.model(x, p, return_coarse=True, return_pattern=True)
+            else:
+                out_full, out_coarse = self.model(x, p, return_coarse=True)
+
+            if self.hparams.loss_type == 'hybrid_bifurcate':
+                loss_final = self.criterion(out_full, y, pattern_logits=pattern_logits, pattern_targets=pat_id)
+                loss_coarse = self.criterion(out_coarse, y, pattern_logits=None, pattern_targets=None)
+                loss = loss_final + 0.3 * loss_coarse
+            elif self.hparams.loss_type == 'hybrid_pino_colloc':
+                self.criterion.set_epoch(curr_ep)
+                loss_final = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
+                loss_coarse = self.criterion(out_coarse, y, p, weights, lam_pen, lam_sm)
+                loss = loss_final + 0.3 * loss_coarse
+            elif self.hparams.loss_type == 'hybrid_all':
+                self.criterion.set_epoch(curr_ep)
+                loss_final = self.criterion(out_full, y, p, weights, lam_pen, lam_sm,
+                                            pattern_logits=pattern_logits, pattern_targets=pat_id)
+                loss_coarse = self.criterion(out_coarse, y, p, weights, lam_pen, lam_sm,
+                                             pattern_logits=None, pattern_targets=None)
+                loss = loss_final + 0.3 * loss_coarse
+            elif self.hparams.loss_type in ('pinn_residual', 'pino'):
+                self.criterion.set_epoch(curr_ep)
+                loss_final = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
+                loss_coarse = self.criterion(out_coarse, y, p, weights, lam_pen, lam_sm)
+                loss = loss_final + 0.3 * loss_coarse
+            else:
+                loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm)
+                loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm)
+                loss = loss_final + 0.3 * loss_coarse
         else:
             out_full = self.forward_ic_time(x, p)
 
-            if self.hparams.loss_type in ('pinn_residual', 'pino'):
-                # Curriculum learning 由 loss 类内部管理（set_epoch + _get_physics_weight）
-                # v2: warmup_epochs=30（前30轮纯MSE），之后30轮线性增长到目标权重
-                # PINO 同样走物理约束路径，H1 频域项由 PINOLoss 内部 warmup 调度
-                self.criterion.set_epoch(self.current_epoch)
-
+            if self.hparams.loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
+                self.criterion.set_epoch(curr_ep)
                 loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
-
-                # 记录分量损失
                 if hasattr(self.criterion, '_last_loss_components'):
                     for k, v in self.criterion._last_loss_components.items():
                         self.log(f'train_{k}', v, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+            elif self.hparams.loss_type == 'hybrid_bifurcate':
+                loss = self.criterion(out_full, y, pattern_targets=pat_id)
             else:
                 loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
 
@@ -459,7 +541,7 @@ class YeastLitModule(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        x_v, p_v, y_v = batch
+        x_v, p_v, y_v = batch[:3]
         pred = self.forward_ic_time(x_v, p_v)
         target = y_v
         mse_val = F.mse_loss(pred, target)

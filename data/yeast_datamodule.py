@@ -212,7 +212,16 @@ class YeastDataModule(pl.LightningDataModule):
         t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS).expand(num_mutants, num_vars, T_STEPS)
         X = torch.stack([IC, t_grid], dim=2)
 
-        self.train_dataset_lhs = TensorDataset(X[train_idx_lhs], Params_norm[train_idx_lhs], Y_norm[train_idx_lhs])
+        # 映射 Pattern 分岔形态标签为 0 (A), 1 (B), 2 (C)
+        def _to_pat_id(lbl):
+            s = str(lbl)
+            if 'Pattern_A' in s: return 0
+            elif 'Pattern_B' in s: return 1
+            elif 'Pattern_C' in s: return 2
+            return 1
+        pattern_ids = torch.tensor([_to_pat_id(lbl) for lbl in pattern_labels], dtype=torch.long)
+
+        self.train_dataset_lhs = TensorDataset(X[train_idx_lhs], Params_norm[train_idx_lhs], Y_norm[train_idx_lhs], pattern_ids[train_idx_lhs])
         self.val_dataset_lhs = TensorDataset(X[val_idx_lhs], Params_norm[val_idx_lhs], Y_norm[val_idx_lhs])
         self.test_dataset_lhs = TensorDataset(X[test_idx_lhs], Params_norm[test_idx_lhs], Y_norm[test_idx_lhs])
         self.test_dataset_real = TensorDataset(X[test_idx_real], Params_norm[test_idx_real], Y_norm[test_idx_real])

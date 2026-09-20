@@ -6,6 +6,7 @@ from .physics_eqns_torch import (
     eqns_torch, apply_event_torch, params_tensor_to_dict,
     detect_event_mask_torch, PARAM_KEYS
 )
+from .biological_guard import CONTINUOUS_VARS, EVENT_VARS
 
 
 class PhysicsInformedLoss(nn.Module):
@@ -781,11 +782,251 @@ class TripleDynamicLoss(nn.Module):
         return total_loss
 
 
+# =========================================================================
+# 方案 A, 方案 C, 方案 A+C 损失函数体系
+# =========================================================================
+class HybridBifurcateLoss(nn.Module):
+    """
+    方案 A 损失: 基础数据损失 + 表型分类交叉熵 + 阻滞态末端平坦稳态正则
+    - loss_data: HybridMSERelLoss(pred, target)
+    - loss_cls: CrossEntropy(pattern_logits, pattern_targets)
+    - loss_arrest: Penalize late-time temporal derivatives for cells in arrest state (Pattern C)
+    """
+    def __init__(self, lambda_rel=0.2, lambda_pattern=0.1, lambda_arrest=0.05,
+                 eps=0.1, max_clamp=10.0, arrest_window_ratio=0.5):
+        super().__init__()
+        self.hybrid_data_loss = HybridMSERelLoss(lambda_rel=lambda_rel, eps=eps, max_clamp=max_clamp)
+        self.lambda_pattern = lambda_pattern
+        self.lambda_arrest = lambda_arrest
+        self.arrest_window_ratio = arrest_window_ratio
+
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None,
+                pattern_logits=None, pattern_targets=None):
+        # 1. Base hybrid data loss
+        loss_data = self.hybrid_data_loss(pred_norm, target_norm)
+
+        # 2. Pattern classification loss
+        loss_cls = torch.tensor(0.0, device=pred_norm.device)
+        if pattern_logits is not None and pattern_targets is not None:
+            if pattern_targets.dim() > 1:
+                pattern_targets = pattern_targets.squeeze()
+            loss_cls = F.cross_entropy(pattern_logits, pattern_targets.long())
+
+        # 3. Pattern C arrest flatness penalty (suppresses fake oscillations like #15)
+        loss_arrest = torch.tensor(0.0, device=pred_norm.device)
+        if self.lambda_arrest > 0:
+            B, V, T = pred_norm.shape
+            t_start = int(T * (1.0 - self.arrest_window_ratio))
+            d_late = pred_norm[:, :, (t_start + 1):] - pred_norm[:, :, t_start:-1]
+            d_late_sq = d_late ** 2
+
+            if pattern_targets is not None:
+                is_arrest = (pattern_targets == 2).float().unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
+                num_arrest = is_arrest.sum()
+                if num_arrest > 0:
+                    loss_arrest = (d_late_sq * is_arrest).sum() / (num_arrest * V * (T - t_start - 1) + 1e-8)
+            elif pattern_logits is not None:
+                p_c = F.softmax(pattern_logits, dim=-1)[:, 2].unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
+                loss_arrest = (d_late_sq * p_c).mean()
+
+        total_loss = loss_data + self.lambda_pattern * loss_cls + self.lambda_arrest * loss_arrest
+        return total_loss
+
+
+class HybridPINOCollocationLoss(PINNResidualLoss):
+    """
+    方案 C 损失: Hybrid 数据损失 + 无标签/配点 ODE 物理残差 (解决 Event 跳变爆炸)
+    - 基础数据损失采用 HybridMSERelLoss 保证宏观波形与微量蛋白能量平衡
+    - 3 种 Event 跳变策略:
+        1. 'decoupled': 仅在 33 个 strictly continuous 生化通道计算物理残差 (完全免疫跳跃)
+        2. 'huber': 在全通道上使用 Huber loss (梯度截断为常数 delta, 防止梯度爆炸)
+        3. 'full': 传统平方残差
+    - 支持跳跃代数匹配损失 (lambda_jump > 0)
+    - Curriculum learning 预热调度
+    """
+    def __init__(self, mean_y, std_y, p_mean, p_std, t_max=210.0,
+                 lambda_rel=0.2, lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
+                 event_window=4, event_tol=0.08, jump_ratio=0.3,
+                 residual_subsample=1, event_weight=0.1, warmup_epochs=30,
+                 event_strategy='decoupled', huber_delta=1.0):
+        super().__init__(mean_y, std_y, p_mean, p_std, t_max,
+                         lambda_phys, lambda_jump, lambda_penalty,
+                         event_window, event_tol, jump_ratio,
+                         residual_subsample, event_weight,
+                         warmup_epochs)
+        self.hybrid_data_loss = HybridMSERelLoss(lambda_rel=lambda_rel)
+        self.event_strategy = event_strategy
+        self.huber_delta = huber_delta
+
+    def _compute_ode_residual_loss(self, pred_real, p_dict, mask):
+        B, V, T = pred_real.shape
+        dt = self.t_max / (T - 1)
+
+        du_dt = torch.zeros_like(pred_real)
+        du_dt[:, :, 1:-1] = (pred_real[:, :, 2:] - pred_real[:, :, :-2]) / (2 * dt)
+        du_dt[:, :, 0] = (pred_real[:, :, 1] - pred_real[:, :, 0]) / dt
+        du_dt[:, :, -1] = (pred_real[:, :, -1] - pred_real[:, :, -2]) / dt
+
+        f_u = torch.zeros_like(pred_real)
+        t_indices = list(range(0, T, self.residual_subsample))
+        t_grid = torch.linspace(0, self.t_max, T, device=pred_real.device)
+
+        n_t = len(t_indices)
+        y_all = pred_real[:, :, t_indices]
+        y_all = torch.clamp(y_all, min=0.0)
+        y_all = y_all.transpose(1, 2).reshape(B * n_t, V)
+
+        p_dict_expanded = {}
+        for k, v in p_dict.items():
+            if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == B:
+                p_dict_expanded[k] = v.unsqueeze(1).expand(B, n_t).reshape(B * n_t)
+            else:
+                p_dict_expanded[k] = v
+
+        t_all = t_grid[t_indices].unsqueeze(0).expand(B, n_t).reshape(B * n_t)
+        f_all = eqns_torch(y_all, p_dict_expanded, t_all)
+        f_all = torch.nan_to_num(f_all, nan=0.0, posinf=1e4, neginf=-1e4)
+        f_u[:, :, t_indices] = f_all.reshape(B, n_t, V).transpose(1, 2)
+
+        residual = du_dt - f_u
+        residual_norm = residual / self.std_y
+        residual_norm = torch.nan_to_num(residual_norm, nan=0.0, posinf=50.0, neginf=-50.0)
+
+        # 解法 1: 变量解耦 (仅在 33 个连续生化变量上计算残差)
+        if self.event_strategy == 'decoupled':
+            residual_norm = residual_norm[:, CONTINUOUS_VARS, :]
+            residual_val = torch.where(
+                torch.abs(residual_norm) <= self.huber_delta,
+                0.5 * (residual_norm ** 2),
+                self.huber_delta * (torch.abs(residual_norm) - 0.5 * self.huber_delta)
+            )
+            weight = torch.ones(B, len(CONTINUOUS_VARS), T, dtype=pred_real.dtype, device=pred_real.device)
+            subsample_mask = torch.zeros(T, dtype=torch.bool, device=pred_real.device)
+            subsample_mask[t_indices] = True
+            weight = weight * subsample_mask.unsqueeze(0).unsqueeze(0).float()
+            return (residual_val * weight).sum() / (weight.sum() + 1e-8)
+
+        # 解法 2: 鲁棒 Huber 物理残差 (在所有 39 个变量上自适应截断跳变冲击)
+        elif self.event_strategy == 'huber':
+            residual_val = torch.where(
+                torch.abs(residual_norm) <= self.huber_delta,
+                0.5 * (residual_norm ** 2),
+                self.huber_delta * (torch.abs(residual_norm) - 0.5 * self.huber_delta)
+            )
+            weight = torch.ones_like(mask, dtype=pred_real.dtype, device=pred_real.device)
+            weight[~mask] = self.event_weight
+            weight = weight.unsqueeze(1).expand_as(residual_val)
+            subsample_mask = torch.zeros(T, dtype=torch.bool, device=pred_real.device)
+            subsample_mask[t_indices] = True
+            weight = weight * subsample_mask.unsqueeze(0).unsqueeze(0).float()
+            return (residual_val * weight).sum() / (weight.sum() + 1e-8)
+
+        # 默认/传统平方残差
+        else:
+            residual_sq = torch.clamp(residual_norm ** 2, max=100.0)
+            weight = torch.ones_like(mask, dtype=pred_real.dtype, device=pred_real.device)
+            weight[~mask] = self.event_weight
+            weight = weight.unsqueeze(1).expand_as(residual_sq)
+            subsample_mask = torch.zeros(T, dtype=torch.bool, device=pred_real.device)
+            subsample_mask[t_indices] = True
+            weight = weight * subsample_mask.unsqueeze(0).unsqueeze(0).float()
+            return (residual_sq * weight).sum() / (weight.sum() + 1e-8)
+
+    def forward(self, pred_norm, target_norm, p_norm, batch_weights=None,
+                lambda_penalty=None, lambda_smooth=None):
+        lam_pen = lambda_penalty if lambda_penalty is not None else self.lambda_penalty
+
+        # 1. 数据损失用 HybridMSERelLoss
+        loss_data = self.hybrid_data_loss(pred_norm, target_norm)
+
+        # 2. 负值惩罚
+        negative_penalty = (torch.relu(self.bound_norm - pred_norm) ** 2).mean(dim=(1, 2))
+        base_loss = loss_data + (lam_pen * negative_penalty).mean()
+
+        total_loss = base_loss
+
+        # 3. 物理残差与跳跃约束
+        lam_phys_eff, lam_jump_eff = self._get_physics_weight()
+        if lam_phys_eff > 0 or lam_jump_eff > 0:
+            pred_real = self._denormalize_y(pred_norm)
+            target_real = self._denormalize_y(target_norm)
+            p_dict = self._denormalize_p(p_norm)
+
+            with torch.no_grad():
+                mask = detect_event_mask_torch(
+                    target_real, event_window=self.event_window,
+                    event_tol=self.event_tol, jump_ratio=self.jump_ratio
+                )
+
+            if lam_phys_eff > 0:
+                loss_residual = self._compute_ode_residual_loss(pred_real, p_dict, mask)
+                total_loss = total_loss + lam_phys_eff * loss_residual
+
+            if lam_jump_eff > 0:
+                loss_jump = self._compute_jump_loss(pred_real, target_real, mask)
+                total_loss = total_loss + lam_jump_eff * loss_jump
+
+        return total_loss
+
+
+class HybridAllLoss(HybridPINOCollocationLoss):
+    """
+    方案 A + C 全融合旗舰损失:
+    Hybrid 数据损失 + 表型分类交叉熵 + 阻滞稳态约束 + PINO 鲁棒物理残差
+    """
+    def __init__(self, mean_y, std_y, p_mean, p_std, t_max=210.0,
+                 lambda_rel=0.2, lambda_pattern=0.1, lambda_arrest=0.05,
+                 lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
+                 event_window=4, event_tol=0.08, jump_ratio=0.3,
+                 residual_subsample=1, event_weight=0.1, warmup_epochs=30,
+                 event_strategy='decoupled', huber_delta=1.0):
+        super().__init__(mean_y, std_y, p_mean, p_std, t_max=t_max,
+                         lambda_rel=lambda_rel, lambda_phys=lambda_phys,
+                         lambda_jump=lambda_jump, lambda_penalty=lambda_penalty,
+                         event_window=event_window, event_tol=event_tol,
+                         jump_ratio=jump_ratio, residual_subsample=residual_subsample,
+                         event_weight=event_weight, warmup_epochs=warmup_epochs,
+                         event_strategy=event_strategy, huber_delta=huber_delta)
+        self.lambda_pattern = lambda_pattern
+        self.lambda_arrest = lambda_arrest
+
+    def forward(self, pred_norm, target_norm, p_norm, batch_weights=None,
+                lambda_penalty=None, lambda_smooth=None,
+                pattern_logits=None, pattern_targets=None):
+        # 1. Base PINO collocation forward (hybrid data + negpen + phys + jump)
+        total_loss = super().forward(pred_norm, target_norm, p_norm, batch_weights,
+                                     lambda_penalty=lambda_penalty, lambda_smooth=lambda_smooth)
+
+        # 2. Add pattern classification loss
+        if pattern_logits is not None and pattern_targets is not None:
+            if pattern_targets.dim() > 1:
+                pattern_targets = pattern_targets.squeeze()
+            loss_cls = F.cross_entropy(pattern_logits, pattern_targets.long())
+            total_loss = total_loss + self.lambda_pattern * loss_cls
+
+        # 3. Add arrest state flatness penalty
+        if self.lambda_arrest > 0 and pattern_targets is not None:
+            B, V, T = pred_norm.shape
+            t_start = T // 2
+            d_late = pred_norm[:, :, (t_start + 1):] - pred_norm[:, :, t_start:-1]
+            d_late_sq = d_late ** 2
+            is_arrest = (pattern_targets == 2).float().unsqueeze(1).unsqueeze(2)
+            num_arrest = is_arrest.sum()
+            if num_arrest > 0:
+                loss_arrest = (d_late_sq * is_arrest).sum() / (num_arrest * V * (T - t_start - 1) + 1e-8)
+                total_loss = total_loss + self.lambda_arrest * loss_arrest
+
+        return total_loss
+
+
 LOSS_REGISTRY = {
     'physics_informed': PhysicsInformedLoss,
     'mse_only': MSEOnlyLoss,
     'rel_l2': RelativeL2Loss,
     'hybrid_mse_rel': HybridMSERelLoss,
+    'hybrid_bifurcate': HybridBifurcateLoss,
+    'hybrid_pino_colloc': HybridPINOCollocationLoss,
+    'hybrid_all': HybridAllLoss,
     'mse_negpen': MSENegPenLoss,
     'mse_smooth': MSESmoothLoss,
     't_smooth': DilatedSobolevLoss,

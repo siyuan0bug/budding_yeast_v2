@@ -126,7 +126,7 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
     # 1. GPU 大 Batch 高速推理
     with torch.no_grad():
         for batch in loader:
-            x, p, y = [b.to(device, non_blocking=True) for b in batch]
+            x, p, y = [b.to(device, non_blocking=True) for b in batch[:3]]
             pred = model.forward_ic_time(x, p)
             
             pred_denorm = dm.denormalize_y(pred, device)
