@@ -53,6 +53,25 @@ DATASET_MASS_100000_RANDOM_LEVEL="${DATA_DIR}/mass_100000_random_l_dataset_210mi
 # MASS 50,000 数据集 (5万样本规模对比数据集)
 DATASET_MASS_50000="${DATA_DIR}/mass_50000_dataset_210min_500steps_dual_labels.npz"
 
+# ====== BAMS 50,000 三分支靶向消融实验数据集 (50k样本, 50 Epochs, biom_refiner_plus 对比) ======
+# 0. 对照组 (50k 纯 BAMS 0 靶向基线):
+DATASET_BAMS_50000="${DATA_DIR}/bams_50000_210m_500s.npz"
+# 1. 消融组 A (40k BAMS 底座 + 10k 靶向骨架 Hard Zeros 0.0):
+DATASET_BAMS_ABLATION_HARD_50000="${DATA_DIR}/bams_ablation_hard_50000_210m_500s.npz"
+# 2. 消融组 B (40k BAMS 底座 + 10k 靶向骨架 Continuous Hypomorphic ts 衰减):
+DATASET_BAMS_ABLATION_HYPO_50000="${DATA_DIR}/bams_ablation_hypo_50000_210m_500s.npz"
+# 3. 方案 A 增强优化版: 100,000 样本 (网络拓扑基序 + 并联检查点配对 + 主控开关 5 阶深探 + 硬零点 KO):
+DATASET_BAMS_MOTIF_TOPOLOGY_100000="${DATA_DIR}/bams_motif_topology_100000_210m_500s.npz"
+
+# 4. mutant_aware 纯随机对照基准: 100,000 样本 (零拓扑结构, 27基因均匀随机, 模式均匀随机, 25/25/25/25 平权)
+DATASET_MUTANT_AWARE_PURE_RANDOM_100000="${DATA_DIR}/mutant_aware_pure_random_100000_210m_500s.npz"
+# 5. mutant_aware 纯随机 + 碰撞拯救 (Collision Rescue) 增强版: 100,000 样本 (消除查重黑洞, 70% DAmP/ts/pLOF 连续弱化 + 30% 碳源漂移)
+DATASET_MUTANT_AWARE_PURE_RANDOM_RESCUE_100000="${DATA_DIR}/mutant_aware_pure_random_rescue_100000_210m_500s.npz"
+# 6. mutant_aware 纯随机 + KO 邻域微扰区间 [0, 1e-4] 采样版: 100,000 样本 (无 Rescue, 仅 KO 微扰采样, 消除 Dirac 硬零点)
+DATASET_MUTANT_AWARE_PURE_RANDOM_KO_INTERVAL_100000="${DATA_DIR}/mutant_aware_pure_random_ko_interval_100000_210m_500s.npz"
+# 7. Gibbs-Boltzmann 图连续热力学能量采样版 (无泄露直舍拦截, 100,000 样本 + 126 Real Mutants):
+DATASET_GIBBS_BOLTZMANN_100000="${DATA_DIR}/gibbs_boltzmann_100000_210m_500s.npz"
+
 DATASET_MASS_100000_BLIND="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels.npz"
 
 DATASET_MASS_100000_BLIND_S5="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels_s5mode.npz"
@@ -67,11 +86,10 @@ SEEDS=(42) #42,1024,3407
 # 终极多任务实验清单
 #
 # 说明:
-#   MODEL         : 模型名 (biom_refiner_plus, biom_refiner_curvature, fno1d, unet1d, galerkin_transformer1d, cno1d, mwt1d, transolver1d, deeponet, ...)
-#   LOSS_TYPE     : 损失函数 (hybrid_mse_rel, triple_dynamic, mse_only, phase_derivative, soft_dtw, pinn_residual, pino)
+#   MODEL         : 模型名 (biom_refiner_plus, biom_refiner_bifurcate, biom_refiner_graph_flux, biom_refiner_mechanistic, ...)
+#   LOSS_TYPE     : 损失函数 (hybrid_mse_rel, hybrid_bifurcate, hybrid_pino_colloc, hybrid_all, triple_dynamic, ...)
 #   USE_ADJ       : 是否用邻接矩阵 (true/false)
 #   DATASET_PATH  : 数据集 npz 绝对路径
-#   DATASET_TAG   : 数据集标签 (用于命名)
 #   MODES         : Fourier modes 数 (Transformer 模型用作 d_model 参考)
 #   WIDTH         : 隐藏层宽度
 #   BATCH_SIZE    : 批大小
@@ -83,55 +101,68 @@ SEEDS=(42) #42,1024,3407
 #   AL_PERTURBATION: RGS局部扰动幅度 (非RGS时填0)
 #   AL_MAE_THRESHOLD: RGS的MAE阈值 (非RGS时填0)
 #   ROLLOUT_TYPE  : 预测方式 (one_time=一次性预测, autoregressive=自回归滚动)
-#   GPU_ID        : 使用的 GPU 编号 (0-7, 同卡自动串行排队, 跨卡并行执行)
+#   GPU_ID        : 使用的 GPU 编号 (严格仅限 0-3, 绝不使用 4-7; 同卡串行排队, 跨卡并行)
 # ==========================================
 
 EXPERIMENTS=(
-    # 格式 (17列，空格分隔):
-#   MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
-    # ====== 🏆🏆🏆 全新 MASS Random + Mutant-Aware Parameter Distribution 100,000 消融实验 🏆🏆🏆 ======
-    # GPU 0: 👑 最强机制模型 1 - biom_refiner_plus (黄金超参: w192, m24, b256, ep100, lr8.8e-4, warmup8)
-    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MASS_RANDOM_DIST_100000} mass_random_dist_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # 格式 (16列，空格分隔，彻底精简冗余的 DATASET_TAG):
+#   MODEL LOSS_TYPE USE_ADJ DATASET_PATH MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
 
-    # GPU 1: 👑 最强机制模型 2 - biom_refiner_curvature (二阶加速度曲率机制算子)
-    #"biom_refiner_curvature hybrid_mse_rel false ${DATASET_MASS_RANDOM_DIST_100000} mass_random_dist_100k_biom_refiner_curv_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # ====== 🌌🌌🌌 Gibbs-Boltzmann 图连续热力学能量采样版: 100,000 样本 (零泄露直舍拦截, L1~L5 全覆盖) 🌌🌌🌌 ======
+    # GPU 0: biom_refiner_plus + hybrid_mse_rel
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # GPU 2: biom_refiner_plus + triple_dynamic
+    "biom_refiner_plus triple_dynamic false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # GPU 2: 👑 最强机制模型 3 - hano_dual (双路径门控物理通量融合算子)
-    #"hano_dual hybrid_mse_rel false ${DATASET_MASS_RANDOM_DIST_100000} mass_random_dist_100k_hano_dual_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    # ====== 🔬🔬🔬 纯随机 + KO 邻域微扰区间 [0, 1e-4] 采样版: 100,000 样本 (已完成评测归档) 🔬🔬🔬 ======
+    # GPU 0: biom_refiner_plus + hybrid_mse_rel
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_KO_INTERVAL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # GPU 2: biom_refiner_plus + triple_dynamic
+    #"biom_refiner_plus triple_dynamic false ${DATASET_MUTANT_AWARE_PURE_RANDOM_KO_INTERVAL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # ====== 🏆🏆🏆 全新 Mutant-Aware 100,000 对比实验 (Role-mode vs Leak-level) 🏆🏆🏆 ======
-    # GPU 0: biom_refiner_plus 在 Role-mode (Tier 2/3 affinity 角色模式) 数据集上的实验
-    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_ROLE} mutant_aware_role_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # ====== 🚑🚑🚑 纯随机 + 碰撞拯救 (Collision Rescue) 增强版: 100,000 样本 (已完成评测归档) 🚑🚑🚑 ======
+    # GPU 0: biom_refiner_plus + hybrid_mse_rel
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_RESCUE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # GPU 2: biom_refiner_plus + triple_dynamic
+    #"biom_refiner_plus triple_dynamic false ${DATASET_MUTANT_AWARE_PURE_RANDOM_RESCUE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # GPU 1: biom_refiner_plus 在 Leak-Level (分层等级配额采样) 数据集上的实验
-    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000_LEAKLEVEL} mutant_aware_leaklevel_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # ====== 🎲🎲🎲 纯随机对照基准: 100,000 样本 (零拓扑结构, 已完成评测归档) 🎲🎲🎲 ======
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_plus triple_dynamic false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # GPU 6 (已完成基准): biom_refiner_plus 在 Flat 默认数据集上的实验
-    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 6"
+    # ====== 🚀🚀🚀 方案 A 增强优化版: 100,000 样本网络拓扑流形数据集 (已完成评测归档) 🚀🚀🚀 ======
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_MOTIF_TOPOLOGY_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_plus triple_dynamic false ${DATASET_BAMS_MOTIF_TOPOLOGY_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    # ====== 🧪🧪🧪 BAMS 50,000 三分支靶向消融实验 (已完成评测归档) 🧪🧪🧪 ======
+    # 实验 0 (对照组): 50k 纯 BAMS 0 靶向基线
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_50000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # 实验 1 (消融组 A): 50k 靶向骨架 + 硬零点 Hard Zeros 0.0
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_ABLATION_HARD_50000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    # 实验 2 (消融组 B): 50k 靶向骨架 + 连续弱化流形 Continuous Hypomorphic ts 衰减
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_ABLATION_HYPO_50000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # GPU 0: 👑 全新因果机制旗舰 - biom_refiner_causal_plus (Causal Adapter + Curvature + Pyramid + Graph Attention) [正在运行 Epoch 81+]
-    #"biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} mutant_aware_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # ====== 🧬🧬🧬 时变动态因果与相变解耦消融实验矩阵 (已完成归档) 🧬🧬🧬 ======
+    # EXP-C1: biom_refiner_causal_plus + triple_dynamic
+    #"biom_refiner_causal_plus triple_dynamic false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # EXP-C2: biom_refiner_dynamic_causal_plus + triple_dynamic
+    #"biom_refiner_dynamic_causal_plus triple_dynamic false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # EXP-C3: biom_refiner_dynamic_causal_plus + hybrid_mse_rel
+    #"biom_refiner_dynamic_causal_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # ====== 🏆🏆🏆 全新 Graph Diffusion k-DPP Gated V2 (75.1分最优配比) 100,000 实验 (已完成) 🏆🏆🏆 ======
-    # GPU 4: 👑 旗舰粗精细化算子 - biom_refiner_plus 在 k-DPP Gated V2 数据集上的实验
-    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_KDPP_GATED_V2_100000} kdpp_gated_v2_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
+    # (已完成的历史消融实验，已归档供对比)
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_bifurcate hybrid_bifurcate false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"biom_refiner_graph_flux hybrid_mse_rel false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 4"
+    #"biom_refiner_plus hybrid_pino_colloc false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"biom_refiner_mechanistic hybrid_bifurcate false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"biom_refiner_mechanistic hybrid_all false ${DATASET_MUTANT_AWARE_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 
-    # GPU 5: 👑 全新因果机制旗舰 - biom_refiner_causal_plus 在 k-DPP Gated V2 数据集上的实验
-    #"biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_KDPP_GATED_V2_100000} kdpp_gated_v2_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 5"
+    # ====== 🏆🏆🏆 当前活跃任务: BAMS 100,000 (16列格式) 🏆🏆🏆 ======
+    # GPU 0: biom_refiner_plus 在 BAMS 100k 数据集上的实验
+    # "biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 
-    # ====== 🚀🚀🚀 全新 Signed k-DPP + Phase-Space Curvature Gated (方案 A+B 融合旗舰) 100,000 实验 🚀🚀🚀 ======
-    # GPU 4: 👑 旗舰粗精细化算子 - biom_refiner_plus 在 kdpp_curv_gated 数据集上的实验
-    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_KDPP_CURV_GATED_100000} kdpp_curv_gated_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
-
-    # GPU 5: 👑 全新因果机制旗舰 - biom_refiner_causal_plus 在 kdpp_curv_gated 数据集上的实验
-    #"biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_KDPP_CURV_GATED_100000} kdpp_curv_gated_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
-
-    # ====== 🏆🏆🏆 全新 BAMS 100,000 (93.6分 顶级无泄露数据集) 实验 🏆🏆🏆 ======
-    # GPU 5: 👑 旗舰粗精细化算子 - biom_refiner_plus 在 BAMS 100k 数据集上的实验
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_BAMS_100000} bams_100k_biom_refiner_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
-
-    # GPU 6: 👑 全新因果机制旗舰 - biom_refiner_causal_plus 在 BAMS 100k 数据集上的实验
-    "biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_BAMS_100000} bams_100k_biom_refiner_causal_plus_hybrid_w192 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # # GPU 1: biom_refiner_causal_plus 在 BAMS 100k 数据集上的实验
+    # "biom_refiner_causal_plus hybrid_mse_rel false ${DATASET_BAMS_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # "unet1d hybrid_mse_rel false ${DATASET_MASS_100000_BLIND} random100k_blind_unet1d_hybrid_w64 32 64 512 100 none 1.7e-3 10 0 0 0 one_time 2"
 
@@ -241,10 +272,22 @@ EXP_ROOT="./experiments"
 mkdir -p "$EXP_ROOT" logs_v3 logs
 
 # =========================================================================
-# 1. 任务解析与多 GPU 队列分发 (GPU Worker Queue Dispatcher)
-#    • 每张 GPU 维护独立的串行任务队列 (同卡按顺序跑完一个再跑下一个，彻底杜绝 OOM 冲突)
-#    • 不同 GPU 之间完全并发并行运行
+# 1. 动态自适应显存装载与资源配置 (零单任务限额, 纯实测动态驱动)
 # =========================================================================
+MEM_SAFETY_MARGIN_MB=2048   # 仅预留 2GB 防 CUDA 内存碎片与波动的安全缓冲 (绝不限制单任务显存)
+STABILIZE_WAIT_SEC=35       # 任务启动后等待显存分配稳定的秒数 (让 PyTorch 完成显存建立)
+MAX_CONCURRENT_PER_GPU=0    # 单卡最大并发数 (设为 0 表示不限制数量，完全由实测剩余显存自适应决定)
+
+get_gpu_used_vram() {
+    local g=$1
+    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$g" 2>/dev/null | tr -d ' '
+}
+
+get_gpu_free_vram() {
+    local g=$1
+    nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i "$g" 2>/dev/null | tr -d ' '
+}
+
 declare -A GPU_TASK_LIST
 declare -A GPU_TASK_COUNT
 ALL_GPUS=()
@@ -258,7 +301,7 @@ for SEED in "${SEEDS[@]}"; do
             continue
         fi
 
-        read -r MODEL LOSS_TYPE USE_ADJ DATASET DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID <<< "$EXP_TRIM"
+        read -r MODEL LOSS_TYPE USE_ADJ DATASET MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID <<< "$EXP_TRIM"
         GPU_ID=${GPU_ID:-0}
 
         if [ -z "${GPU_TASK_COUNT[$GPU_ID]}" ]; then
@@ -279,234 +322,348 @@ if [ "$TOTAL_TASKS" -eq 0 ]; then
 fi
 
 echo "==========================================================="
-echo "📋 GPU 任务排队与分发摘要 (总计 $TOTAL_TASKS 个任务，分布在 ${#ALL_GPUS[@]} 张 GPU):"
+echo "📋 GPU 任务排队与自适应分发摘要 (总计 $TOTAL_TASKS 个任务，分布在 ${#ALL_GPUS[@]} 张 GPU):"
 for gpu in "${ALL_GPUS[@]}"; do
-    echo "   • GPU $gpu: 队列共 ${GPU_TASK_COUNT[$gpu]} 个任务 (同卡串行依序执行，跨卡并发执行)"
+    echo "   • GPU $gpu: 队列共 ${GPU_TASK_COUNT[$gpu]} 个任务 (自适应混合调度: 显存充裕时自动并发，不足时安全串行)"
 done
 echo "==========================================================="
 echo ""
 
-# ====== 启动 GPU Worker 进程 (每张 GPU 独立启动一个后台 Worker 串行消费队列) ======
+# ====== 进程追踪与优雅终止信号拦截 (Ctrl+C / SIGTERM) ======
 PIDS=()
 
+cleanup_all() {
+    echo ""
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 捕获中断信号 (Ctrl+C / SIGTERM)，正在强制终止所有任务与子进程..."
+    trap '' SIGINT SIGTERM  # 避免重复触发
+    
+    # 终止记录在案的所有 Worker 及其子进程树
+    for pid in "${PIDS[@]}"; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            pkill -TERM -P "$pid" 2>/dev/null || true
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+    done
+    sleep 1
+    for pid in "${PIDS[@]}"; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            pkill -9 -P "$pid" 2>/dev/null || true
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+    
+    # 清理当前 shell 派生的所有直接/间接子进程 (如正在执行的 train.py/eval.py)
+    pkill -P $$ 2>/dev/null || true
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 所有子进程已彻底清理，安全退出。"
+    exit 130
+}
+trap cleanup_all SIGINT SIGTERM
+
+# ====== 单任务执行体 (Train + Eval) ======
+run_single_task() {
+    local SEED=$1
+    local EXP=$2
+    local gpu=$3
+    local task_idx=$4
+    local total_for_gpu=$5
+
+    local MODEL LOSS_TYPE USE_ADJ DATASET MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
+    read -r MODEL LOSS_TYPE USE_ADJ DATASET MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID <<< "$EXP"
+    GPU_ID=${GPU_ID:-$gpu}
+    ROLLOUT_TYPE=${ROLLOUT_TYPE:-one_time}
+
+    local ADJ_PARAM=""
+    if [ "$USE_ADJ" = "true" ]; then
+        ADJ_PARAM="--adj_matrix_path mydata/yeast_signed_adjacency_matrix.npy"
+    fi
+
+    # 构建 AL 专属参数
+    local AL_PARAMS=""
+    if [ "$AL_STRATEGY" != "none" ]; then
+        local TRIGGER_EPOCH=10
+        if [ "$AL_STRATEGY" = "pial" ]; then
+            TRIGGER_EPOCH=50
+        elif [ "$AL_STRATEGY" = "mutant_aware" ]; then
+            TRIGGER_EPOCH=100
+        elif [[ "$AL_STRATEGY" == al4pde_* || "$AL_STRATEGY" = "maal" ]]; then
+            TRIGGER_EPOCH=30
+        fi
+        AL_PARAMS="--al_strategy $AL_STRATEGY --al_trigger_epoch $TRIGGER_EPOCH --al_num_add $AL_NUM_ADD --al_perturbation $AL_PERTURBATION --al_mae_threshold $AL_MAE_THRESHOLD"
+
+        if [ "$AL_STRATEGY" = "mutant_aware" ]; then
+            AL_PARAMS="$AL_PARAMS --atlas_csv $ATLAS_CSV"
+        fi
+
+        if [[ "$AL_STRATEGY" == al4pde_* || "$AL_STRATEGY" = "maal" ]]; then
+            AL_PARAMS="$AL_PARAMS --al_pool_dataset $DATASET_MASS_V3 --al_initial_train_size 2000"
+        fi
+    else
+        AL_PARAMS="--al_strategy none"
+    fi
+
+    # 格式化学习率字符串
+    local LR_STR
+    if (( $(echo "$LR >= 0.001" | bc -l 2>/dev/null || echo 0) )); then
+        LR_STR=$(printf "%.4g" "$LR")
+    else
+        LR_STR=$(printf "%.1e" "$LR" | sed 's/-0/-/g')
+    fi
+
+    local DATASET_NAME
+    DATASET_NAME=$(basename "$DATASET" .npz)
+    local RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_NAME}_modes${MODES}_seed${SEED}"
+
+    local EXP_DIR CKPT_DIR EVAL_OUT_DIR LOG_FILE DIR_PARAMS
+    if [ "$USE_HIERARCHICAL" = "1" ]; then
+        local HPARAM_SIG
+        if [[ "$MODEL" == *"wno"* ]]; then
+            HPARAM_SIG="w${WIDTH}_lev3_haar_b${BATCH_SIZE}_ep${EPOCHS}_lr${LR_STR}"
+        else
+            HPARAM_SIG="w${WIDTH}_m${MODES}_b${BATCH_SIZE}_ep${EPOCHS}_lr${LR_STR}"
+        fi
+
+        if [ "$USE_ADJ" = "true" ]; then
+            HPARAM_SIG="${HPARAM_SIG}_adj"
+        fi
+        if [ "$ROLLOUT_TYPE" = "autoregressive" ]; then
+            HPARAM_SIG="${HPARAM_SIG}_ar"
+        fi
+        if [ -n "$WARMUP" ] && [ "$WARMUP" -ne 10 ] && [ "$WARMUP" -gt 0 ]; then
+            HPARAM_SIG="${HPARAM_SIG}_wm${WARMUP}"
+        fi
+
+        EXP_DIR="${EXP_ROOT}/${DATASET_NAME}/${MODEL}/${LOSS_TYPE}_${AL_STRATEGY}/${HPARAM_SIG}/seed_${SEED}"
+        CKPT_DIR="${EXP_DIR}/checkpoints"
+        EVAL_OUT_DIR="${EXP_DIR}/eval"
+        LOG_FILE="${EXP_DIR}/train.log"
+        mkdir -p "$CKPT_DIR" "$EVAL_OUT_DIR"
+        ln -sf "$(pwd)/${LOG_FILE}" "logs_v3/${RUN_NAME}.log" 2>/dev/null
+        DIR_PARAMS="--exp_dir $EXP_DIR --dataset_tag $DATASET_NAME"
+    else
+        EXP_DIR="./train_results_v3/${RUN_NAME}"
+        CKPT_DIR="./train_results_v3/${RUN_NAME}"
+        EVAL_OUT_DIR="./eval_results_v3/${RUN_NAME}"
+        LOG_FILE="logs_v3/${RUN_NAME}.log"
+        mkdir -p "$EXP_DIR" "$EVAL_OUT_DIR"
+        DIR_PARAMS="--save_dir ./train_results_v3"
+    fi
+
+    local PINN_PARAMS=""
+    if [ "$LOSS_TYPE" = "pinn_residual" ] || [ "$LOSS_TYPE" = "pino" ]; then
+        PINN_PARAMS="--lambda_phys 0.01 --lambda_jump 0.001 --lambda_penalty 1.0 --residual_subsample 10 --event_weight 0.1"
+    fi
+    if [ "$LOSS_TYPE" = "pino" ]; then
+        PINN_PARAMS="$PINN_PARAMS --lambda_h1 0.1 --h1_beta 1.0"
+    fi
+    if [ "$LOSS_TYPE" = "hybrid_pino_colloc" ] || [ "$LOSS_TYPE" = "hybrid_all" ]; then
+        PINN_PARAMS="--lambda_phys 0.01 --lambda_jump 0.001 --lambda_penalty 1.0 --residual_subsample 10 --event_weight 0.1 --pino_event_strategy decoupled --huber_delta 1.0"
+    fi
+    if [ "$LOSS_TYPE" = "hybrid_bifurcate" ] || [ "$LOSS_TYPE" = "hybrid_all" ]; then
+        PINN_PARAMS="$PINN_PARAMS --lambda_pattern 0.1 --lambda_arrest 0.05"
+    fi
+
+    local WANDB_FLAG=""
+    if [ "$NO_WANDB" = "1" ]; then
+        WANDB_FLAG="--no_wandb"
+    fi
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚀 [GPU $gpu | 任务 $task_idx/$total_for_gpu] 启动: $RUN_NAME -> 目录: $EXP_DIR"
+
+    echo "===========================================================" > "$LOG_FILE" 2>&1
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始训练 (GPU=$gpu | 任务 $task_idx/$total_for_gpu): $RUN_NAME" >> "$LOG_FILE" 2>&1
+    echo "===========================================================" >> "$LOG_FILE" 2>&1
+
+    local SKIP_TRAIN=0
+    local SKIP_EVAL=0
+
+    # 步骤 A: 训练
+    if [ "$SKIP_TRAIN" = "0" ]; then
+        if [ -d "$CKPT_DIR" ]; then
+            rm -f "${CKPT_DIR}"/*.ckpt
+            echo "🧹 训练前已清理旧 checkpoint: ${CKPT_DIR}/*.ckpt" >> "$LOG_FILE" 2>&1
+        fi
+        CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN train.py \
+            --model $MODEL \
+            --wavelet haar \
+            --loss_type $LOSS_TYPE \
+            --dataset_name "$DATASET" \
+            --modes $MODES \
+            --width $WIDTH \
+            --batch_size $BATCH_SIZE \
+            --max_epochs $EPOCHS \
+            --seed $SEED \
+            --name $RUN_NAME \
+            --lr $LR \
+            --warmup_epochs $WARMUP \
+            --num_workers 4 \
+            --val_batch_size $BATCH_SIZE \
+            --devices 1 \
+            $AL_PARAMS \
+            $ADJ_PARAM \
+            $PINN_PARAMS \
+            --rollout_type $ROLLOUT_TYPE \
+            $DIR_PARAMS \
+            $WANDB_FLAG >> "$LOG_FILE" 2>&1
+
+        local TRAIN_EXIT=$?
+        if [ $TRAIN_EXIT -ne 0 ]; then
+            echo "❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练异常退出 (exit=$TRAIN_EXIT), 自动跳过评估" >> "$LOG_FILE" 2>&1
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练失败: $RUN_NAME (exit=$TRAIN_EXIT, 详细报错见 $LOG_FILE)"
+            return $TRAIN_EXIT
+        fi
+    fi
+
+    # 步骤 B+C: 寻找 Checkpoint 并评估
+    if [ "$SKIP_EVAL" = "0" ]; then
+        local CKPT_PATH
+        CKPT_PATH=$(ls ${CKPT_DIR}/*.ckpt 2>/dev/null | head -n 1)
+
+        if [ -z "$CKPT_PATH" ]; then
+            echo "❌ 错误: 在 ${CKPT_DIR} 没找到 Checkpoint 文件，跳过 Evaluate。" >> "$LOG_FILE" 2>&1
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠️ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 找不到 Checkpoint: $RUN_NAME"
+        else
+            echo "🎯 成功找到 Checkpoint: $CKPT_PATH" >> "$LOG_FILE" 2>&1
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始评估..." >> "$LOG_FILE" 2>&1
+            CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN eval.py \
+                --ckpt "$CKPT_PATH" \
+                --dataset_name "$DATASET" \
+                --save_dir "$EVAL_OUT_DIR" \
+                --batch_size $BATCH_SIZE >> "$LOG_FILE" 2>&1
+
+            if [ $? -eq 0 ]; then
+                echo "✅ [$RUN_NAME] 评估完成！结果已保存至: $EVAL_OUT_DIR" >> "$LOG_FILE" 2>&1
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 评估完成: $RUN_NAME"
+            else
+                echo "❌ [$RUN_NAME] 评估失败" >> "$LOG_FILE" 2>&1
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 评估失败: $RUN_NAME"
+            fi
+        fi
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 实验结束: $RUN_NAME" >> "$LOG_FILE" 2>&1
+    return 0
+}
+
+# ====== 启动 GPU Worker 进程 (每张 GPU 独立启动一个自适应排队 Worker) ======
 for gpu in "${ALL_GPUS[@]}"; do
     {
-        task_idx=0
-        total_for_gpu=${GPU_TASK_COUNT[$gpu]}
+        worker_pids=()
+        cleanup_worker() {
+            trap '' SIGINT SIGTERM
+            for p in "${worker_pids[@]}"; do
+                kill -TERM "$p" 2>/dev/null || true
+            done
+            sleep 0.5
+            for p in "${worker_pids[@]}"; do
+                kill -9 "$p" 2>/dev/null || true
+            done
+            exit 130
+        }
+        trap cleanup_worker SIGINT SIGTERM
 
-        while IFS='|' read -r SEED EXP; do
-            [ -z "$SEED" ] && continue
-            task_idx=$((task_idx + 1))
+        # 解析该卡的所有任务列表为数组
+        mapfile -t TASKS_FOR_GPU <<< "${GPU_TASK_LIST[$gpu]}"
+        VALID_TASKS=()
+        for item in "${TASKS_FOR_GPU[@]}"; do
+            [ -n "$item" ] && VALID_TASKS+=("$item")
+        done
 
-            read -r MODEL LOSS_TYPE USE_ADJ DATASET DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID <<< "$EXP"
-            GPU_ID=${GPU_ID:-$gpu}
-            ROLLOUT_TYPE=${ROLLOUT_TYPE:-one_time}
+        total_for_gpu=${#VALID_TASKS[@]}
+        [ "$total_for_gpu" -eq 0 ] && exit 0
 
-            if [ "$USE_ADJ" = "true" ]; then
-                ADJ_PARAM="--adj_matrix_path mydata/yeast_signed_adjacency_matrix.npy"
-            else
-                ADJ_PARAM=""
-            fi
+        ACTIVE_PIDS=()
+        LAST_TASK_VRAM_DELTA=0
 
-            # 构建 AL 专属参数
-            AL_PARAMS=""
-            if [ "$AL_STRATEGY" != "none" ]; then
-            # PIAL 策略推迟到 epoch 50 触发: 早期模型预测差, ODE 残差无意义
-            # mutant_aware 策略推迟到 epoch 100 触发: 需模型基本收敛后再做 atlas 优先级评估, 否则 priority 基于错误的模型状态
-            # al4pde/maal 策略: 命令行 TRIGGER_EPOCH 被 al_callback.py 硬编码覆盖 (trigger=4ep, num_add=1000 固定)
-            #   实际每 4 epoch 触发一次, 200/4=50 轮 +1 safety = 51 轮 AL, 每轮固定新增 1000 样本 (非指数增长)
-            # 其他策略保持 epoch 10 触发
-                if [ "$AL_STRATEGY" = "pial" ]; then
-                    TRIGGER_EPOCH=50
-                elif [ "$AL_STRATEGY" = "mutant_aware" ]; then
-                    TRIGGER_EPOCH=100
-                elif [[ "$AL_STRATEGY" == al4pde_* || "$AL_STRATEGY" = "maal" ]]; then
-                    TRIGGER_EPOCH=30
+        reap_active_pids() {
+            local still_running=()
+            for p in "${ACTIVE_PIDS[@]}"; do
+                if kill -0 "$p" 2>/dev/null; then
+                    still_running+=("$p")
                 else
-                    TRIGGER_EPOCH=10
-                fi
-                AL_PARAMS="--al_strategy $AL_STRATEGY --al_trigger_epoch $TRIGGER_EPOCH --al_num_add $AL_NUM_ADD --al_perturbation $AL_PERTURBATION --al_mae_threshold $AL_MAE_THRESHOLD"
-
-            # mutant_aware 策略专属参数:
-            # 必须传入 atlas CSV 路径 (含 lhs_MAE_min, lhs_n_samples 列)
-            # 若文件不存在, al_callback 会自动降级为 rgs 策略
-            # 注: al_initial_train_size 参数对 mutant_aware 无效 (al_callback.py 中查询合成策略跳过 K-Means, 直接用全量数据)
-                if [ "$AL_STRATEGY" = "mutant_aware" ]; then
-                    AL_PARAMS="$AL_PARAMS --atlas_csv $ATLAS_CSV"
-                fi
-
-            # al4pde/maal 策略专属参数:
-            # --al_pool_dataset: 遗留参数 (MASS 候选池由 sample_mass_mutant 动态生成, 不读取 npz)
-            # --al_initial_train_size 2000: 命令行传入但被 al_callback.py 硬编码覆盖为 5000
-            #   K-Means 从 MASS 合成训练样本中选 5000 个作为初始训练集
-            # 候选池 (MASS 版, al_callback._generate_param_only_pool):
-            #   sample_mass_mutant 分层采样 80000 个 (L1/L2/L3/L4 = 25%/35%/25%/15%),
-            #   D_real 隔离 (126 real mutants) + 池内 8% 相对阈值去重
-            #   仅存参数 P_norm + Y_IC + ovr, 选中后才 mass 版 ODE 仿真生成完整轨迹
-                if [[ "$AL_STRATEGY" == al4pde_* || "$AL_STRATEGY" = "maal" ]]; then
-                    AL_PARAMS="$AL_PARAMS --al_pool_dataset $DATASET_MASS_V3 --al_initial_train_size 2000"
-                fi
-            else
-                AL_PARAMS="--al_strategy none"
-            fi
-
-            # 格式化学习率字符串
-            if (( $(echo "$LR >= 0.001" | bc -l 2>/dev/null || echo 0) )); then
-                LR_STR=$(printf "%.4g" "$LR")
-            else
-                LR_STR=$(printf "%.1e" "$LR" | sed 's/-0/-/g')
-            fi
-
-        # 直接使用数据集文件名称 (去掉 .npz 后缀) 作为 Level 1 目录名
-            DATASET_NAME=$(basename "$DATASET" .npz)
-
-        # 根据模式构建路径与目录
-            RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_TAG}_modes${MODES}_seed${SEED}"
-
-            if [ "$USE_HIERARCHICAL" = "1" ]; then
-                if [[ "$MODEL" == *"wno"* ]]; then
-                    HPARAM_SIG="w${WIDTH}_lev3_haar_b${BATCH_SIZE}_ep${EPOCHS}_lr${LR_STR}"
-                else
-                    HPARAM_SIG="w${WIDTH}_m${MODES}_b${BATCH_SIZE}_ep${EPOCHS}_lr${LR_STR}"
-                fi
-
-                if [ "$USE_ADJ" = "true" ]; then
-                    HPARAM_SIG="${HPARAM_SIG}_adj"
-                fi
-                if [ "$ROLLOUT_TYPE" = "autoregressive" ]; then
-                    HPARAM_SIG="${HPARAM_SIG}_ar"
-                fi
-                if [ -n "$WARMUP" ] && [ "$WARMUP" -ne 10 ] && [ "$WARMUP" -gt 0 ]; then
-                    HPARAM_SIG="${HPARAM_SIG}_wm${WARMUP}"
-                fi
-
-                EXP_DIR="${EXP_ROOT}/${DATASET_NAME}/${MODEL}/${LOSS_TYPE}_${AL_STRATEGY}/${HPARAM_SIG}/seed_${SEED}"
-                CKPT_DIR="${EXP_DIR}/checkpoints"
-                EVAL_OUT_DIR="${EXP_DIR}/eval"
-                LOG_FILE="${EXP_DIR}/train.log"
-                mkdir -p "$CKPT_DIR" "$EVAL_OUT_DIR"
-            # 建立软链接到 logs_v3 方便统一 tail
-                ln -sf "$(pwd)/${LOG_FILE}" "logs_v3/${RUN_NAME}.log" 2>/dev/null
-                DIR_PARAMS="--exp_dir $EXP_DIR --dataset_tag $DATASET_NAME"
-            else
-                EXP_DIR="./train_results_v3/${RUN_NAME}"
-                CKPT_DIR="./train_results_v3/${RUN_NAME}"
-                EVAL_OUT_DIR="./eval_results_v3/${RUN_NAME}"
-                LOG_FILE="logs_v3/${RUN_NAME}.log"
-                mkdir -p "$EXP_DIR" "$EVAL_OUT_DIR"
-                DIR_PARAMS="--save_dir ./train_results_v3"
-            fi
-
-        # 根据 LOSS_TYPE 构建损失函数专属参数
-            PINN_PARAMS=""
-            if [ "$LOSS_TYPE" = "pinn_residual" ] || [ "$LOSS_TYPE" = "pino" ]; then
-            # v2: 物理约束作弱正则, Curriculum learning (warmup 30 轮纯 MSE)
-            # v1 问题: lambda_phys=1.0 → val_loss=0.930 (baseline=0.037, 差 25 倍)
-            # v1 问题: lambda_penalty=10.0 → 负值惩罚压制 MSE
-            # v1 问题: event 掩码基于预测 → 早期掩码错误导致梯度爆炸
-            # v2 修复: 掩码改用真值, 负值惩罚降到 1.0, warmup 30 轮
-            # PINO 复用同一组物理约束参数 (继承 PINNResidualLoss)
-                PINN_PARAMS="--lambda_phys 0.01 --lambda_jump 0.001 --lambda_penalty 1.0 --residual_subsample 10 --event_weight 0.1"
-            fi
-        # PINO 专属: H1 频域梯度损失参数 (warmup 30 轮后线性增长到 lambda_h1)
-            if [ "$LOSS_TYPE" = "pino" ]; then
-                PINN_PARAMS="$PINN_PARAMS --lambda_h1 0.1 --h1_beta 1.0"
-            fi
-
-            WANDB_FLAG=""
-            if [ "$NO_WANDB" = "1" ]; then
-                WANDB_FLAG="--no_wandb"
-            fi
-
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚀 [GPU $gpu | 任务 $task_idx/$total_for_gpu] 启动: $RUN_NAME -> 目录: $EXP_DIR"
-
-            # 执行 Train + Eval (同步串行执行)
-            {
-                echo "===========================================================" > "$LOG_FILE" 2>&1
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始训练 (GPU=$gpu | 任务 $task_idx/$total_for_gpu): $RUN_NAME" >> "$LOG_FILE" 2>&1
-                echo "===========================================================" >> "$LOG_FILE" 2>&1
-
-            # ===== 临时开关: SKIP_TRAIN=1 跳过训练只做eval, =0 恢复正常训练 =====
-                SKIP_TRAIN=0
-            # ===== 临时开关: SKIP_EVAL=1 跳过评估只做训练(OOM/冒烟测试用), =0 恢复正常评估 =====
-                SKIP_EVAL=0
-
-                # 步骤 A: 训练
-                if [ "$SKIP_TRAIN" = "0" ]; then
-                # 训练前清理旧 checkpoint, 防止 步骤B 的 `ls *.ckpt|head -1` 命中上一次残留权重。
-                # 尤其 v2.3 al4pde 保存 final-last-epoch.ckpt: 若目录残留旧 best-*.ckpt,
-                # 按字母序 best- 会排在 final- 前被误选, 导致评估到过期模型。
-                # 仅在 SKIP_TRAIN=0 (确实要重新训练) 时清理; 范围严格限定为本 run 目录下的 *.ckpt。
-                    if [ -d "$CKPT_DIR" ]; then
-                        rm -f "${CKPT_DIR}"/*.ckpt
-                        echo "🧹 训练前已清理旧 checkpoint: ${CKPT_DIR}/*.ckpt" >> "$LOG_FILE" 2>&1
+                    wait "$p" 2>/dev/null
+                    local status=$?
+                    if [ $status -eq 130 ] || [ $status -eq 137 ] || [ $status -eq 143 ]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 [GPU $gpu] 任务被用户中断 (code=$status)，终止该卡后续队列！"
+                        cleanup_worker
                     fi
-                    CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN train.py \
-                        --model $MODEL \
-                        --wavelet haar \
-                        --loss_type $LOSS_TYPE \
-                        --dataset_name "$DATASET" \
-                        --modes $MODES \
-                        --width $WIDTH \
-                        --batch_size $BATCH_SIZE \
-                        --max_epochs $EPOCHS \
-                        --seed $SEED \
-                        --name $RUN_NAME \
-                        --lr $LR \
-                        --warmup_epochs $WARMUP \
-                        --num_workers 4 \
-                        --val_batch_size $BATCH_SIZE \
-                        --devices 1 \
-                        $AL_PARAMS \
-                        $ADJ_PARAM \
-                        $PINN_PARAMS \
-                        --rollout_type $ROLLOUT_TYPE \
-                        $DIR_PARAMS \
-                        $WANDB_FLAG >> "$LOG_FILE" 2>&1
+                fi
+            done
+            ACTIVE_PIDS=("${still_running[@]}")
+            worker_pids=("${still_running[@]}")
+        }
 
-                    TRAIN_EXIT=$?
-                    if [ $TRAIN_EXIT -ne 0 ]; then
-                        echo "❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练异常退出 (exit=$TRAIN_EXIT), 自动跳过评估, 准备执行下一个任务" >> "$LOG_FILE" 2>&1
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练失败: $RUN_NAME (exit=$TRAIN_EXIT, 详细报错见 $LOG_FILE)"
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛡️ [GPU $gpu] 正在进行显存安全重置并自动无缝拉起下一项实验..."
-                        # 冷却 2 秒确保 Linux 内核与 CUDA 驱动完全回收显存和 DataLoader 子进程
-                        sleep 2
+        for ((idx=0; idx<total_for_gpu; idx++)); do
+            task_line="${VALID_TASKS[$idx]}"
+            task_idx=$((idx + 1))
+            IFS='|' read -r SEED EXP <<< "$task_line"
+
+            # ----------------------------------------------------
+            # 步骤 1: 检查资源与队列，决定是否需要等待
+            # ----------------------------------------------------
+            reap_active_pids
+            while true; do
+                # 检查并发数上限 (若设了 MAX_CONCURRENT_PER_GPU > 0)
+                if [ "$MAX_CONCURRENT_PER_GPU" -gt 0 ] && [ "${#ACTIVE_PIDS[@]}" -ge "$MAX_CONCURRENT_PER_GPU" ]; then
+                    sleep 5
+                    reap_active_pids
+                    continue
+                fi
+
+                # 若已有任务正在运行，检查剩余可用显存是否足以容纳新任务
+                if [ "${#ACTIVE_PIDS[@]}" -gt 0 ]; then
+                    curr_free=$(get_gpu_free_vram "$gpu")
+                    required_vram=$((LAST_TASK_VRAM_DELTA + MEM_SAFETY_MARGIN_MB))
+
+                    # 若上次实测显存消耗大于0，且当前卡剩余显存不足预估量，则转入串行排队等待
+                    if [ "$LAST_TASK_VRAM_DELTA" -gt 0 ] && [ "$curr_free" -lt "$required_vram" ]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏳ [GPU $gpu] 剩余显存 (${curr_free}MiB) 不足容纳新任务 (需 ~${required_vram}MiB)，转入安全串行等待已有实验完成释放显存..."
+                        sleep 10
+                        reap_active_pids
                         continue
                     fi
                 fi
 
-                # 步骤 B+C: 寻找 Checkpoint 并评估
-                if [ "$SKIP_EVAL" = "0" ]; then
-                    CKPT_PATH=$(ls ${CKPT_DIR}/*.ckpt 2>/dev/null | head -n 1)
+                # 显存充裕或卡处于空闲状态，跳出等待
+                break
+            done
 
-                    if [ -z "$CKPT_PATH" ]; then
-                        echo "❌ 错误: 在 ${CKPT_DIR} 没找到 Checkpoint 文件，跳过 Evaluate。" >> "$LOG_FILE" 2>&1
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠️ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 找不到 Checkpoint: $RUN_NAME"
-                    else
-                        echo "🎯 成功找到 Checkpoint: $CKPT_PATH" >> "$LOG_FILE" 2>&1
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始评估..." >> "$LOG_FILE" 2>&1
-                        CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN eval.py \
-                            --ckpt "$CKPT_PATH" \
-                            --dataset_name "$DATASET" \
-                            --save_dir "$EVAL_OUT_DIR" \
-                            --batch_size $BATCH_SIZE >> "$LOG_FILE" 2>&1
+            # ----------------------------------------------------
+            # 步骤 2: 启动新任务 (完全自由分配显存，不设单任务限额)
+            # ----------------------------------------------------
+            mem_before=$(get_gpu_used_vram "$gpu")
+            run_single_task "$SEED" "$EXP" "$gpu" "$task_idx" "$total_for_gpu" &
+            task_pid=$!
+            ACTIVE_PIDS+=("$task_pid")
+            worker_pids+=("$task_pid")
 
-                        if [ $? -eq 0 ]; then
-                            echo "✅ [$RUN_NAME] 评估完成！结果已保存至: $EVAL_OUT_DIR" >> "$LOG_FILE" 2>&1
-                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 评估完成: $RUN_NAME"
-                        else
-                            echo "❌ [$RUN_NAME] 评估失败" >> "$LOG_FILE" 2>&1
-                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 评估失败: $RUN_NAME"
-                        fi
+            # ----------------------------------------------------
+            # 步骤 3: 若本卡队列还有后续任务，等待稳定并实测显存增量
+            # ----------------------------------------------------
+            if [ "$idx" -lt "$((total_for_gpu - 1))" ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏱️ [GPU $gpu] 等待 ${STABILIZE_WAIT_SEC}s 待任务显存分配稳定，以动态评估下一个任务能否并发加入..."
+                for ((w=0; w<STABILIZE_WAIT_SEC; w+=5)); do
+                    sleep 5
+                    if ! kill -0 "$task_pid" 2>/dev/null; then
+                        break
                     fi
+                done
+
+                mem_after=$(get_gpu_used_vram "$gpu")
+                delta=$((mem_after - mem_before))
+                if [ "$delta" -gt 500 ]; then
+                    LAST_TASK_VRAM_DELTA=$delta
+                    curr_free=$(get_gpu_free_vram "$gpu")
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 📊 [GPU $gpu] 实测任务实际消耗显存: ${LAST_TASK_VRAM_DELTA}MiB (~$((LAST_TASK_VRAM_DELTA / 1024))GB)，当前剩余显存: ${curr_free}MiB (~$((curr_free / 1024))GB)"
                 fi
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 实验结束: $RUN_NAME" >> "$LOG_FILE" 2>&1
-            }
+            fi
+        done
 
-            # 任务间预留 10 秒显存与 CUDA 驱动上下文彻底释放缓冲
-            sleep 10
-
-        done <<< "${GPU_TASK_LIST[$gpu]}"
+        # ----------------------------------------------------
+        # 步骤 4: 等待该卡所有派发的并行/串行任务全部完成
+        # ----------------------------------------------------
+        while [ "${#ACTIVE_PIDS[@]}" -gt 0 ]; do
+            reap_active_pids
+            sleep 5
+        done
 
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🏁 [GPU $gpu] 队列中的全部 $total_for_gpu 个任务已顺利完成！"
     } &
