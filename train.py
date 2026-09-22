@@ -82,10 +82,10 @@ class SimToRealVisualizerCallback(Callback):
                 plt.suptitle(title_str, fontsize=22, fontweight='bold')
                 plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-                # key 格式: "LHS_train/Pattern_A_0", "LHS_val/Pattern_B_1", "real_mutants/Pattern_C_5"
+                # key 格式: "synth_train/Pattern_A_0", "synth_val/Pattern_B_1", "real_mutants/Pattern_C_5"
                 # group = key 的第一段, 样本名 = key 的第二段
                 parts = key.split('/', 1)
-                group_name = parts[0]  # LHS_train, LHS_val, LHS_test, real_mutants
+                group_name = parts[0]  # synth_train, synth_val, synth_test, real_mutants
                 sample_name = parts[1] if len(parts) > 1 else key
                 if isinstance(trainer.logger, WandbLogger):
                     log_dict[f'{group_name}/{sample_name}'] = wandb.Image(fig)
@@ -112,14 +112,16 @@ class EpochSummaryCallback(Callback):
         epoch = trainer.current_epoch
         m = trainer.callback_metrics
         train_loss = float(m.get('train_loss', float('nan')))
-        val_lhs = float(m.get('val_loss_lhs', float('nan')))
-        test_lhs = float(m.get('test_loss_lhs', float('nan')))
+        val_synth = float(m.get('val_loss_synth', float('nan')))
+        test_synth = float(m.get('test_loss_synth', float('nan')))
         test_real = float(m.get('test_loss_real', float('nan')))
+        test_real_denorm = float(m.get('test_loss_real_denorm', float('nan')))
         lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0.0
         elapsed = time.time() - self.epoch_start_time
         print(f"[Epoch {epoch+1:03d}/{trainer.max_epochs:03d}] "
-              f"train_loss={train_loss:.6f} | val_lhs={val_lhs:.6f} | "
-              f"test_lhs={test_lhs:.6f} | test_real={test_real:.6f} | "
+              f"train_loss={train_loss:.6f} | val_synth={val_synth:.6f} | "
+              f"test_synth={test_synth:.6f} | test_real={test_real:.6f} | "
+              f"test_real_denorm={test_real_denorm:.6f} | "
               f"lr={lr:.2e} | {elapsed:.1f}s", flush=True)
 
 def main():
@@ -349,7 +351,7 @@ def main():
     datamodule = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
         adj_matrix_path=args.adj_matrix_path if args.adj_matrix_path else 'mydata/yeast_signed_adjacency_matrix.npy',
-        batch_size_lhs=args.batch_size,
+        batch_size_synth=args.batch_size,
         val_batch_size=args.val_batch_size,
         num_workers=args.num_workers,
         use_adj_matrix=(args.adj_matrix_path is not None),
@@ -399,7 +401,7 @@ def main():
 
         trainer = None
         for r in range(NUM_AL_ROUNDS):
-            n_train = len(datamodule.train_dataset_lhs)
+            n_train = len(datamodule.train_dataset_synth)
             print(f"\n===== [al4pde v2.3] AL 轮 {r + 1}/{NUM_AL_ROUNDS} | 当前训练集: {n_train} =====")
             model = build_fresh_model()  # 冷启动: 全新随机初始化 + 全新余弦周期
             trainer = pl.Trainer(
@@ -424,11 +426,11 @@ def main():
         trainer.save_checkpoint(final_ckpt)
         print(f"✅ [al4pde v2.3] 已保存最终模型 (最后一轮最后 epoch): {final_ckpt}")
     else:
-        # ================= 非 al4pde: 单次 fit (最优权重依据 val_loss_lhs) =================
+        # ================= 非 al4pde: 单次 fit (最优权重依据 val_loss_synth) =================
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
-            filename='best-{epoch:02d}-{val_loss_lhs:.4f}',
-            monitor='val_loss_lhs',
+            filename='best-{epoch:02d}-{val_loss_synth:.4f}',
+            monitor='val_loss_synth',
             mode='min',
             save_top_k=1,
         )

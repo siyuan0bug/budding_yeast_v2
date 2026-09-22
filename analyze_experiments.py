@@ -154,7 +154,7 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
 
     # 1. 结构化汇总全部指标
     # 结构: stats[split][var_set][metric] = [val_seed1, val_seed2, ...]
-    splits = ["real_mutants", "lhs_test", "all_test"]
+    splits = ["real_mutants", "synth_test", "all_test"]
     var_subsets = ["all_39_vars", "core_9_vars"]
     metric_keys = ["MAE", "Relative L2", "Correlation", "MSE"]
 
@@ -163,6 +163,9 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
 
     for s in seeds:
         m = s["metrics"]
+        # 平滑兼容：若旧实验只有 lhs_test，则映射为 synth_test
+        if "synth_test" not in m and "lhs_test" in m:
+            m["synth_test"] = m["lhs_test"]
         for sp in splits:
             if sp in m and isinstance(m[sp], dict):
                 if sample_counts[sp] is None and "count" in m[sp]:
@@ -196,7 +199,7 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
     # 3. 构造扁平快捷指标 (方便排行榜与快速索引)
     real_39 = summary_metrics.get("real_mutants", {}).get("all_39_vars", {})
     real_c9 = summary_metrics.get("real_mutants", {}).get("core_9_vars", {})
-    lhs_39 = summary_metrics.get("lhs_test", {}).get("all_39_vars", {})
+    synth_39 = summary_metrics.get("synth_test", {}).get("all_39_vars", {}) or summary_metrics.get("lhs_test", {}).get("all_39_vars", {})
     all_39 = summary_metrics.get("all_test", {}).get("all_39_vars", {})
 
     summary = {
@@ -225,9 +228,9 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
         "real_core9_corr_mean": real_c9.get("Correlation", {}).get("mean", float("nan")),
         "real_core9_corr_std": real_c9.get("Correlation", {}).get("std", 0.0),
 
-        # LHS Test & All Test 关键指标
-        "lhs_mae_mean": lhs_39.get("MAE", {}).get("mean", float("nan")),
-        "lhs_mae_std": lhs_39.get("MAE", {}).get("std", 0.0),
+        # Synthetic Test & All Test 关键指标
+        "synth_mae_mean": synth_39.get("MAE", {}).get("mean", float("nan")),
+        "synth_mae_std": synth_39.get("MAE", {}).get("std", 0.0),
         "all_test_mae_mean": all_39.get("MAE", {}).get("mean", float("nan")),
         "all_test_mae_std": all_39.get("MAE", {}).get("std", 0.0),
 

@@ -233,7 +233,7 @@ budding_yeast_v2/
 3. 每个子组内独立切 10% val / 10% test / 80% train。
 4. **孤本保护**：子组 ≤2 样本全部进训练集；≤4 样本不抽测试集。修改切分逻辑要保留此保护，否则稀有 Pattern 流形会丢失。
 
-DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loader_lhs`、`test_loader_real`（dataloader_idx 0/1/2 对应 `val_loss_lhs`/`test_loss_lhs`/`test_loss_real`）。
+DataModule 提供 3 个验证/测试 DataLoader：`val_loader_synth`、`test_loader_synth`、`test_loader_real`（dataloader_idx 0/1/2 对应 `val_loss_synth`/`test_loss_synth`/`test_loss_real`）。
 
 ---
 
@@ -247,13 +247,13 @@ DataModule 提供 3 个验证/测试 DataLoader：`val_loader_lhs`、`test_loade
 ### 8.2 训练步
 - `training_step`：`forward_ic_time(x, p)` → 根据 `loss_type` 调用 criterion（pinn_residual 需 `set_epoch`）→ log `train_loss` + 各分量。
 - `validation_step`：3 个 dataloader_idx 对应 3 个 val/test 指标（归一化空间 MSE）。
-- **Checkpoint**：monitor `val_loss_lhs`，`mode=min`，`save_top_k=1`。
+- **Checkpoint**：monitor `val_loss_synth`，`mode=min`，`save_top_k=1`。
 
 ### 8.3 回调
-- `ModelCheckpoint`：存 `train_result/<run_name>/best-{epoch:02d}-{val_loss_lhs:.4f}.ckpt`。
+- `ModelCheckpoint`：存 `train_result/<run_name>/best-{epoch:02d}-{val_loss_synth:.4f}.ckpt`。
 - `LearningRateMonitor`。
 - `SimToRealVisualizerCallback`：每 10 epoch 在固定画图样本上预测并上传 W&B（39 变量网格图，反归一化）。
-- `EpochSummaryCallback`：每个 epoch 结束用 `print(flush=True)` 输出摘要行（`train_loss`/`val_lhs`/`test_lhs`/`test_real`/`lr`/`耗时`），确保日志文件可见进度（不依赖 tqdm 终端渲染）。
+- `EpochSummaryCallback`：每个 epoch 结束用 `print(flush=True)` 输出摘要行（`train_loss`/`val_synth`/`test_synth`/`test_real`/`test_real_denorm`/`lr`/`耗时`），确保日志文件可见进度（不依赖 tqdm 终端渲染）。
 - `ActiveLearningCallback`（见第 10 节）。
 
 ---

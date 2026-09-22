@@ -10,9 +10,9 @@ from .dataset_utils import load_yeast_dataset_universal
 class YeastDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        dataset_path='mydata/lhs_massive_210min_500steps_dual_labels.npz',
+        dataset_path='mydata/mass_100000_dataset_210min_500steps_dual_labels.npz',
         adj_matrix_path='mydata/yeast_signed_adjacency_matrix.npy',
-        batch_size_lhs=32,
+        batch_size_synth=32,
         batch_size_real=8,
         val_batch_size=32,
         num_workers=4,
@@ -25,7 +25,7 @@ class YeastDataModule(pl.LightningDataModule):
 
         self.dataset_path = dataset_path
         self.adj_matrix_path = adj_matrix_path
-        self.batch_size_lhs = batch_size_lhs
+        self.batch_size_synth = batch_size_synth
         self.batch_size_real = batch_size_real
         self.val_batch_size = val_batch_size
         self.num_workers = num_workers
@@ -90,9 +90,9 @@ class YeastDataModule(pl.LightningDataModule):
         self.is_mass_dataset = not has_lhs
 
         if has_lhs:
-            lhs_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' in str(name)]
+            synth_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' in str(name)]
             real_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' not in str(name)]
-            print(f"📊 [LHS 家族数据集] 提取到 LHS 训练样本: {len(lhs_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
+            print(f"📊 [LHS 家族数据集] 提取到合成样本: {len(synth_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
         else:
             # 通用非 LHS 识别逻辑:
             # 真实突变体均为 Chen(2004) 标准命名 (如 1_WT_Glc, 15_cln3Δ..., 126_...), 均以纯数字+下划线开头
@@ -102,14 +102,14 @@ class YeastDataModule(pl.LightningDataModule):
                 return bool(re.match(r'^\d+(\.\d+)?_', s)) and not any(s.startswith(p) for p in ('MASS_', 'WB-MASS_', 'WB_', 'SYNTH_', 'RANDOM_'))
 
             real_indices = [i for i, name in enumerate(mutant_names) if _is_real_mutant(name)]
-            lhs_indices = [i for i, name in enumerate(mutant_names) if not _is_real_mutant(name)]
-            print(f"📊 [通用非 LHS 数据集] 提取到合成样本: {len(lhs_indices)} 个 | "
+            synth_indices = [i for i, name in enumerate(mutant_names) if not _is_real_mutant(name)]
+            print(f"📊 [通用非 LHS 数据集] 提取到合成样本: {len(synth_indices)} 个 | "
                   f"真实测试突变体: {len(real_indices)} 个 (跳过 LHS 家族分层, 仅按 Pattern 宏观划分)")
 
         if len(real_indices) == 0:
             print("⚠️ 警告: 未在数据集中发现任何真实评估样本！自动切出最后 10 个样本作为测试集。")
-            real_indices = lhs_indices[-10:]
-            lhs_indices = lhs_indices[:-10]
+            real_indices = synth_indices[-10:]
+            synth_indices = synth_indices[:-10]
 
         # ================================================================
         #  双级分层 + 孤本保护 数据划分机制
@@ -124,16 +124,16 @@ class YeastDataModule(pl.LightningDataModule):
         # 后续仍按 Pattern 子组做宏观 train/val/test 划分 (保留 Pattern 分层 + 孤本保护)。
         family_groups = {}
         if self.is_mass_dataset:
-            family_groups['MASS'] = list(lhs_indices)
+            family_groups['MASS'] = list(synth_indices)
         else:
-            for idx in lhs_indices:
+            for idx in synth_indices:
                 name = str(mutant_names[idx])
                 family = name.split('_LHS_')[0] if '_LHS_' in name else name
                 family_groups.setdefault(family, []).append(idx)
 
-        train_idx_lhs = []
-        val_idx_lhs = []
-        test_idx_lhs = []
+        train_idx_synth = []
+        val_idx_synth = []
+        test_idx_synth = []
 
         for family, family_indices in family_groups.items():
             # 第二级：在该家族内按 Pattern 子组分组
@@ -169,24 +169,24 @@ class YeastDataModule(pl.LightningDataModule):
                 test_from_pat = pat_indices[val_quota:val_quota + test_quota]
                 train_from_pat = pat_indices[val_quota + test_quota:]
 
-                val_idx_lhs.extend(val_from_pat)
-                test_idx_lhs.extend(test_from_pat)
-                train_idx_lhs.extend(train_from_pat)
+                val_idx_synth.extend(val_from_pat)
+                test_idx_synth.extend(test_from_pat)
+                train_idx_synth.extend(train_from_pat)
 
                 print(f"   [Family={family}] {pat}: total={n_pat:>5d}  "
                       f"→ train={len(train_from_pat):>5d}  val={len(val_from_pat):>3d}  test={len(test_from_pat):>3d}")
 
         # 最终整体洗牌
-        np.random.shuffle(train_idx_lhs)
-        np.random.shuffle(val_idx_lhs)
-        np.random.shuffle(test_idx_lhs)
+        np.random.shuffle(train_idx_synth)
+        np.random.shuffle(val_idx_synth)
+        np.random.shuffle(test_idx_synth)
 
         test_idx_real = real_indices
 
         n_families = len(family_groups)
         print(f"📊 [两级分层+孤本保护] 家族数: {n_families} | "
-              f"训练集: {len(train_idx_lhs)} | 验证集: {len(val_idx_lhs)} | "
-              f"LHS测试集: {len(test_idx_lhs)} | 真实测试集: {len(test_idx_real)}")
+              f"训练集: {len(train_idx_synth)} | 验证集: {len(val_idx_synth)} | "
+              f"合成测试集: {len(test_idx_synth)} | 真实测试集: {len(test_idx_real)}")
 
         # 归一化统计量计算：支持 log1p 平滑对数归一化与传统线性归一化
         self.norm_type = getattr(self, 'norm_type', 'log1p')
@@ -195,12 +195,12 @@ class YeastDataModule(pl.LightningDataModule):
         else:
             Y_trans = Y
 
-        # 归一化统计量使用全部 LHS 数据，避免稀有 Pattern 缺席导致的偏差
-        self.mean_y = Y_trans[lhs_indices].mean(dim=(0, 2), keepdim=True)
-        self.std_y = Y_trans[lhs_indices].std(dim=(0, 2), keepdim=True) + 1e-6
+        # 归一化统计量使用全部合成数据，避免稀有 Pattern 缺席导致的偏差
+        self.mean_y = Y_trans[synth_indices].mean(dim=(0, 2), keepdim=True)
+        self.std_y = Y_trans[synth_indices].std(dim=(0, 2), keepdim=True) + 1e-6
 
-        self.p_mean = Params[lhs_indices].mean(dim=0, keepdim=True)
-        self.p_std = Params[lhs_indices].std(dim=0, keepdim=True) + 1e-6
+        self.p_mean = Params[synth_indices].mean(dim=0, keepdim=True)
+        self.p_std = Params[synth_indices].std(dim=0, keepdim=True) + 1e-6
 
         Y_norm = (Y_trans - self.mean_y) / self.std_y
         Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
@@ -221,9 +221,9 @@ class YeastDataModule(pl.LightningDataModule):
             return 1
         pattern_ids = torch.tensor([_to_pat_id(lbl) for lbl in pattern_labels], dtype=torch.long)
 
-        self.train_dataset_lhs = TensorDataset(X[train_idx_lhs], Params_norm[train_idx_lhs], Y_norm[train_idx_lhs], pattern_ids[train_idx_lhs])
-        self.val_dataset_lhs = TensorDataset(X[val_idx_lhs], Params_norm[val_idx_lhs], Y_norm[val_idx_lhs])
-        self.test_dataset_lhs = TensorDataset(X[test_idx_lhs], Params_norm[test_idx_lhs], Y_norm[test_idx_lhs])
+        self.train_dataset_synth = TensorDataset(X[train_idx_synth], Params_norm[train_idx_synth], Y_norm[train_idx_synth], pattern_ids[train_idx_synth])
+        self.val_dataset_synth = TensorDataset(X[val_idx_synth], Params_norm[val_idx_synth], Y_norm[val_idx_synth])
+        self.test_dataset_synth = TensorDataset(X[test_idx_synth], Params_norm[test_idx_synth], Y_norm[test_idx_synth])
         self.test_dataset_real = TensorDataset(X[test_idx_real], Params_norm[test_idx_real], Y_norm[test_idx_real])
 
         # ======== 4. 基于 Pattern Label 的分层画图样本选取 ========
@@ -237,26 +237,26 @@ class YeastDataModule(pl.LightningDataModule):
                 matched = indices[:n_samples] if len(indices) >= n_samples else indices
             return matched[:n_samples]
 
-        # A. LHS 训练集: 每个 Pattern 选 2 个
+        # A. 合成训练集: 每个 Pattern 选 2 个
         for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(train_idx_lhs, p, 2)):
-                self.fixed_samples_for_plot[f'LHS_train/{p}_{i}'] = (
+            for i, idx in enumerate(find_samples_by_pattern(train_idx_synth, p, 2)):
+                self.fixed_samples_for_plot[f'synth_train/{p}_{i}'] = (
                     X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
                     Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
                 )
 
-        # B. LHS 验证集: 每个 Pattern 选 2 个
+        # B. 合成验证集: 每个 Pattern 选 2 个
         for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(val_idx_lhs, p, 2)):
-                self.fixed_samples_for_plot[f'LHS_val/{p}_{i}'] = (
+            for i, idx in enumerate(find_samples_by_pattern(val_idx_synth, p, 2)):
+                self.fixed_samples_for_plot[f'synth_val/{p}_{i}'] = (
                     X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
                     Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
                 )
 
-        # C. LHS 测试集: 每个 Pattern 选 2 个
+        # C. 合成测试集: 每个 Pattern 选 2 个
         for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(test_idx_lhs, p, 2)):
-                self.fixed_samples_for_plot[f'LHS_test/{p}_{i}'] = (
+            for i, idx in enumerate(find_samples_by_pattern(test_idx_synth, p, 2)):
+                self.fixed_samples_for_plot[f'synth_test/{p}_{i}'] = (
                     X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
                     Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
                 )
@@ -273,21 +273,21 @@ class YeastDataModule(pl.LightningDataModule):
         self._param_conds = param_conds
         self._mutant_names = mutant_names
         self._Y = Y
-        self._train_idx_lhs = train_idx_lhs
-        self._val_idx_lhs = val_idx_lhs
-        self._test_idx_lhs = test_idx_lhs
+        self._train_idx_synth = train_idx_synth
+        self._val_idx_synth = val_idx_synth
+        self._test_idx_synth = test_idx_synth
         self._test_idx_real = test_idx_real
         self._setup_done = True
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset_lhs, batch_size=self.batch_size_lhs,
+        return DataLoader(self.train_dataset_synth, batch_size=self.batch_size_synth,
                           shuffle=True, drop_last=True, num_workers=self.num_workers, pin_memory=True)
 
     def val_dataloader(self):
         return [
-            DataLoader(self.val_dataset_lhs, batch_size=self.val_batch_size,
+            DataLoader(self.val_dataset_synth, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
-            DataLoader(self.test_dataset_lhs, batch_size=self.val_batch_size,
+            DataLoader(self.test_dataset_synth, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
             DataLoader(self.test_dataset_real, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
@@ -299,7 +299,7 @@ class YeastDataModule(pl.LightningDataModule):
 
     @property
     def test_indices(self):
-        return self._test_idx_lhs, self._test_idx_real
+        return self._test_idx_synth, self._test_idx_real
 
     def denormalize_y(self, y_norm, device=None):
         """

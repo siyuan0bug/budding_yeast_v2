@@ -94,11 +94,11 @@ train.py
   ├─ YeastDataModule (data/yeast_datamodule.py)
   │    ├─ 加载 npz 数据集
   │    ├─ 两级分层划分（家族 × Pattern）+ 孤本保护
-  │    ├─ Z-score 归一化（仅 LHS 样本统计量）
-  │    └─ 3 个 DataLoader: val_lhs / test_lhs / test_real
+  │    ├─ 归一化（仅合成样本统计量）
+  │    └─ 3 个 DataLoader: val_synth / test_synth / test_real
   │
   └─ Callbacks
-       ├─ ModelCheckpoint (monitor val_loss_lhs)
+       ├─ ModelCheckpoint (monitor val_loss_synth)
        ├─ LearningRateMonitor
        ├─ SimToRealVisualizerCallback (每 10 epoch 画 39 变量轨迹图)
        ├─ EpochSummaryCallback (每 epoch print 摘要行到日志)

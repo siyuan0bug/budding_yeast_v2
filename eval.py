@@ -37,10 +37,10 @@ def get_real_mutations_str(mutant_name):
         return "WT (Default)"
     return ", ".join(f"{k}={v:.4g}" for k, v in rules.items())
 
-def get_lhs_perturbation_str(lhs_name, lhs_param_vec_real):
+def get_synth_perturbation_str(synth_name, synth_param_vec_real):
     mother_name = None
     for rule_name in sorted(mutant_rules.keys(), key=len, reverse=True):
-        if lhs_name.startswith(rule_name + '_LHS'):
+        if synth_name.startswith(rule_name + '_LHS') or synth_name.startswith(rule_name + '_SYNTH'):
             mother_name = rule_name
             break
 
@@ -53,13 +53,13 @@ def get_lhs_perturbation_str(lhs_name, lhs_param_vec_real):
     mother_param_vec = np.array([mother_defaults[k] for k in PARAM_KEYS])
 
     mutated_info = []
-    for lhs_val, mother_val, name in zip(lhs_param_vec_real, mother_param_vec, PARAM_KEYS):
-        if not np.isclose(lhs_val, mother_val, rtol=1e-4, atol=1e-6):
+    for s_val, mother_val, name in zip(synth_param_vec_real, mother_param_vec, PARAM_KEYS):
+        if not np.isclose(s_val, mother_val, rtol=1e-4, atol=1e-6):
             if abs(mother_val) > 1e-8:
-                ratio = lhs_val / mother_val
-                mutated_info.append(f"{name}={lhs_val:.4g} (mother={mother_val:.4g}, {ratio:.2f}x)")
+                ratio = s_val / mother_val
+                mutated_info.append(f"{name}={s_val:.4g} (mother={mother_val:.4g}, {ratio:.2f}x)")
             else:
-                mutated_info.append(f"{name}={lhs_val:.4g} (mother=0)")
+                mutated_info.append(f"{name}={s_val:.4g} (mother=0)")
 
     if not mutated_info:
         return mother_name, "No Perturbations (Identical to Base Mutant)"
@@ -169,8 +169,8 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
             title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
             
-            if '_LHS_' in m_name:
-                mother_name, perturb_str = get_lhs_perturbation_str(m_name, p_real_i)
+            if '_LHS_' in m_name or '_SYNTH_' in m_name:
+                mother_name, perturb_str = get_synth_perturbation_str(m_name, p_real_i)
                 title_base += f"\nMother: {mother_name} | Perturbations (mother_val, ratio):\n{perturb_str}"
             elif str(m_name).startswith('MASS_'):
                 title_base += f"\nMASS synthetic sample (mutant-aware stratified sampling)"
@@ -206,8 +206,7 @@ def main():
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--save_dir', type=str, default=None, help='评估输出目录 (默认保存在 exp_dir/eval 或 ./eval_result)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--lhs_test_plots', type=int, default=50, help='LHS 测试集最多画多少张图')
+    parser.add_argument('--synth_test_plots', type=int, default=50, help='合成测试集最多画多少张图')
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
     parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'linear'],
                         help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
@@ -256,16 +255,18 @@ def main():
         sub_dir='real_mutants', batch_size=args.batch_size, max_plots=None, max_workers=args.plot_workers
     )
 
-    # ======== 2. 评估 LHS 测试集 ========
-    lhs_summary, lhs_csv, lhs_preds, lhs_targets = evaluate_dataset(
-        model, dm, dm.test_dataset_lhs, dm._test_idx_lhs,
+    # ======== 2. 评估 Synthetic 测试集 ========
+    synth_dataset = dm.test_dataset_synth
+    synth_idx = dm._test_idx_synth
+    synth_summary, synth_csv, synth_preds, synth_targets = evaluate_dataset(
+        model, dm, synth_dataset, synth_idx,
         args.device, mean_y, std_y, args.seed, args.save_dir,
-        sub_dir='lhs_test', batch_size=args.batch_size, max_plots=args.lhs_test_plots, max_workers=args.plot_workers
+        sub_dir='synth_test', batch_size=args.batch_size, max_plots=args.synth_test_plots, max_workers=args.plot_workers
     )
 
     # ======== 3. 汇总 JSON ========
-    all_preds = torch.cat(real_preds + lhs_preds, dim=0)
-    all_targets = torch.cat(real_targets + lhs_targets, dim=0)
+    all_preds = torch.cat(real_preds + synth_preds, dim=0)
+    all_targets = torch.cat(real_targets + synth_targets, dim=0)
 
     all_test_summary = {
         "all_39_vars": calculate_metrics(all_preds, all_targets),
@@ -276,7 +277,7 @@ def main():
     global_metrics = {
         "all_test": all_test_summary,
         "real_mutants": real_summary,
-        "lhs_test": lhs_summary,
+        "synth_test": synth_summary,
     }
 
     json_path = os.path.join(args.save_dir, 'global_metrics_denorm.json')
@@ -285,7 +286,7 @@ def main():
     print(f"📊 Global metrics JSON saved to: {json_path}")
     print(f"   all_test:     n={all_test_summary['count']}, MAE={all_test_summary['all_39_vars']['MAE']:.4f}, Corr={all_test_summary['all_39_vars']['Correlation']:.4f}")
     print(f"   real_mutants: n={real_summary['count']}, MAE={real_summary['all_39_vars']['MAE']:.4f}, Corr={real_summary['all_39_vars']['Correlation']:.4f}")
-    print(f"   lhs_test:     n={lhs_summary['count']}, MAE={lhs_summary['all_39_vars']['MAE']:.4f}, Corr={lhs_summary['all_39_vars']['Correlation']:.4f}")
+    print(f"   synth_test:   n={synth_summary['count']}, MAE={synth_summary['all_39_vars']['MAE']:.4f}, Corr={synth_summary['all_39_vars']['Correlation']:.4f}")
 
     # ======== 4. 输出 CSV ========
     def write_csv(rows, path):
@@ -298,7 +299,7 @@ def main():
         print(f"📝 CSV saved to: {path}")
 
     write_csv(real_csv, os.path.join(args.save_dir, 'per_mutant_metrics.csv'))
-    write_csv(lhs_csv, os.path.join(args.save_dir, 'per_lhs_test_metrics.csv'))
+    write_csv(synth_csv, os.path.join(args.save_dir, 'per_synth_test_metrics.csv'))
 
 if __name__ == '__main__':
     main()

@@ -40,6 +40,7 @@ from .components.bio_refiner_dynamic_plus import BioRefinerDynamicPlus
 from .components.bio_event_refiner import BioEventHybridRefiner
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
+from budding_yeast_v2.utils.metrics import relative_l2_loss
 
 
 MODEL_REGISTRY = {
@@ -335,21 +336,48 @@ class YeastLitModule(pl.LightningModule):
         self.max_epochs = max_epochs
         self.adj_matrix = adj_matrix
 
+        # 归一化统计量与反归一化状态 (非持久化 buffer，训练时从 datamodule 注入)
+        self.register_buffer('mean_y', torch.zeros(1, num_vars, 1), persistent=False)
+        self.register_buffer('std_y', torch.ones(1, num_vars, 1), persistent=False)
+        self.norm_type = 'log1p'
+
     def setup(self, stage=None):
         # HANO 等结构保持模型需要在真实空间完成通量积分/事件跳变,
         # 注入 datamodule 归一化统计量 (persistent buffer, 随 checkpoint 持久化)
         self._inject_model_stats()
 
     def _inject_model_stats(self):
-        if not hasattr(self.model, 'set_stats'):
+        dm = getattr(getattr(self, 'trainer', None), 'datamodule', None)
+        if dm is None or not hasattr(dm, 'mean_y') or dm.mean_y is None:
             return
-        dm = getattr(self.trainer, 'datamodule', None)
-        if dm is None or not hasattr(dm, 'mean_y'):
-            return
-        try:
-            self.model.set_stats(dm.mean_y, dm.std_y, dm.p_mean, dm.p_std, float(dm.t_max))
-        except Exception as e:
-            print(f"[YeastLitModule] 统计量注入失败 (将在 on_train_start 重试): {e}")
+        if hasattr(self, 'mean_y') and isinstance(self.mean_y, torch.Tensor):
+            self.mean_y.copy_(dm.mean_y.to(self.device))
+            self.std_y.copy_(dm.std_y.to(self.device))
+        self.norm_type = getattr(dm, 'norm_type', 'log1p')
+        if hasattr(self.model, 'set_stats'):
+            try:
+                self.model.set_stats(dm.mean_y, dm.std_y, dm.p_mean, dm.p_std, float(dm.t_max))
+            except Exception as e:
+                print(f"[YeastLitModule] 统计量注入失败 (将在 on_train_start 重试): {e}")
+
+    def denormalize_y(self, y_norm):
+        """
+        将归一化张量 y_norm (B, V, T) 反归一化到真实物理浓度空间。
+        优先使用 trainer.datamodule.denormalize_y，兜底使用自身缓存的 mean_y / std_y / norm_type。
+        """
+        dm = getattr(getattr(self, 'trainer', None), 'datamodule', None)
+        if dm is not None and hasattr(dm, 'denormalize_y'):
+            return dm.denormalize_y(y_norm, device=y_norm.device)
+
+        if hasattr(self, 'mean_y') and self.mean_y is not None:
+            mean_y = self.mean_y.to(y_norm.device)
+            std_y = self.std_y.to(y_norm.device)
+            y_shifted = y_norm * std_y + mean_y
+            if getattr(self, 'norm_type', 'log1p') == 'log1p':
+                y_clamped = torch.clamp(y_shifted, min=-10.0, max=15.0)
+                return torch.clamp(torch.expm1(y_clamped), min=0.0)
+            return y_shifted
+        return y_norm
 
     def on_train_start(self):
         # 统计量注入兜底 (setup 时 datamodule 统计量可能尚未就绪)
@@ -561,11 +589,16 @@ class YeastLitModule(pl.LightningModule):
         mse_val = F.mse_loss(pred, target)
 
         if dataloader_idx == 0:
-            self.log('val_loss_lhs', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
+            self.log('val_loss_synth', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
         elif dataloader_idx == 1:
-            self.log('test_loss_lhs', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
+            self.log('test_loss_synth', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
         elif dataloader_idx == 2:
             self.log('test_loss_real', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
+            # 计算真实物理空间下的 Real Mutants 损失 (使用 metrics.py 同款 Relative L2 Loss, eps=0.1 物理基底截断保护)
+            pred_real = self.denormalize_y(pred)
+            target_real = self.denormalize_y(target)
+            rel_l2_real = relative_l2_loss(pred_real, target_real, eps=0.1)
+            self.log('test_loss_real_denorm', rel_l2_real, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
 
         return mse_val
 

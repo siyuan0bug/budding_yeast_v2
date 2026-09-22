@@ -118,7 +118,7 @@ def make_objective(args):
         datamodule = YeastDataModule(
             dataset_path=dataset_path,
             adj_matrix_path=args.adj_matrix_path if args.adj_matrix_path else "mydata/yeast_signed_adjacency_matrix.npy",
-            batch_size_lhs=hp["batch_size"],
+            batch_size_synth=hp["batch_size"],
             val_batch_size=256,
             num_workers=args.num_workers,
             use_adj_matrix=(args.adj_matrix_path is not None),
@@ -129,12 +129,12 @@ def make_objective(args):
         ckpt_dir = os.path.join(args.save_dir, "checkpoints", f"{worker_suffix}trial_{trial.number}")
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
-            filename="best-{epoch:02d}-{val_loss_lhs:.4f}",
-            monitor="val_loss_lhs",
+            filename="best-{epoch:02d}-{val_loss_synth:.4f}",
+            monitor="val_loss_synth",
             mode="min",
             save_top_k=1,
         )
-        pruner_cb = PyTorchLightningPruningCallback(trial, monitor="val_loss_lhs")
+        pruner_cb = PyTorchLightningPruningCallback(trial, monitor="val_loss_synth")
         callbacks = [checkpoint_callback, pruner_cb]
 
         # 5. 主动学习回调 (若指定)
