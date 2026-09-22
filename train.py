@@ -197,21 +197,17 @@ def main():
     
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
     parser.add_argument('--al_strategy', type=str, default='none',
-                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'rgs', 'pial', 'mutant_aware',
+                          choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'pial',
                                    'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_mass',
                                    'al4pde_novelty'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
-                               "us/is/random=标准池化AL; rgs=Real-Guided局部密集采样; "
-                               "pial=Physics-Informed AL (ODE残差+轨迹多样性); "
-                               "mutant_aware=基于atlas数据的优先级加权采样, 需配合 --atlas_csv; "
+                               "us/is/random/pial=标准池化AL; "
                                "al4pde_random/uncertainty/diversity=al4pde风格池化AL; "
                                "maal=Mutant-Aware AL (diversity+target priority); "
-                               "al4pde_mass=借鉴mass_dataset_generator的分层采样, 按通路频率×机制频率优先选择生物学高频典型突变; "
-                               "al4pde_novelty=纯随机候选池(无定向采样)+组合新颖性选择: 初始集与候选池均由mass_random_sampler完全随机生成(保留Level分层), "
-                               "acquisition=novelty(突变单元全子集组合覆盖)+family_unc(训练集家族不确定性)+diversity(ODE轨迹形状), 对real mutants零泄露. "
-                               "注: 全部al4pde策略的候选池与初始集统一为sample_mass_random随机生成 (v2.6)")
+                               "al4pde_mass=按通路频率×机制频率优先选择生物学高频典型突变; "
+                               "al4pde_novelty=纯随机候选池(无定向采样)+组合新颖性选择)")
     parser.add_argument('--atlas_csv', type=str, default=None,
-                        help="mutant_aware 策略专用: mutant_atlas_merged.csv 路径 (含 lhs_MAE_min, lhs_n_samples 列)")
+                        help="已弃用 (保留仅用于兼容)")
     # al4pde 框架专用参数
     parser.add_argument('--al_pool_dataset', type=str, default=None,
                         help="al4pde/maal 策略专用: 候选池数据集路径 (v5), 含 target 样本 (_LHS_T 后缀)")
@@ -226,12 +222,8 @@ def main():
                         help="al4pde_novelty 的家族不确定性权重 (默认 0.2; diversity 权重 = 1 - novelty - family 自动归一化)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="触发主动学习的 Epoch 间隔")
     parser.add_argument('--al_num_add', type=int, default=500, help="每轮 AL 新增样本数 (减小以避免引入噪声)")
-    parser.add_argument('--al_perturbation', type=float, default=0.05, help="RGS专用: 连续参数局部扰动幅度 (0.05=±5%%, 减小以提升参数合理性)")
-    parser.add_argument('--al_mae_threshold', type=float, default=0.1, help="RGS专用: MAE大于此阈值的Real Mutant优先密集采样")
-    # 标准池化 AL 专属参数
-    parser.add_argument('--al_initial_train_size', type=int, default=2000,
-                        help="AL初始训练集大小 (默认2000; us/is/random=池化AL让AL有发挥空间; "
-                             "mutant_aware/rgs=查询合成AL建议设为50000+, 先在全量数据上预训练再触发AL定向采样)")
+    parser.add_argument('--al_initial_train_size', type=int, default=5000,
+                        help="AL初始训练集大小 (标准池化AL默认2000, al4pde外层重训默认5000)")
     parser.add_argument('--al_initial_selection', type=str, default='kmeans',
                         choices=['kmeans', 'random'],
                         help="标准AL初始训练集选择方法 (kmeans=聚类多样性, random=随机)")

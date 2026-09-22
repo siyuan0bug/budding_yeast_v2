@@ -301,6 +301,24 @@ class YeastDataModule(pl.LightningDataModule):
     def test_indices(self):
         return self._test_idx_synth, self._test_idx_real
 
+    @property
+    def train_dataset_lhs(self):
+        """兼容属性: 自动重定向到 train_dataset_synth"""
+        return self.train_dataset_synth
+
+    @train_dataset_lhs.setter
+    def train_dataset_lhs(self, value):
+        self.train_dataset_synth = value
+
+    @property
+    def _train_idx_lhs(self):
+        """兼容属性: 自动重定向到 _train_idx_synth"""
+        return self._train_idx_synth
+
+    @_train_idx_lhs.setter
+    def _train_idx_lhs(self, value):
+        self._train_idx_synth = value
+
     def denormalize_y(self, y_norm, device=None):
         """
         Denormalizes y_norm back to physical concentration space (B, V, T).
