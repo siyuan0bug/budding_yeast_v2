@@ -31,10 +31,13 @@ from budding_yeast_v2.models.components import (
     BioRefinerCausalPyramid, BioRefinerCausalGraph,
     BioRefinerCausalPlus, BioRefinerCausal,
     BioRefinerDynamicCausalPlus,
+    BioRefinerLatchCausalPlus,
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual,
     FNO1d_Standard, UNet1d, GalerkinTransformer1d,
     CNO1d, MWT1d, Transolver1d, DPOT1d
 )
+from .components.bio_refiner_dynamic_plus import BioRefinerDynamicPlus
+from .components.bio_event_refiner import BioEventHybridRefiner
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 
@@ -112,6 +115,11 @@ MODEL_REGISTRY = {
     'biom_refiner_causal': BioRefinerCausal,
     'biom_refiner_dynamic_causal_plus': BioRefinerDynamicCausalPlus,
     'biom_refiner_dynamic_causal': BioRefinerDynamicCausalPlus,
+    'biom_refiner_latch_causal_plus': BioRefinerLatchCausalPlus,
+    'biom_refiner_latch_causal': BioRefinerLatchCausalPlus,
+    'biom_refiner_dynamic_plus': BioRefinerDynamicPlus,
+    'biom_refiner_event_hybrid': BioEventHybridRefiner,
+    'bio_event_hybrid_refiner': BioEventHybridRefiner,
     'hano': HANO,
     'hano_no_event': HANO_NoEvent,
     'hano_no_flux': HANO_NoFlux,
@@ -166,7 +174,7 @@ class YeastLitModule(pl.LightningModule):
         self.save_hyperparameters()
 
         # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
-        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal'):
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
             adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
             if os.path.exists(adj_path):
                 adj_matrix = np.load(adj_path)
@@ -265,7 +273,10 @@ class YeastLitModule(pl.LightningModule):
                             'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic',
                             'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn',
                             'biom_refiner_causal_plus', 'biom_refiner_causal',
-                            'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal'):
+                            'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal',
+                            'biom_refiner_latch_causal_plus', 'biom_refiner_latch_causal',
+                            'biom_refiner_dynamic_plus',
+                            'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks,
                                     adj_matrix=adj_matrix)
@@ -394,6 +405,9 @@ class YeastLitModule(pl.LightningModule):
                         dm.mean_y.to(self.device),
                         dm.std_y.to(self.device),
                     )
+
+    def forward(self, x, p):
+        return self.forward_ic_time(x, p)
 
     def forward_ic_time(self, x, p):
         """

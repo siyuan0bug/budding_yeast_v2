@@ -71,6 +71,8 @@ DATASET_MUTANT_AWARE_PURE_RANDOM_RESCUE_100000="${DATA_DIR}/mutant_aware_pure_ra
 DATASET_MUTANT_AWARE_PURE_RANDOM_KO_INTERVAL_100000="${DATA_DIR}/mutant_aware_pure_random_ko_interval_100000_210m_500s.npz"
 # 7. Gibbs-Boltzmann 图连续热力学能量采样版 (无泄露直舍拦截, 100,000 样本 + 126 Real Mutants):
 DATASET_GIBBS_BOLTZMANN_100000="${DATA_DIR}/gibbs_boltzmann_100000_210m_500s.npz"
+# 8. Gibbs-Sobol 低差异准随机加扰采样版 (Scrambled Sobol + Gibbs-Boltzmann, 100,000 样本 + 126 Real Mutants):
+DATASET_GIBBS_SOBOL_100000="${DATA_DIR}/gibbs_sobol_100000_210m_500s.npz"
 
 DATASET_MASS_100000_BLIND="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels.npz"
 
@@ -108,11 +110,44 @@ EXPERIMENTS=(
     # 格式 (16列，空格分隔，彻底精简冗余的 DATASET_TAG):
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
 
-    # ====== 🌌🌌🌌 Gibbs-Boltzmann 图连续热力学能量采样版: 100,000 样本 (零泄露直舍拦截, L1~L5 全覆盖) 🌌🌌🌌 ======
+    # ====== 🏆🏆🏆 终极全事件驱动混成神经算子 BioEventHybridRefiner (GPU 0-3 并行验证) 🏆🏆🏆 ======
+    # [实验 1 | GPU 0]: 新 Gibbs-Sobol 数据集 × 全事件混合模型 + triple_dynamic (终极旗舰强强联合)
+    "biom_refiner_event_hybrid triple_dynamic false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # [实验 2 | GPU 1]: 旧 Gibbs-Boltzmann 数据集 × 全事件混合模型 + triple_dynamic (经典检查点验证)
+    "biom_refiner_event_hybrid triple_dynamic false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # [实验 3 | GPU 2]: 新 Gibbs-Sobol 数据集 × 全事件混合模型 + hybrid_mse_rel (损失函数消融对照)
+    "biom_refiner_event_hybrid hybrid_mse_rel false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # [实验 4 | GPU 3]: 纯随机数据集 (零引导) × 全事件混合模型 + triple_dynamic (终极抗偏差能力极限压力测试)
+    "biom_refiner_event_hybrid triple_dynamic false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # ====== 📦📦📦 前代实验归档 (已全部评测完成，保留配置注释避免重复覆盖) 📦📦📦 ======
+    # [前代 DynamicPlus 1 | GPU 0]: 旧 Gibbs 数据集 × BioRefinerDynamicPlus
+    #"biom_refiner_dynamic_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # [前代 DynamicPlus 2 | GPU 1]: 新 Gibbs-Sobol 数据集 × BioRefinerDynamicPlus
+    #"biom_refiner_dynamic_plus hybrid_mse_rel false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # [前代 DynamicPlus 3 | GPU 2]: 旧 Gibbs 数据集 × BioRefinerDynamicPlus + triple_dynamic
+    #"biom_refiner_dynamic_plus triple_dynamic false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    # [前代 DynamicPlus 4 | GPU 3]: 新 Gibbs-Sobol 数据集 × BioRefinerDynamicPlus + triple_dynamic
+    #"biom_refiner_dynamic_plus triple_dynamic false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # ====== 📦📦📦 前代实验归档 (已全部评测完成，保留配置注释避免重复覆盖) 📦📦📦 ======
+    # [前代 1 | GPU 0]: 旧 Gibbs 数据集 × 旧模型 (biom_refiner_plus)
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # [前代 2 | GPU 1]: 旧 Gibbs 数据集 × 因果自锁模型 (biom_refiner_latch_causal)
+    #"biom_refiner_latch_causal hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    # [前代 3 | GPU 2]: 新 Gibbs-Sobol 数据集 × 旧模型 (biom_refiner_plus)
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    # [前代 4 | GPU 3]: 新 Gibbs-Sobol 数据集 × 因果自锁模型 (biom_refiner_latch_causal)
+    #"biom_refiner_latch_causal hybrid_mse_rel false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # ====== 🌌🌌🌌 Gibbs-Boltzmann 图连续热力学能量采样版 (备选归档) 🌌🌌🌌 ======
     # GPU 0: biom_refiner_plus + hybrid_mse_rel
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
     # GPU 2: biom_refiner_plus + triple_dynamic
-    "biom_refiner_plus triple_dynamic false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"biom_refiner_plus triple_dynamic false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
     # ====== 🔬🔬🔬 纯随机 + KO 邻域微扰区间 [0, 1e-4] 采样版: 100,000 样本 (已完成评测归档) 🔬🔬🔬 ======
     # GPU 0: biom_refiner_plus + hybrid_mse_rel

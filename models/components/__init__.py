@@ -40,6 +40,9 @@ from .bio_refiner_causal import (
     BioRefinerCausalPlus, BioRefinerCausal
 )
 from .bio_refiner_dynamic_causal import BioRefinerDynamicCausalPlus
+from .bio_refiner_latch_causal import BioRefinerLatchCausalPlus
+from .bio_refiner_dynamic_plus import BioRefinerDynamicPlus
+from .bio_event_refiner import BioEventHybridRefiner
 from .hano import (
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
 )
