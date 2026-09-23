@@ -21,6 +21,7 @@ mkdir -p logs_v3 logs
 # 批量上传所有离线日志: wandb sync --sync-all
 # ==========================================
 NO_WANDB=1
+NORM_TYPE="asinh_z"
 
 DATA_DIR="/home/users/zsy/mydata/budding_yeast"
 
@@ -110,14 +111,27 @@ EXPERIMENTS=(
     # 格式 (16列，空格分隔，彻底精简冗余的 DATASET_TAG):
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
 
+    # ====== 🌟🌟🌟 新归一化方案 (asinh_z: 参数统一 asinh(Z) + 变量稳健 log1p) 三大基准对比实验 (GPU 0, 1, 2) 🌟🌟🌟 ======
+    # [新归一化对比 1 | GPU 0]: 纯随机数据集 (mutant_aware_pure_random) × biom_refiner_plus + hybrid_mse_rel
+    #   对标基准: experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # [新归一化对比 2 | GPU 1]: MASS 含 Motif 数据集 × biom_refiner_plus + triple_dynamic
+    #   对标基准: experiments/mass_100000_dataset_210min_500steps_dual_labels/biom_refiner_plus/triple_dynamic_none/w128_m32_b512_ep100_lr1.7e-3/seed_42
+    "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000} 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+
+    # [新归一化对比 3 | GPU 2]: Gibbs-Boltzmann 连续热力学能量采样数据集 × biom_refiner_plus + hybrid_mse_rel
+    #   对标基准: experiments/gibbs_boltzmann_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
     # ====== ⚡⚡⚡ 39 通道自适应梯度平衡 GradNormHybrid 对照实验 (GPU 0-1) ⚡⚡⚡ ======
     # [实验 GN-1 | GPU 0]: 新 Gibbs-Sobol 数据集 × 全事件混合模型 + gradnorm_hybrid (39 通道微观自适应平衡)
     #   对标基线: experiments/gibbs_sobol_100000_210m_500s/biom_refiner_event_hybrid/hybrid_mse_rel_none/
-    "biom_refiner_event_hybrid gradnorm_hybrid false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_event_hybrid gradnorm_hybrid false ${DATASET_GIBBS_SOBOL_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 
     # [实验 GN-2 | GPU 1]: 旧 Gibbs-Boltzmann 数据集 × 经典旗舰模型 + gradnorm_hybrid (跨代基准对比)
     #   对标基线: experiments/gibbs_boltzmann_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/
-    "biom_refiner_plus gradnorm_hybrid false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"biom_refiner_plus gradnorm_hybrid false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # ====== 🏆🏆🏆 终极全事件驱动混成神经算子 BioEventHybridRefiner (已评测完成归档) 🏆🏆🏆 ======
     # [实验 1 | GPU 0]: 新 Gibbs-Sobol 数据集 × 全事件混合模型 + triple_dynamic
@@ -452,7 +466,11 @@ run_single_task() {
 
     local DATASET_NAME
     DATASET_NAME=$(basename "$DATASET" .npz)
-    local RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_NAME}_modes${MODES}_seed${SEED}"
+    local RUN_NAME="${MODEL}_${AL_STRATEGY}_${LOSS_TYPE}_${DATASET_NAME}_modes${MODES}"
+    if [ -n "$NORM_TYPE" ] && [ "$NORM_TYPE" != "log1p" ]; then
+        RUN_NAME="${RUN_NAME}_${NORM_TYPE}"
+    fi
+    RUN_NAME="${RUN_NAME}_seed${SEED}"
 
     local EXP_DIR CKPT_DIR EVAL_OUT_DIR LOG_FILE DIR_PARAMS
     if [ "$USE_HIERARCHICAL" = "1" ]; then
@@ -471,6 +489,9 @@ run_single_task() {
         fi
         if [ -n "$WARMUP" ] && [ "$WARMUP" -ne 10 ] && [ "$WARMUP" -gt 0 ]; then
             HPARAM_SIG="${HPARAM_SIG}_wm${WARMUP}"
+        fi
+        if [ -n "$NORM_TYPE" ] && [ "$NORM_TYPE" != "log1p" ]; then
+            HPARAM_SIG="${HPARAM_SIG}_${NORM_TYPE}"
         fi
 
         EXP_DIR="${EXP_ROOT}/${DATASET_NAME}/${MODEL}/${LOSS_TYPE}_${AL_STRATEGY}/${HPARAM_SIG}/seed_${SEED}"
@@ -543,6 +564,7 @@ run_single_task() {
             $ADJ_PARAM \
             $PINN_PARAMS \
             --rollout_type $ROLLOUT_TYPE \
+            --norm_type $NORM_TYPE \
             $DIR_PARAMS \
             $WANDB_FLAG >> "$LOG_FILE" 2>&1
 
@@ -568,6 +590,7 @@ run_single_task() {
             CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN eval.py \
                 --ckpt "$CKPT_PATH" \
                 --dataset_name "$DATASET" \
+                --norm_type $NORM_TYPE \
                 --save_dir "$EVAL_OUT_DIR" \
                 --seed $SEED \
                 --batch_size $BATCH_SIZE >> "$LOG_FILE" 2>&1

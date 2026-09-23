@@ -70,7 +70,7 @@ class HybridMSERelLoss(nn.Module):
         self.lambda_rel = lambda_rel
         self.rel_loss = RelativeL2Loss(eps=eps, max_clamp=max_clamp)
 
-    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None):
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None, **kwargs):
         loss_mse = F.mse_loss(pred_norm, target_norm)
         loss_rel = self.rel_loss(pred_norm, target_norm)
         return loss_mse + self.lambda_rel * loss_rel
@@ -303,7 +303,7 @@ class PINNResidualLoss(nn.Module):
                  lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
                  residual_subsample=1, event_weight=0.1,
-                 warmup_epochs=30):
+                 warmup_epochs=30, norm_type='asinh_z'):
         """
         Args:
             mean_y, std_y: (1, 39, 1) 状态变量归一化统计量
@@ -318,6 +318,7 @@ class PINNResidualLoss(nn.Module):
             residual_subsample: 残差计算的时间步子采样率
             event_weight: event 区间的残差权重（软掩码）
             warmup_epochs: 物理约束 warmup 轮数（前 N 轮纯 MSE）
+            norm_type: 归一化方案 (asinh_z, log1p, asinh_scale, linear)
         """
         super().__init__()
         self.register_buffer('mean_y', mean_y.reshape(1, -1, 1))
@@ -336,6 +337,7 @@ class PINNResidualLoss(nn.Module):
         self.residual_subsample = residual_subsample
         self.event_weight = event_weight
         self.warmup_epochs = warmup_epochs
+        self.norm_type = norm_type
         self._current_epoch = 0
 
         self.mse = nn.MSELoss(reduction='none')
@@ -346,11 +348,25 @@ class PINNResidualLoss(nn.Module):
 
     def _denormalize_y(self, y_norm):
         """反归一化状态变量到真实空间"""
-        return y_norm * self.std_y + self.mean_y
+        y_shifted = y_norm * self.std_y + self.mean_y
+        if getattr(self, 'norm_type', 'asinh_z') in ('log1p', 'asinh_z'):
+            return torch.clamp(torch.expm1(torch.clamp(y_shifted, min=-10.0, max=15.0)), min=0.0)
+        return y_shifted
 
     def _denormalize_p(self, p_norm):
         """反归一化参数到真实空间，并构建参数字典"""
-        p_real = p_norm * self.p_std + self.p_mean  # (B, 141)
+        nt = getattr(self, 'norm_type', 'asinh_z')
+        if nt == 'asinh_z':
+            is_varying = (self.p_std > 1e-5)
+            p_std_safe = torch.where(is_varying, self.p_std, torch.ones_like(self.p_std))
+            p_real = torch.where(is_varying, torch.sinh(p_norm) * p_std_safe + self.p_mean, self.p_mean)
+            p_real = torch.clamp(p_real, min=0.0)
+        elif nt == 'asinh_scale':
+            is_varying = (self.p_std > 1e-5)
+            p_trans = torch.where(is_varying, p_norm * self.p_std + self.p_mean, self.p_mean)
+            p_real = torch.clamp(10.0 ** torch.clamp(p_trans, min=-8.0, max=6.0), min=0.0)
+        else:
+            p_real = p_norm * self.p_std + self.p_mean
         extra = {'is_mutant_104': torch.zeros(p_real.shape[0], device=p_real.device)}
         p_dict = params_tensor_to_dict(p_real, extra)
         return p_dict
@@ -875,7 +891,7 @@ class TripleDynamicLoss(nn.Module):
 
         return R[:, N + 1, N + 1].mean().to(orig_dtype)
 
-    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None):
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None, **kwargs):
         # 1. Macro Hybrid Loss
         loss_mse = F.mse_loss(pred_norm, target_norm)
         loss_rel = self.rel_loss(pred_norm, target_norm)

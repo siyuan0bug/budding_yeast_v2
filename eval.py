@@ -209,8 +209,8 @@ def main():
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--synth_test_plots', type=int, default=50, help='合成测试集最多画多少张图')
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
-    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'linear'],
-                        help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
+    parser.add_argument('--norm_type', type=str, default='asinh_z', choices=['asinh_z', 'log1p', 'linear', 'asinh_scale'],
+                        help='数据归一化类型: asinh_z (推荐最优: 参数统一 asinh(Z) + 变量稳健 log1p), log1p, asinh_scale, linear')
     parser.add_argument('--seed', type=int, default=None, help='随机种子 (默认自动从 ckpt 或 exp_dir 解析，兜底 42)')
     args = parser.parse_args()
 
@@ -258,10 +258,16 @@ def main():
         seed = 42
     args.seed = seed
 
+    # 自动解析 norm_type: 优先从 checkpoint hyper_parameters 读取 (若可用)
+    resolved_norm_type = args.norm_type
+    if hp and 'norm_type' in hp:
+        resolved_norm_type = hp['norm_type']
+        print(f"📋 从 Checkpoint 自动继承 norm_type: {resolved_norm_type}")
+
     dm = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
         val_batch_size=args.batch_size, num_workers=args.num_workers, use_adj_matrix=False,
-        norm_type=args.norm_type
+        norm_type=resolved_norm_type
     )
     dm.setup('test')
     mean_y, std_y = dm.mean_y.to(args.device), dm.std_y.to(args.device)

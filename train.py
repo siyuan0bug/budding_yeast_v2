@@ -187,8 +187,8 @@ def main():
                         choices=['one_time', 'autoregressive'],
                         help='预测方式: one_time=一次性预测(默认), autoregressive=自回归滚动')
     
-    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'linear'],
-                        help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
+    parser.add_argument('--norm_type', type=str, default='asinh_z', choices=['asinh_z', 'log1p', 'linear', 'asinh_scale'],
+                        help='数据归一化类型: asinh_z (推荐最优: 参数统一 asinh(Z) + 变量稳健 log1p), log1p, asinh_scale, linear')
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--val_batch_size', type=int, default=256,
                         help='验证/测试的 batch size（不影响训练，设大加速评估，默认 256）')
@@ -340,6 +340,7 @@ def main():
             pino_event_strategy=args.pino_event_strategy,
             huber_delta=args.huber_delta,
             rollout_type=args.rollout_type,
+            norm_type=args.norm_type,
         )
 
     model = build_fresh_model()

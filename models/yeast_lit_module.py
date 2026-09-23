@@ -170,6 +170,7 @@ class YeastLitModule(pl.LightningModule):
         huber_delta=1.0,
         # 自回归滚动选项
         rollout_type='one_time',  # 'one_time' (默认, 一次性预测) 或 'autoregressive' (自回归滚动)
+        norm_type='asinh_z',
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -339,7 +340,8 @@ class YeastLitModule(pl.LightningModule):
         # 归一化统计量与反归一化状态 (非持久化 buffer，训练时从 datamodule 注入)
         self.register_buffer('mean_y', torch.zeros(1, num_vars, 1), persistent=False)
         self.register_buffer('std_y', torch.ones(1, num_vars, 1), persistent=False)
-        self.norm_type = 'log1p'
+        self.register_buffer('s_c', torch.ones(1, num_vars, 1), persistent=False)
+        self.norm_type = norm_type
 
     def setup(self, stage=None):
         # HANO 等结构保持模型需要在真实空间完成通量积分/事件跳变,
@@ -353,7 +355,9 @@ class YeastLitModule(pl.LightningModule):
         if hasattr(self, 'mean_y') and isinstance(self.mean_y, torch.Tensor):
             self.mean_y.copy_(dm.mean_y.to(self.device))
             self.std_y.copy_(dm.std_y.to(self.device))
-        self.norm_type = getattr(dm, 'norm_type', 'log1p')
+        self.norm_type = getattr(dm, 'norm_type', getattr(self, 'norm_type', 'asinh_z'))
+        if hasattr(dm, 's_c') and dm.s_c is not None and hasattr(self, 's_c'):
+            self.s_c.copy_(dm.s_c.to(self.device))
         if hasattr(self.model, 'set_stats'):
             try:
                 self.model.set_stats(dm.mean_y, dm.std_y, dm.p_mean, dm.p_std, float(dm.t_max))
@@ -373,7 +377,12 @@ class YeastLitModule(pl.LightningModule):
             mean_y = self.mean_y.to(y_norm.device)
             std_y = self.std_y.to(y_norm.device)
             y_shifted = y_norm * std_y + mean_y
-            if getattr(self, 'norm_type', 'log1p') == 'log1p':
+            norm_type = getattr(self, 'norm_type', 'asinh_z')
+            if norm_type == 'asinh_scale':
+                s_c = self.s_c.to(y_norm.device) if hasattr(self, 's_c') and self.s_c is not None else 1.0
+                y_clamped = torch.clamp(y_shifted, min=-10.0, max=10.0)
+                return torch.clamp(2.0 * s_c * torch.sinh(y_clamped), min=0.0)
+            elif norm_type in ('log1p', 'asinh_z'):
                 y_clamped = torch.clamp(y_shifted, min=-10.0, max=15.0)
                 return torch.clamp(torch.expm1(y_clamped), min=0.0)
             return y_shifted
@@ -398,6 +407,7 @@ class YeastLitModule(pl.LightningModule):
                     'jump_ratio': self.hparams.jump_ratio,
                     'residual_subsample': self.hparams.residual_subsample,
                     'event_weight': self.hparams.event_weight,
+                    'norm_type': getattr(dm, 'norm_type', 'asinh_z'),
                 }
                 if loss_type == 'pino':
                     pinn_kwargs.update({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta})
@@ -561,9 +571,13 @@ class YeastLitModule(pl.LightningModule):
                 loss_final = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
                 loss_coarse = self.criterion(out_coarse, y, p, weights, lam_pen, lam_sm)
                 loss = loss_final + 0.3 * loss_coarse
+            elif self.hparams.loss_type == 'gradnorm_hybrid':
+                loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm, update_weights=True)
+                loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm, update_weights=False)
+                loss = loss_final + 0.3 * loss_coarse
             else:
                 loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm)
-                loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm, update_weights=False)
+                loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm)
                 loss = loss_final + 0.3 * loss_coarse
         else:
             out_full = self.forward_ic_time(x, p)
