@@ -118,10 +118,14 @@ class EpochSummaryCallback(Callback):
         test_real_denorm = float(m.get('test_loss_real_denorm', float('nan')))
         lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0.0
         elapsed = time.time() - self.epoch_start_time
+        gn_str = ""
+        if 'train_w_clb2' in m:
+            gn_str = f" | GN[clb2={float(m['train_w_clb2']):.2f}, sic1={float(m['train_w_sic1']):.2f}, max={float(m.get('train_w_max', 0.0)):.2f}]"
         print(f"[Epoch {epoch+1:03d}/{trainer.max_epochs:03d}] "
               f"train_loss={train_loss:.6f} | val_synth={val_synth:.6f} | "
               f"test_synth={test_synth:.6f} | test_real={test_real:.6f} | "
-              f"test_real_denorm={test_real_denorm:.6f} | "
+              f"test_real_denorm={test_real_denorm:.6f}"
+              f"{gn_str} | "
               f"lr={lr:.2e} | {elapsed:.1f}s", flush=True)
 
 def main():

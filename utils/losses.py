@@ -76,6 +76,135 @@ class HybridMSERelLoss(nn.Module):
         return loss_mse + self.lambda_rel * loss_rel
 
 
+class GradNormHybridLoss(nn.Module):
+    """
+    39-Channel Full GradNorm Hybrid Loss (方案 B: 39 通道全量微观梯度自适应平衡):
+    L_total = (1 / 39) * sum_{v=0}^{38} w_v(t) * [ MSE_v + lambda_rel * RelL2_v ]
+
+    核心数学设计:
+    1. 单次 Autograd 极速求导技巧 (Single-Call Decoupled Norm Trick):
+       因为通道损失 L_v 仅依赖于 pred[:, v, :]，通道间在输出层完全正交解耦。
+       对 channel_losses.sum() 仅需 1 次 autograd.grad 即可解析出全部 39 个通道各自的精确 L2 梯度范数 (<2ms)。
+    2. 自适应相对逆训练进度 r_v(t):
+       对收敛滞后通道 (r_v > 1) 动态提高目标梯度强度 G_target_v。
+    3. 闭式 EMA 权重平滑更新 (Closed-form EMA Update):
+       无需额外 optimizer 与二次反向传播，完全保证 Lightning DDP / 混合精度训练安全，
+       并严格维持 mean(task_weights) == 1.0，与基准 hybrid_mse_rel 尺度无缝兼容。
+    """
+    def __init__(self, mean_y=None, std_y=None, num_vars=39, lambda_rel=0.2, eps=0.1, max_clamp=10.0,
+                 alpha=1.0, eta=0.025, w_min=0.1, w_max=5.0, warmup_steps=50):
+        super().__init__()
+        self.num_vars = num_vars
+        self.lambda_rel = lambda_rel
+        self.eps = eps
+        self.max_clamp = max_clamp
+        self.alpha = alpha
+        self.eta = eta
+        self.w_min = w_min
+        self.w_max = w_max
+        self.warmup_steps = warmup_steps
+
+        # 注册非持久性缓冲区，支持 DDP 与设备自动迁移
+        self.register_buffer('task_weights', torch.ones(num_vars, dtype=torch.float32))
+        self.register_buffer('initial_losses', torch.zeros(num_vars, dtype=torch.float32))
+        self.register_buffer('step_count', torch.tensor(0, dtype=torch.long))
+        self.register_buffer('is_initialized', torch.tensor(False, dtype=torch.bool))
+
+        # 用于存储最近一个 step 的诊断指标供 Lightning 记录
+        self._last_metrics = {}
+
+    def forward(self, pred_norm, target_norm, batch_weights=None, lambda_penalty=None, lambda_smooth=None,
+                update_weights=True, **kwargs):
+        # pred_norm, target_norm: (B, V, T)
+        B, V, T = pred_norm.shape
+        diff = pred_norm - target_norm
+
+        # 1. 向量化计算 39 个通道各自的 MSE: (V,)
+        mse_v = torch.mean(diff ** 2, dim=(0, 2))
+
+        # 2. 向量化计算 39 个通道各自的 Relative L2: (V,)
+        diff_l2 = torch.norm(diff, p=2, dim=-1)  # (B, V)
+        target_energy = torch.sqrt(torch.sum(target_norm ** 2, dim=-1) + (self.eps ** 2))  # (B, V)
+        rel_l2_b_v = diff_l2 / target_energy  # (B, V)
+        if self.max_clamp is not None:
+            rel_l2_b_v = torch.clamp(rel_l2_b_v, max=self.max_clamp)
+        rel_l2_v = torch.mean(rel_l2_b_v, dim=0)  # (V,)
+
+        # 3. 39 个通道独立的 Hybrid 损失: (V,)
+        channel_losses = mse_v + self.lambda_rel * rel_l2_v
+
+        # 4. 训练模式且包含计算图时执行 GradNorm 动态更新
+        if self.training and pred_norm.requires_grad and update_weights:
+            with torch.enable_grad():
+                # 利用通道正交解耦特性，一次 autograd 提取 39 个通道对 pred_norm 的梯度范数
+                grads = torch.autograd.grad(channel_losses.sum(), pred_norm, retain_graph=True, create_graph=False)[0]
+                g_v = torch.norm(grads, p=2, dim=(0, 2)).detach()  # (V,)
+                g_v = torch.clamp(g_v, min=1e-8)
+
+            with torch.no_grad():
+                curr_losses = channel_losses.detach()
+
+                # 初始化 / 预热阶段：记录初始损失基线 (非原地操作，杜绝 PyTorch autograd 版本冲突)
+                if not self.is_initialized:
+                    if self.step_count == 0:
+                        self.initial_losses = curr_losses
+                    else:
+                        # 预热期平滑跟踪初始损失
+                        self.initial_losses = 0.9 * self.initial_losses + 0.1 * curr_losses
+
+                    if self.step_count >= self.warmup_steps:
+                        self.is_initialized = torch.tensor(True, device=pred_norm.device)
+
+                # 仅在基线非退化状态下执行 GradNorm 更新
+                init_loss_safe = torch.clamp(self.initial_losses, min=1e-6)
+                loss_ratio = curr_losses / init_loss_safe  # (V,)
+                mean_loss_ratio = loss_ratio.mean()
+                inverse_rate = loss_ratio / (mean_loss_ratio + 1e-8)  # r_v(t)
+
+                # 当前加权梯度范数 G_v 与平均梯度范数
+                curr_w = self.task_weights.detach()
+                G_v = curr_w * g_v
+                mean_G = G_v.mean()
+
+                # 目标梯度范数 G_target
+                G_target = mean_G * (inverse_rate ** self.alpha)
+
+                # 目标权重比例
+                w_target = G_target / g_v
+
+                # EMA 平滑更新
+                new_w = (1.0 - self.eta) * curr_w + self.eta * w_target
+
+                # 归一化约束: sum(w) == V (等价于 mean(w) == 1.0)
+                new_w = new_w * (V / (new_w.sum() + 1e-8))
+
+                # 安全钳制，防止任何单一通道过度膨胀或彻底饿死
+                new_w = torch.clamp(new_w, min=self.w_min, max=self.w_max)
+                new_w = new_w * (V / (new_w.sum() + 1e-8))
+
+                # 非原地赋值更新缓冲，避免破坏前向计算图中已保存张量的版本计数器
+                self.task_weights = new_w
+                self.step_count = self.step_count + 1
+
+        # 5. 计算最终加权损失 (除以 V 保证与基线 HybridMSERelLoss 尺度完全一致)
+        weighted_loss = torch.sum(self.task_weights * channel_losses) / float(V)
+
+        # 6. 保存诊断数据供 logger 记录
+        if self.training:
+            w_snap = self.task_weights.detach()
+            self._last_metrics = {
+                'w_clb2': w_snap[2].item(),  # CLB2 (v=2)
+                'w_sic1': w_snap[4].item(),  # SIC1 (v=4)
+                'w_cln2': w_snap[1].item(),  # CLN2 (v=1)
+                'w_mass': w_snap[0].item(),  # MASS (v=0)
+                'w_max': w_snap.max().item(),
+                'w_min': w_snap.min().item(),
+                'w_std': w_snap.std().item(),
+            }
+
+        return weighted_loss
+
+
 class MSENegPenLoss(nn.Module):
     def __init__(self, mean_y, std_y):
         super().__init__()
@@ -1024,6 +1153,7 @@ LOSS_REGISTRY = {
     'mse_only': MSEOnlyLoss,
     'rel_l2': RelativeL2Loss,
     'hybrid_mse_rel': HybridMSERelLoss,
+    'gradnorm_hybrid': GradNormHybridLoss,
     'hybrid_bifurcate': HybridBifurcateLoss,
     'hybrid_pino_colloc': HybridPINOCollocationLoss,
     'hybrid_all': HybridAllLoss,

@@ -3,6 +3,7 @@ import argparse
 import json
 import csv
 import glob
+import re
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -210,6 +211,7 @@ def main():
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
     parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'linear'],
                         help='数据归一化类型: log1p (平滑对数归一化, 默认), linear (传统线性Z-score)')
+    parser.add_argument('--seed', type=int, default=None, help='随机种子 (默认自动从 ckpt 或 exp_dir 解析，兜底 42)')
     args = parser.parse_args()
 
     # 路径与 Checkpoint 解析
@@ -237,8 +239,24 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     print(f"🎯 加载 Checkpoint: {args.ckpt}")
     print(f"📁 评估结果输出目录: {args.save_dir}")
-    model, _ = load_model_from_checkpoint(args.ckpt, device=args.device)
+    model, hp = load_model_from_checkpoint(args.ckpt, device=args.device)
     model = model.to(args.device)
+
+    # 自动解析 seed: 优先级 args.seed -> checkpoint hyper_parameters -> 路径中的 seed_<N> -> 默认 42
+    seed = args.seed
+    if seed is None:
+        seed = hp.get('seed', None)
+    if seed is None and args.ckpt:
+        m = re.search(r'seed_(\d+)', args.ckpt)
+        if m:
+            seed = int(m.group(1))
+    if seed is None and args.exp_dir:
+        m = re.search(r'seed_(\d+)', args.exp_dir)
+        if m:
+            seed = int(m.group(1))
+    if seed is None:
+        seed = 42
+    args.seed = seed
 
     dm = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),

@@ -288,7 +288,7 @@ class YeastLitModule(pl.LightningModule):
             raise ValueError(f"Unknown model_name: {model_name}")
 
         loss_class = LOSS_REGISTRY[loss_type]
-        if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel',
+        if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel', 'gradnorm_hybrid',
                          'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw',
                          'triple_dynamic', 'hybrid_phase_dtw'):
             self.criterion = loss_class()
@@ -563,7 +563,7 @@ class YeastLitModule(pl.LightningModule):
                 loss = loss_final + 0.3 * loss_coarse
             else:
                 loss_final = self.criterion(out_full, y, weights, lam_pen, lam_sm)
-                loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm)
+                loss_coarse = self.criterion(out_coarse, y, weights, lam_pen, lam_sm, update_weights=False)
                 loss = loss_final + 0.3 * loss_coarse
         else:
             out_full = self.forward_ic_time(x, p)
@@ -578,6 +578,11 @@ class YeastLitModule(pl.LightningModule):
                 loss = self.criterion(out_full, y, pattern_targets=pat_id)
             else:
                 loss = self.criterion(out_full, y, weights, lam_pen, lam_sm)
+
+        # 记录准实时自适应损失诊断指标 (如 GradNorm 权重)
+        if hasattr(self.criterion, '_last_metrics') and self.criterion._last_metrics:
+            for k, v in self.criterion._last_metrics.items():
+                self.log(f'train_{k}', v, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
