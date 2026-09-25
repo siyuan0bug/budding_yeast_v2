@@ -18,8 +18,8 @@ class PhysicsInformedLoss(nn.Module):
     def forward(self, pred_norm, target_norm, batch_weights, lambda_penalty, lambda_smooth):
         loss_mse = self.mse(pred_norm, target_norm).mean(dim=(1, 2))
         negative_penalty = (torch.relu(self.bound_norm - pred_norm) ** 2).mean(dim=(1, 2))
-        pred_fft = torch.fft.rfft(pred_norm, dim=-1)
-        target_fft = torch.fft.rfft(target_norm, dim=-1)
+        pred_fft = torch.fft.rfft(pred_norm.float(), dim=-1)
+        target_fft = torch.fft.rfft(target_norm.float(), dim=-1)
         k = torch.fft.rfftfreq(pred_norm.size(-1), device=pred_norm.device)
         diff_fft = pred_fft - target_fft
         loss_spectral_smooth = torch.mean((torch.abs(diff_fft) ** 2) * (k ** 2).unsqueeze(0).unsqueeze(0), dim=(1, 2))
@@ -225,8 +225,8 @@ class MSESmoothLoss(nn.Module):
 
     def forward(self, pred_norm, target_norm, batch_weights, lambda_penalty, lambda_smooth):
         loss_mse = self.mse(pred_norm, target_norm).mean(dim=(1, 2))
-        pred_fft = torch.fft.rfft(pred_norm, dim=-1)
-        target_fft = torch.fft.rfft(target_norm, dim=-1)
+        pred_fft = torch.fft.rfft(pred_norm.float(), dim=-1)
+        target_fft = torch.fft.rfft(target_norm.float(), dim=-1)
         k = torch.fft.rfftfreq(pred_norm.size(-1), device=pred_norm.device)
         diff_fft = pred_fft - target_fft
         loss_spectral_smooth = torch.mean((torch.abs(diff_fft) ** 2) * (k ** 2).unsqueeze(0).unsqueeze(0), dim=(1, 2))
@@ -303,7 +303,7 @@ class PINNResidualLoss(nn.Module):
                  lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
                  residual_subsample=1, event_weight=0.1,
-                 warmup_epochs=30, norm_type='asinh_z'):
+                 warmup_epochs=30, norm_type='log1p'):
         """
         Args:
             mean_y, std_y: (1, 39, 1) 状态变量归一化统计量
@@ -349,13 +349,13 @@ class PINNResidualLoss(nn.Module):
     def _denormalize_y(self, y_norm):
         """反归一化状态变量到真实空间"""
         y_shifted = y_norm * self.std_y + self.mean_y
-        if getattr(self, 'norm_type', 'asinh_z') in ('log1p', 'asinh_z'):
+        if getattr(self, 'norm_type', 'log1p') in ('log1p', 'asinh_z'):
             return torch.clamp(torch.expm1(torch.clamp(y_shifted, min=-10.0, max=15.0)), min=0.0)
         return y_shifted
 
     def _denormalize_p(self, p_norm):
         """反归一化参数到真实空间，并构建参数字典"""
-        nt = getattr(self, 'norm_type', 'asinh_z')
+        nt = getattr(self, 'norm_type', 'log1p')
         if nt == 'asinh_z':
             is_varying = (self.p_std > 1e-5)
             p_std_safe = torch.where(is_varying, self.p_std, torch.ones_like(self.p_std))
@@ -610,7 +610,7 @@ class H1Loss(nn.Module):
         # 使用 rfft (实数输入), 频率 k = rfftfreq(T)
         # 【关键】norm='ortho' 确保 FFT 能量守恒 (对齐 HyperNOs H1relLoss_1D)
         #   无 norm 时 |FFT|² 正比于 T², T=500 时频域损失比 MSE 大 ~500 倍, 导致梯度爆炸
-        diff_fft = torch.fft.rfft(diff, dim=-1, norm='ortho')  # (B, V, T//2+1) complex
+        diff_fft = torch.fft.rfft(diff.float(), dim=-1, norm='ortho')  # (B, V, T//2+1) complex
         k = torch.fft.rfftfreq(T, device=pred_norm.device)  # (T//2+1,) 归一化频率 [0, 0.5]
         # 频域梯度: |FFT(diff)|² × k², 对高频分量施加更大权重
         loss_freq = (torch.abs(diff_fft) ** 2 * (k ** 2).unsqueeze(0).unsqueeze(0)).mean(dim=(1, 2))  # (B,)
@@ -685,7 +685,7 @@ class PINOLoss(PINNResidualLoss):
         B, V, T = pred_norm.shape
         diff = pred_norm - target_norm  # (B, V, T)
         # 【关键】norm='ortho' 确保 FFT 能量守恒, 否则 |FFT|² 正比于 T² 导致梯度爆炸
-        diff_fft = torch.fft.rfft(diff, dim=-1, norm='ortho')  # (B, V, T//2+1) complex
+        diff_fft = torch.fft.rfft(diff.float(), dim=-1, norm='ortho')  # (B, V, T//2+1) complex
         k = torch.fft.rfftfreq(T, device=pred_norm.device)  # (T//2+1,)
         # 频域梯度 L2: |FFT(diff)|² × k²
         loss_freq = (torch.abs(diff_fft) ** 2 * (k ** 2).unsqueeze(0).unsqueeze(0)).mean(dim=(1, 2))  # (B,)

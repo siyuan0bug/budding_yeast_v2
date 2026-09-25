@@ -18,7 +18,7 @@ class YeastDataModule(pl.LightningDataModule):
         num_workers=4,
         seed=42,
         use_adj_matrix=True,
-        norm_type='asinh_z',
+        norm_type='log1p',
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -189,8 +189,8 @@ class YeastDataModule(pl.LightningDataModule):
               f"训练集: {len(train_idx_synth)} | 验证集: {len(val_idx_synth)} | "
               f"合成测试集: {len(test_idx_synth)} | 真实测试集: {len(test_idx_real)}")
 
-        # 归一化统计量计算：支持 asinh_z (推荐最优: 参数统一 asinh(Z) + 变量稳健 log1p), asinh_scale, log1p, 与 linear
-        self.norm_type = getattr(self, 'norm_type', 'asinh_z')
+        # 归一化统计量计算：支持 log1p (默认: 参数线性 Z-score + 变量稳健 log1p), asinh_z, asinh_scale, 与 linear
+        self.norm_type = getattr(self, 'norm_type', 'log1p')
         if self.norm_type == 'asinh_z':
             # 1. 变量变换: 稳健 log1p + 通道 Z-score
             # 10万样本全量评测证实 log1p 相对扰动放大率仅 4.71% (远低于 asinh 的 9.39%)，且完全杜绝 sinh 双向指数发散风险
@@ -380,7 +380,7 @@ class YeastDataModule(pl.LightningDataModule):
             std_y = self.std_y
 
         y_shifted = y_norm * std_y + mean_y
-        norm_type = getattr(self, 'norm_type', 'asinh_z')
+        norm_type = getattr(self, 'norm_type', 'log1p')
         if norm_type == 'asinh_scale':
             s_c = self.s_c.to(device) if device is not None and hasattr(self, 's_c') and self.s_c is not None else getattr(self, 's_c', None)
             if s_c is None:
@@ -407,7 +407,7 @@ class YeastDataModule(pl.LightningDataModule):
             p_mean = self.p_mean
             p_std = self.p_std
 
-        norm_type = getattr(self, 'norm_type', 'asinh_z')
+        norm_type = getattr(self, 'norm_type', 'log1p')
         if norm_type == 'asinh_scale':
             is_varying = (p_std > 1e-5)
             p_trans = torch.where(is_varying, p_norm * p_std + p_mean, p_mean)

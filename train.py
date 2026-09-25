@@ -1,4 +1,18 @@
 import os
+import sys
+
+# Ensure repository root is in sys.path and PYTHONPATH regardless of where train.py is launched from
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(_current_dir)
+for _p in [_repo_root, _current_dir]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+if 'PYTHONPATH' in os.environ:
+    if _repo_root not in os.environ['PYTHONPATH'].split(os.pathsep):
+        os.environ['PYTHONPATH'] = f"{_repo_root}{os.pathsep}{os.environ['PYTHONPATH']}"
+else:
+    os.environ['PYTHONPATH'] = _repo_root
+
 import time
 import argparse
 import torch
@@ -187,8 +201,8 @@ def main():
                         choices=['one_time', 'autoregressive'],
                         help='预测方式: one_time=一次性预测(默认), autoregressive=自回归滚动')
     
-    parser.add_argument('--norm_type', type=str, default='asinh_z', choices=['asinh_z', 'log1p', 'linear', 'asinh_scale'],
-                        help='数据归一化类型: asinh_z (推荐最优: 参数统一 asinh(Z) + 变量稳健 log1p), log1p, asinh_scale, linear')
+    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'asinh_z', 'linear', 'asinh_scale'],
+                        help='数据归一化类型: log1p (平滑对数归一化, 默认), asinh_z, asinh_scale, linear')
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--val_batch_size', type=int, default=256,
                         help='验证/测试的 batch size（不影响训练，设大加速评估，默认 256）')
@@ -235,6 +249,8 @@ def main():
                         help="Importance Sampling中多样性权重 (0~1, 默认0.5)")
     parser.add_argument('--al_pool_subset_size', type=int, default=10000,
                         help="每轮AL从池中采样的子集大小 (平衡效率, 默认10000)")
+    parser.add_argument('--num_al_rounds', type=int, default=3,
+                        help="AL4PDE 外层重训轮数 (默认 3 轮: Iter 0(10k) -> Iter 1(20k) -> Iter 2(40k))")
     parser.add_argument('--al_uncertainty_metric', type=str, default='variance',
                         choices=['variance', 'entropy'],
                         help="不确定性度量方法 (variance=预测方差, entropy=预测熵)")
@@ -366,7 +382,7 @@ def main():
     if args.al_strategy in AL4PDE_STRATEGIES:
         # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
         from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
-        NUM_AL_ROUNDS = 5
+        NUM_AL_ROUNDS = getattr(args, 'num_al_rounds', 3)
         device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"🚀 [al4pde v2.3 外层重训] 策略={args.al_strategy.upper()} | "
               f"{NUM_AL_ROUNDS} 轮 × {args.max_epochs} epoch/轮 | 每轮冷启动 + 全新余弦 | 取最后一轮最后 epoch")
@@ -374,29 +390,33 @@ def main():
         datamodule.setup('fit')  # 构建数据集 (setup 幂等, 后续 fit 不会重建)
 
         al_cb = ActiveLearningCallback(
-            trigger_every_n_epochs=args.al_trigger_epoch,
+            trigger_every_n_epochs=getattr(args, 'al_trigger_epoch', 10),
             strategy=args.al_strategy,
-            num_add=args.al_num_add,
-            perturbation=args.al_perturbation,
-            mae_threshold=args.al_mae_threshold,
-            initial_train_size=args.al_initial_train_size,
-            initial_selection=args.al_initial_selection,
-            diversity_weight=args.al_diversity_weight,
-            pool_subset_size=args.al_pool_subset_size,
-            uncertainty_metric=args.al_uncertainty_metric,
+            num_add=getattr(args, 'al_num_add', 500),
+            perturbation=getattr(args, 'al_perturbation', 0.1),
+            mae_threshold=getattr(args, 'al_mae_threshold', 0.05),
+            initial_train_size=getattr(args, 'al_initial_train_size', 5000),
+            initial_selection=getattr(args, 'al_initial_selection', 'kmeans'),
+            diversity_weight=getattr(args, 'al_diversity_weight', 0.5),
+            pool_subset_size=getattr(args, 'al_pool_subset_size', 10000),
+            uncertainty_metric=getattr(args, 'al_uncertainty_metric', 'variance'),
             random_seed=args.seed,
-            atlas_csv_path=args.atlas_csv,
-            al_pool_dataset=args.al_pool_dataset,
-            target_weight=args.al_target_weight,
-            mass_weight=args.al_mass_weight,
-            novelty_weight=args.al_novelty_weight,
-            family_weight=args.family_weight if hasattr(args, 'family_weight') else args.al_family_weight,
+            atlas_csv_path=getattr(args, 'atlas_csv', None),
+            al_pool_dataset=getattr(args, 'al_pool_dataset', None),
+            target_weight=getattr(args, 'al_target_weight', 0.4),
+            mass_weight=getattr(args, 'al_mass_weight', 0.5),
+            novelty_weight=getattr(args, 'al_novelty_weight', 0.6),
+            family_weight=getattr(args, 'al_family_weight', 0.2),
         )
         al_cb.enable_outer_loop_mode()
         # 一次性: 缩至初始子集 + 生成候选池 + (diversity/maal/boundary) ODE 预计算
-        al_cb.al4pde_setup(datamodule, device=device_str)
+        al_cb.al4pde_setup(datamodule, device=device_str, exp_dir=actual_exp_dir)
 
         trainer = None
+        eval_base_dir = os.path.join(actual_exp_dir, 'eval')
+        os.makedirs(eval_base_dir, exist_ok=True)
+        al_curve_records = []
+
         for r in range(NUM_AL_ROUNDS):
             n_train = len(datamodule.train_dataset_synth)
             print(f"\n===== [al4pde v2.3] AL 轮 {r + 1}/{NUM_AL_ROUNDS} | 当前训练集: {n_train} =====")
@@ -414,14 +434,75 @@ def main():
                 num_sanity_val_steps=0,
             )
             trainer.fit(model, datamodule=datamodule)
-            # 前 4 轮: 用当前(本轮训练完)模型选样并追加; 末轮只训练不选 (对齐 al4pde is_last)
-            if r < NUM_AL_ROUNDS - 1:
-                al_cb.al4pde_select_and_append(model, datamodule, device=device_str)
 
-        # 取最后一轮最后 epoch 权重保存 (唯一 ckpt, run_pipeline.sh 用 ls *.ckpt|head -1 发现)
+            # 1. 保存当轮 Checkpoint
+            round_ckpt = os.path.join(ckpt_dir, f"round_{r}_train{n_train}.ckpt")
+            trainer.save_checkpoint(round_ckpt)
+            print(f"💾 [AL 轮 {r + 1}] 已保存当轮 Checkpoint: {round_ckpt}")
+
+            # 2. 全量评估当轮模型并保存结果到 eval/round_{r}_train{n_train}
+            round_eval_dir = os.path.join(eval_base_dir, f"round_{r}_train{n_train}")
+            print(f"📊 [AL 轮 {r + 1}] 正在评估测试集性能 (真实突变体 126 株)...")
+            from budding_yeast_v2.eval import evaluate_model_on_datamodule
+            is_last_round = (r == NUM_AL_ROUNDS - 1)
+            metrics = evaluate_model_on_datamodule(
+                model=model,
+                dm=datamodule,
+                device=device_str,
+                save_dir=round_eval_dir,
+                seed=args.seed,
+                batch_size=args.batch_size,
+                max_plots=None if is_last_round else 0  # 最终轮次完整画图, 中间轮次极速评估 (<1秒)
+            )
+            real_m = metrics['real_mutants']['all_39_vars']
+            synth_m = metrics['synth_test']['all_39_vars']
+            print(f"✅ [AL 轮 {r + 1} 评测] 样本量: {n_train} | "
+                  f"Real Mutants MAE={real_m['MAE']:.4f}, Rel-L2={real_m['Relative L2']:.4f}, Corr={real_m['Correlation']:.4f} | "
+                  f"Synth Test MAE={synth_m['MAE']:.4f}")
+
+            # 3. 记录主动学习性能进展曲线
+            al_curve_records.append({
+                'round': r,
+                'train_samples': n_train,
+                'real_mutants_mae': float(real_m['MAE']),
+                'real_mutants_mse': float(real_m['MSE']),
+                'real_mutants_rel_l2': float(real_m['Relative L2']),
+                'real_mutants_corr': float(real_m['Correlation']),
+                'synth_test_mae': float(synth_m['MAE']),
+                'synth_test_rel_l2': float(synth_m['Relative L2']),
+                'synth_test_corr': float(synth_m['Correlation'])
+            })
+
+            # 更新性能演化表 al_performance_curve.csv 和 al_rounds_summary.json
+            curve_csv_path = os.path.join(eval_base_dir, 'al_performance_curve.csv')
+            import csv, json
+            with open(curve_csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=list(al_curve_records[0].keys()))
+                writer.writeheader()
+                writer.writerows(al_curve_records)
+
+            with open(os.path.join(eval_base_dir, 'al_rounds_summary.json'), 'w') as f:
+                json.dump(al_curve_records, f, indent=2)
+
+            # 4. 选样追加 (末轮不选, 对齐 al4pde is_last)
+            if not is_last_round:
+                al_cb.al4pde_select_and_append(model, datamodule, device=device_str, exp_dir=actual_exp_dir)
+
+        # 最终末轮: 保存 final-last-epoch.ckpt，并将最后一轮评估结果同步到 eval/ 根目录
         final_ckpt = os.path.join(ckpt_dir, 'final-last-epoch.ckpt')
         trainer.save_checkpoint(final_ckpt)
         print(f"✅ [al4pde v2.3] 已保存最终模型 (最后一轮最后 epoch): {final_ckpt}")
+
+        import shutil
+        last_eval_dir = os.path.join(eval_base_dir, f"round_{NUM_AL_ROUNDS-1}_train{n_train}")
+        for item in ['global_metrics_denorm.json', 'per_mutant_metrics.csv', 'per_synth_test_metrics.csv', 'real_mutants', 'synth_test']:
+            src = os.path.join(last_eval_dir, item)
+            dst = os.path.join(eval_base_dir, item)
+            if os.path.exists(src):
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dst)
     else:
         # ================= 非 al4pde: 单次 fit (最优权重依据 val_loss_synth) =================
         checkpoint_callback = ModelCheckpoint(
@@ -437,24 +518,24 @@ def main():
             from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
             print(f"🚀 [Active Learning] 已挂载主动学习引擎，当前策略: {args.al_strategy.upper()}")
             al_cb = ActiveLearningCallback(
-                  trigger_every_n_epochs=args.al_trigger_epoch,
-                  strategy=args.al_strategy,
-                  num_add=args.al_num_add,
-                  perturbation=args.al_perturbation,
-                  mae_threshold=args.al_mae_threshold,
-                  initial_train_size=args.al_initial_train_size,
-                  initial_selection=args.al_initial_selection,
-                  diversity_weight=args.al_diversity_weight,
-                  pool_subset_size=args.al_pool_subset_size,
-                  uncertainty_metric=args.al_uncertainty_metric,
-                  random_seed=args.seed,
-                  atlas_csv_path=args.atlas_csv,
-                  al_pool_dataset=args.al_pool_dataset,
-                  target_weight=args.al_target_weight,
-                  mass_weight=args.al_mass_weight,
-                  novelty_weight=args.al_novelty_weight,
-                  family_weight=args.family_weight if hasattr(args, 'family_weight') else args.al_family_weight,
-              )
+                trigger_every_n_epochs=getattr(args, 'al_trigger_epoch', 10),
+                strategy=args.al_strategy,
+                num_add=getattr(args, 'al_num_add', 500),
+                perturbation=getattr(args, 'al_perturbation', 0.1),
+                mae_threshold=getattr(args, 'al_mae_threshold', 0.05),
+                initial_train_size=getattr(args, 'al_initial_train_size', 5000),
+                initial_selection=getattr(args, 'al_initial_selection', 'kmeans'),
+                diversity_weight=getattr(args, 'al_diversity_weight', 0.5),
+                pool_subset_size=getattr(args, 'al_pool_subset_size', 10000),
+                uncertainty_metric=getattr(args, 'al_uncertainty_metric', 'variance'),
+                random_seed=args.seed,
+                atlas_csv_path=getattr(args, 'atlas_csv', None),
+                al_pool_dataset=getattr(args, 'al_pool_dataset', None),
+                target_weight=getattr(args, 'al_target_weight', 0.4),
+                mass_weight=getattr(args, 'al_mass_weight', 0.5),
+                novelty_weight=getattr(args, 'al_novelty_weight', 0.6),
+                family_weight=getattr(args, 'al_family_weight', 0.2),
+            )
             callbacks.append(al_cb)
         else:
             print("🌱 [Baseline Mode] 未启用主动学习，数据集在全生命周期锁定。")

@@ -1,3 +1,17 @@
+import os
+import sys
+
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(os.path.dirname(_current_dir))
+for _p in [_repo_root, os.path.dirname(_current_dir)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+if 'PYTHONPATH' in os.environ:
+    if _repo_root not in os.environ['PYTHONPATH'].split(os.pathsep):
+        os.environ['PYTHONPATH'] = f"{_repo_root}{os.pathsep}{os.environ['PYTHONPATH']}"
+else:
+    os.environ['PYTHONPATH'] = _repo_root
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -168,6 +182,15 @@ def solve_single_mass_bridge(name, ovr):
     return (X_dummy, y_uniform, p_vec, pattern_label)
 
 
+def _solve_single_mass_task_wrapper(task_tuple):
+    """顶级函数包装器，供 ProcessPoolExecutor(mp_context='spawn') 进程池调用"""
+    name, ovr = task_tuple
+    try:
+        return solve_single_mass_bridge(name, ovr)
+    except Exception:
+        return None
+
+
 class ActiveLearningCallback(pl.Callback):
     def __init__(self, trigger_every_n_epochs=10, strategy='is', num_add=5000,
                  perturbation=0.1, mae_threshold=0.1,
@@ -257,16 +280,15 @@ class ActiveLearningCallback(pl.Callback):
         self._pool_ovr = None           # 每个候选的完整 ovr 字典 (含 init_Tem1 等额外键, 供 mass 版仿真)
         self._pool_mass_meta = None     # 每个候选的采样元数据 [{'genes': [(gene, mode)], 'level': int}, ...]
 
-        # ====== al4pde 频率/数量机制 (v2.2 P2/P3/P4 改进) ======
         if self.strategy in ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
                              'maal', 'al4pde_mass', 'al4pde_novelty'):
-            print(f"[AL Manager] Override al4pde settings (v2.3 外层重训式): "
-                  f"initial_train_size=5000, 5 轮, 每次采集追加 19000 (总 76000)")
-            self.initial_train_size = 5000
+            self.initial_train_size = initial_train_size
             self.trigger_every_n_epochs = 4  # 保留字段, 外层重训模式下不生效
-            self.num_add = 1000              # 保留字段, 外层重训模式下不生效
-            self._al4pde_num_al_iter = 5        # v2.3: 5 轮 AL (前 4 轮采集, 末轮只训练)
-            self._al4pde_per_round_add = 19000  # v2.3: 每次采集追加数 (76000 / 4)
+            self.num_add = num_add            # 保留字段, 外层重训模式下不生效
+            self._al4pde_num_al_iter = 3      # 3 轮 AL (Iter 0: 10k -> Iter 1: 20k -> Iter 2: 40k)
+            self._al4pde_per_round_add = 10000
+            print(f"[AL Manager] al4pde 设置: initial_train_size={self.initial_train_size}, "
+                  f"{self._al4pde_num_al_iter} 轮指数倍增 (10k -> 20k -> 40k)")
         else:
             self._al4pde_num_al_iter = 6
             self._al4pde_per_round_add = 1000
@@ -404,43 +426,130 @@ class ActiveLearningCallback(pl.Callback):
         """v2.3: 启用外层重训模式 (选样由 train.py 外层循环驱动, on_train_epoch_end 不再触发)。"""
         self._outer_loop_mode = True
 
-    def al4pde_setup(self, dm, device='cuda'):
-        """v2.3 外层重训式: 一次性初始化 (随机候选池 + 随机初始训练集 + ODE 预计算)。
-        供 train.py 在外层循环开始前调用一次 (等价于原 on_train_start 的 al4pde 分支)。
-
-        v2.6 统一规范 (所有 al4pde 策略, 用户指定):
-        - 候选池: sample_mass_random (纯随机采样器, 无 rescue motif 定向构造), Level 分层保留
-        - 初始训练集: 从随机候选池完全随机抽取 + ODE 仿真, 不取自 massv3 npz 训练子集
-          (npz 训练集含 L3/L4 50% 概率的 rescue motif 定向样本, 违反"完全随机"要求)
-        - 随机探索可能偶然撞出 motif 形组合 (随机碰撞, 非定向构造), 属于允许范围:
-          "随机"禁止的是定向构造, 不禁止随机碰撞
-        - 验证集/测试集不变 (仍为 massv3 npz 划分, 与非 AL 实验完全一致)
-        """
+    def al4pde_setup(self, dm, device='cuda', exp_dir=None):
+        """v2.3 外层重训式: 一次性初始化 (加载候选池 + 确定初始训练集 + 累积数据缓存)。
+        供 train.py 在外层循环开始前调用一次。"""
         from torch.utils.data import TensorDataset
 
-        self._generate_param_only_pool(dm)           # random-only 采样器生成候选池 (全策略统一)
-        initial_size = min(self.initial_train_size, self._pool_size)
-        rng = np.random.RandomState(self.random_seed + 1)
-        sel_idx = rng.permutation(self._pool_size)[:initial_size]  # 完全随机抽取
-        print(f"[al4pde] 初始训练集: 从 random-only 候选池完全随机抽取 "
-              f"{initial_size}/{self._pool_size} (seed={self.random_seed + 1}, 策略={self.strategy})")
-        bd = self._build_broadcast_from_pool(sel_idx, dm)  # ODE 仿真 + 物理验证 + 归一化
-        if bd is None or bd['X'].shape[0] == 0:
-            raise RuntimeError("[al4pde] 初始训练集仿真全部失败, 无法继续")
-        # 整体替换训练集 (丢弃 npz 训练子集, 其含定向采样样本)
-        dm.train_dataset_synth = TensorDataset(bd['X'], bd['P'], bd['Y'])
-        if hasattr(dm, '_mutant_names'):
-            n_existing = len(dm._mutant_names)
-            dm._mutant_names = list(dm._mutant_names) + list(bd['names'])
-            # _train_idx_synth 重定向到新增名字区段 (初始集不在原 npz 训练划分内)
-            dm._train_idx_synth = np.arange(n_existing, n_existing + len(bd['names']))
+        self._generate_param_only_pool(dm)  # 加载预存候选池 (如 pure_random_1m_pool.npz)
+
+        # 缓存累积的物理空间数据，用于后续各轮次主动学习训练集落盘 (.npz)
+        self._cum_synth_data = []
+        self._cum_synth_params = []
+        self._cum_synth_names = []
+        self._cum_synth_labels = []
+        self._benchmark_real_data = []
+        self._benchmark_real_params = []
+        self._benchmark_real_names = []
+        self._benchmark_real_labels = []
+        self._param_names_cached = np.array(PARAM_KEYS)
+
+        dataset_path = getattr(dm, 'dataset_path', None)
+        if dataset_path and os.path.exists(dataset_path):
+            init_npz = np.load(dataset_path, allow_pickle=True)
+            if 'data' in init_npz and 'params' in init_npz:
+                data_arr = init_npz['data']
+                params_arr = init_npz['params']
+                mutant_names_arr = init_npz['mutant_names'] if 'mutant_names' in init_npz else None
+                pattern_labels_arr = init_npz['pattern_labels'] if 'pattern_labels' in init_npz else None
+
+                if hasattr(dm, '_train_idx_synth') and len(dm._train_idx_synth) > 0:
+                    idx = dm._train_idx_synth
+                    self._cum_synth_data = list(data_arr[idx])
+                    self._cum_synth_params = list(params_arr[idx])
+                    if mutant_names_arr is not None:
+                        self._cum_synth_names = [str(n) for n in mutant_names_arr[idx]]
+                    else:
+                        self._cum_synth_names = [f"Train_{i}" for i in range(len(idx))]
+                    if pattern_labels_arr is not None:
+                        self._cum_synth_labels = [str(l) for l in pattern_labels_arr[idx]]
+                    else:
+                        self._cum_synth_labels = ['Pattern_B'] * len(self._cum_synth_names)
+
+                if hasattr(dm, '_test_idx_real') and len(dm._test_idx_real) > 0:
+                    idx = dm._test_idx_real
+                    self._benchmark_real_data = list(data_arr[idx])
+                    self._benchmark_real_params = list(params_arr[idx])
+                    if mutant_names_arr is not None:
+                        self._benchmark_real_names = [str(n) for n in mutant_names_arr[idx]]
+                    else:
+                        self._benchmark_real_names = [f"Real_{i}" for i in range(len(idx))]
+                    if pattern_labels_arr is not None:
+                        self._benchmark_real_labels = [str(l) for l in pattern_labels_arr[idx]]
+                    else:
+                        self._benchmark_real_labels = ['Pattern_B'] * len(self._benchmark_real_names)
+
+                if 'param_names' in init_npz:
+                    self._param_names_cached = init_npz['param_names']
+
+        # 检查是否已直接通过 --dataset_name 加载了预生成的初始训练集 (如 al_iter0_10000_210m_500s.npz)
+        if hasattr(dm, 'train_dataset_synth') and len(dm.train_dataset_synth) > 0:
+            print(f"[al4pde] ✅ 直接复用预生成的初始训练集: {len(dm.train_dataset_synth)} 样本 (无须重复进行初始 ODE 仿真)")
+            if hasattr(dm, '_mutant_names'):
+                existing_names = set(str(n) for n in dm._mutant_names)
+                mask = np.isin(self._pool_mutant_names, list(existing_names), invert=True)
+                if mask.sum() < len(mask):
+                    n_removed = len(mask) - mask.sum()
+                    print(f"[al4pde] 从候选池中剔除初始训练集已占用的 {n_removed} 个样本")
+                    self._pool_P = self._pool_P[mask]
+                    if self._pool_X is not None:
+                        self._pool_X = self._pool_X[mask]
+                    if self._pool_Y is not None:
+                        self._pool_Y = self._pool_Y[mask]
+                    if self._pool_Y_ic is not None:
+                        self._pool_Y_ic = self._pool_Y_ic[mask]
+                    self._pool_mutant_names = self._pool_mutant_names[mask]
+                    if self._pool_P_real is not None:
+                        self._pool_P_real = self._pool_P_real[mask]
+                    if self._pool_shape_features_cached is not None:
+                        self._pool_shape_features_cached = self._pool_shape_features_cached[mask]
+                    if self._al4pde_pool_idx is not None:
+                        self._al4pde_pool_idx = self._al4pde_pool_idx[mask]
+                    if self._pool_ovr is not None:
+                        self._pool_ovr = [o for o, m in zip(self._pool_ovr, mask) if m]
+                    self._pool_size = mask.sum()
+        else:
+            initial_size = min(self.initial_train_size, self._pool_size)
+            rng = np.random.RandomState(self.random_seed + 1)
+            sel_idx = rng.permutation(self._pool_size)[:initial_size]
+            print(f"[al4pde] 从候选池完全随机抽取初始集: {initial_size}/{self._pool_size} (seed={self.random_seed + 1})")
+            bd = self._build_broadcast_from_pool(sel_idx, dm)
+            if bd is None or bd['X'].shape[0] == 0:
+                raise RuntimeError("[al4pde] 初始训练集仿真全部失败, 无法继续")
+            dm.train_dataset_synth = TensorDataset(bd['X'], bd['P'], bd['Y'])
+            if hasattr(dm, '_mutant_names'):
+                n_existing = len(dm._mutant_names)
+                dm._mutant_names = list(dm._mutant_names) + list(bd['names'])
+                dm._train_idx_synth = np.arange(n_existing, n_existing + len(bd['names']))
+            if 'Y_real' in bd:
+                self._cum_synth_data.extend(bd['Y_real'])
+                self._cum_synth_params.extend(bd['P_real'])
+                self._cum_synth_names.extend(bd['names'])
+                self._cum_synth_labels.extend(bd['labels'])
+
         self._al_initialized = True
         self._al4pde_al_iter = 0
         self._train_size_history.append(len(dm.train_dataset_synth))
-        print(f"[al4pde] 初始训练集构建完成 (纯随机采样, 无定向样本): "
-              f"{len(dm.train_dataset_synth)} | 候选池剩余: {self._pool_size} | 策略: {self.strategy}")
 
-    def al4pde_select_and_append(self, pl_module, dm, device='cuda'):
+        # 保存 Round 0 初始训练集到实验目录 datasets/
+        if exp_dir and len(self._cum_synth_data) > 0:
+            ds_dir = os.path.join(exp_dir, 'datasets')
+            os.makedirs(ds_dir, exist_ok=True)
+            r0_path = os.path.join(ds_dir, f'al_iter0_train{len(self._cum_synth_data)}.npz')
+            if not os.path.exists(r0_path):
+                np.savez_compressed(
+                    r0_path,
+                    data=np.array(self._benchmark_real_data + self._cum_synth_data, dtype=np.float32),
+                    params=np.array(self._benchmark_real_params + self._cum_synth_params, dtype=np.float64),
+                    mutant_names=np.array(self._benchmark_real_names + self._cum_synth_names),
+                    pattern_labels=np.array(self._benchmark_real_labels + self._cum_synth_labels),
+                    param_names=self._param_names_cached
+                )
+                print(f"💾 [al4pde] 已将 Round 0 初始数据集落盘保存至: {r0_path}")
+
+        print(f"[al4pde] 初始训练集就绪: {len(dm.train_dataset_synth)} 样本 | 候选池剩余: {self._pool_size} | 策略: {self.strategy}")
+
+    def al4pde_select_and_append(self, pl_module, dm, device='cuda', exp_dir=None):
         """v2.3 外层重训式: 用当前(上一轮训练完的)模型选样并追加到 train_dataset_synth。
         返回本次追加的样本数。"""
         from torch.utils.data import TensorDataset
@@ -468,11 +577,20 @@ class ActiveLearningCallback(pl.Callback):
             return 0
         old_tensors = dm.train_dataset_synth.tensors
         old_X, old_P, old_Y = old_tensors[0], old_tensors[1], old_tensors[2]
-        dm.train_dataset_synth = TensorDataset(
-            torch.cat([old_X, bd['X'].to(old_X.device)], dim=0),
-            torch.cat([old_P, bd['P'].to(old_X.device)], dim=0),
-            torch.cat([old_Y, bd['Y'].to(old_Y.device)], dim=0),
-        )
+        if len(old_tensors) >= 4:
+            pattern_ids = torch.cat([old_tensors[3], torch.zeros(bd['X'].shape[0], dtype=old_tensors[3].dtype, device=old_tensors[3].device)], dim=0)
+            dm.train_dataset_synth = TensorDataset(
+                torch.cat([old_X, bd['X'].to(old_X.device)], dim=0),
+                torch.cat([old_P, bd['P'].to(old_X.device)], dim=0),
+                torch.cat([old_Y, bd['Y'].to(old_Y.device)], dim=0),
+                pattern_ids
+            )
+        else:
+            dm.train_dataset_synth = TensorDataset(
+                torch.cat([old_X, bd['X'].to(old_X.device)], dim=0),
+                torch.cat([old_P, bd['P'].to(old_X.device)], dim=0),
+                torch.cat([old_Y, bd['Y'].to(old_Y.device)], dim=0),
+            )
         if 'names' in bd and hasattr(dm, '_mutant_names'):
             new_names = list(bd['names'])
             n_existing = len(dm._mutant_names)
@@ -487,6 +605,41 @@ class ActiveLearningCallback(pl.Callback):
         n_added = int(bd['X'].shape[0])
         print(f"[al4pde v2.3] 追加 {n_added} 个样本 → 训练集 {len(dm.train_dataset_synth)} "
               f"(al_iter={self._al4pde_al_iter})")
+
+        # 持久化落盘当轮更新后的数据集 .npz 与选拔明细 CSV
+        if exp_dir and 'Y_real' in bd and len(bd['Y_real']) > 0:
+            ds_dir = os.path.join(exp_dir, 'datasets')
+            os.makedirs(ds_dir, exist_ok=True)
+            self._cum_synth_data.extend(bd['Y_real'])
+            self._cum_synth_params.extend(bd['P_real'])
+            self._cum_synth_names.extend(bd['names'])
+            self._cum_synth_labels.extend(bd['labels'])
+
+            round_ds_path = os.path.join(ds_dir, f'al_iter{self._al4pde_al_iter}_train{len(self._cum_synth_data)}.npz')
+            np.savez_compressed(
+                round_ds_path,
+                data=np.array(self._benchmark_real_data + self._cum_synth_data, dtype=np.float32),
+                params=np.array(self._benchmark_real_params + self._cum_synth_params, dtype=np.float64),
+                mutant_names=np.array(self._benchmark_real_names + self._cum_synth_names),
+                pattern_labels=np.array(self._benchmark_real_labels + self._cum_synth_labels),
+                param_names=self._param_names_cached
+            )
+            print(f"💾 [al4pde v2.3] 已将 Iteration {self._al4pde_al_iter} 扩充数据集完整保存至: {round_ds_path}")
+
+            # 保存选样明细清单 CSV
+            import csv
+            sample_csv_path = os.path.join(exp_dir, 'eval', f'selected_samples_round_{self._al4pde_al_iter}.csv')
+            os.makedirs(os.path.dirname(sample_csv_path), exist_ok=True)
+            with open(sample_csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Selection_Index', 'Mutant_Name', 'Pattern_Label', 'AL_Iteration', 'Strategy'])
+                for s_i, (s_name, s_lbl) in enumerate(zip(bd['names'], bd['labels'])):
+                    writer.writerow([s_i + 1, s_name, s_lbl, self._al4pde_al_iter, self.strategy])
+            print(f"📝 [al4pde v2.3] 已将当轮选拔样本清单保存至: {sample_csv_path}")
+
+        if pl_module is not None:
+            pl_module.train()
+        return n_added
         if pl_module is not None:
             pl_module.train()
         return n_added
@@ -559,7 +712,12 @@ class ActiveLearningCallback(pl.Callback):
             updated_P = torch.cat([old_P, broadcast_data['P'].to(old_X.device)], dim=0)
             updated_Y = torch.cat([old_Y, broadcast_data['Y'].to(old_Y.device)], dim=0)
 
-            dm.train_dataset_synth = TensorDataset(updated_X, updated_P, updated_Y)
+            if len(old_tensors) >= 4:
+                old_patterns = old_tensors[3]
+                new_patterns = torch.zeros(broadcast_data['X'].shape[0], dtype=old_patterns.dtype, device=old_patterns.device)
+                dm.train_dataset_synth = TensorDataset(updated_X, updated_P, updated_Y, torch.cat([old_patterns, new_patterns], dim=0))
+            else:
+                dm.train_dataset_synth = TensorDataset(updated_X, updated_P, updated_Y)
             self._train_size_history.append(len(dm.train_dataset_synth))
             print(f"[AL Manager] 训练集成功扩容！当前新样本总数: {len(dm.train_dataset_synth)}")
 
@@ -1095,7 +1253,7 @@ class ActiveLearningCallback(pl.Callback):
             uncertainty_scores: (N,) 每个样本的预测方差均值
         """
         pl_module.eval()
-        batch_size = 500
+        batch_size = 2500  # 针对 100 万候选池显著提升批大小加速前向推理 (RTX A6000 48G 显存)
         all_uncertainties = []
 
         # 获取参数归一化统计量，确保扰动在归一化空间
@@ -1142,7 +1300,7 @@ class ActiveLearningCallback(pl.Callback):
             pred_trajectories: (N, 39, T) numpy 数组，真实值空间
         """
         pl_module.eval()
-        batch_size = 1000
+        batch_size = 2500  # 针对 100 万候选池提速
         all_preds = []
 
         mean_y = dm.mean_y.to(device)  # (1, 39, 1)
@@ -1348,7 +1506,7 @@ class ActiveLearningCallback(pl.Callback):
         N, V, T = pred_trajectories.shape
 
         # 从训练集采样代表点，使用其真实标签轨迹（归一化）反归一化到真实值空间
-        train_X, train_P, train_Y_norm = dm.train_dataset_synth.tensors
+        train_X, train_P, train_Y_norm = dm.train_dataset_synth.tensors[:3]
         n_representatives = min(500, train_X.shape[0])
         rng = np.random.RandomState(self.random_seed)
         rep_idx = rng.choice(train_X.shape[0], n_representatives, replace=False)
@@ -1401,7 +1559,7 @@ class ActiveLearningCallback(pl.Callback):
         N, V, T = pred_trajectories.shape
 
         # 从训练集采样代表点
-        train_X, train_P, train_Y_norm = dm.train_dataset_synth.tensors
+        train_X, train_P, train_Y_norm = dm.train_dataset_synth.tensors[:3]
         n_representatives = min(500, train_X.shape[0])
         rng = np.random.RandomState(self.random_seed)
         rep_idx = rng.choice(train_X.shape[0], n_representatives, replace=False)
@@ -1508,6 +1666,79 @@ class ActiveLearningCallback(pl.Callback):
         内存优化: 只存 P_norm + Y_IC + P_real + ovr + meta, 完整 Y 选中后 ODE 生成
         """
         import math
+
+        # 若提供了预存候选池 (如 pure_random_1m_pool.npz)，直接毫秒级加载
+        if self.al_pool_dataset and os.path.exists(self.al_pool_dataset):
+            print(f"[al4pde] 🚀 检测到预存候选池文件: {self.al_pool_dataset}，正在快速加载...")
+            t_load = time.time()
+            data = np.load(self.al_pool_dataset, allow_pickle=True)
+            P_tensor = torch.tensor(data['params'], dtype=torch.float32)
+            pool_names = list(data['mutant_names'])
+
+            if 'y_init' in data:
+                Y_ic_tensor = torch.tensor(data['y_init'], dtype=torch.float32)
+            else:
+                y0_base = initial_conds_mass()
+                Y_ic_tensor = torch.tensor(np.tile(y0_base, (len(P_tensor), 1)), dtype=torch.float32)
+
+            mean_y = dm.mean_y
+            std_y = dm.std_y
+            p_mean = dm.p_mean.to(P_tensor.device)
+            p_std = dm.p_std.to(P_tensor.device)
+
+            if getattr(dm, 'norm_type', 'log1p') == 'asinh_z':
+                z = (P_tensor - p_mean) / p_std
+                P_norm = torch.asinh(z)
+            else:
+                P_norm = (P_tensor - p_mean) / p_std
+            P_norm = torch.nan_to_num(P_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+
+            if getattr(dm, 'norm_type', 'log1p') in ('log1p', 'asinh_z'):
+                Y_ic_trans = torch.log1p(torch.clamp(Y_ic_tensor, min=0.0))
+            else:
+                Y_ic_trans = Y_ic_tensor
+            mean_y_ic = mean_y.squeeze(0).squeeze(-1).to(Y_ic_tensor.device)
+            std_y_ic = std_y.squeeze(0).squeeze(-1).to(Y_ic_tensor.device)
+            Y_ic_norm = (Y_ic_trans - mean_y_ic) / std_y_ic
+            Y_ic_norm = torch.nan_to_num(Y_ic_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+
+            T_STEPS = 500
+            t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS)
+
+            self._pool_X = None
+            self._pool_P = P_norm
+            self._pool_Y = None
+            self._pool_Y_ic = Y_ic_norm
+            self._al4pde_t_grid = t_grid
+            self._pool_mutant_names = np.array(pool_names)
+            self._pool_size = len(pool_names)
+            self._al4pde_pool_loaded = True
+            self._pool_P_real = P_tensor
+            self._pool_ovr = None
+
+            pool_metas = []
+            for name in pool_names:
+                desc_str = _mass_desc_of(name)
+                lvl = 1
+                if '_L' in str(name):
+                    try:
+                        lvl = int(str(name).split('_L')[1].split('_')[0])
+                    except Exception:
+                        pass
+                pool_metas.append({
+                    'genes': _parse_mass_gene_modes(desc_str),
+                    'level': lvl
+                })
+            self._pool_mass_meta = pool_metas
+            self._al4pde_mean_y = mean_y
+            self._al4pde_std_y = std_y
+            self._al4pde_pool_idx = None
+
+            mem_gb = (P_norm.element_size() * P_norm.nelement() +
+                      Y_ic_norm.element_size() * Y_ic_norm.nelement()) / 1e9
+            print(f"[al4pde] ✅ 预存候选池加载完成: {self._pool_size} 样本, 内存={mem_gb:.2f} GB "
+                  f"(耗时 {time.time() - t_load:.2f}s)")
+            return
 
         N_POOL_TARGET = 100000   # v2.6: 随机池统一 100000 (全 al4pde 策略)
         DEDUP_REL_TOL = 0.01    # v2.8: 池内去重相对阈值 8% → 1% (用户指定, 详见 docstring)
@@ -1751,11 +1982,11 @@ class ActiveLearningCallback(pl.Callback):
                                  'al4pde_mass', 'al4pde_novelty')
 
     def _al4pde_scheduled_num_add(self):
-        """al4pde v2.3 外层重训式: 每次采集固定追加 _al4pde_per_round_add 个 (76000 / 4 = 19000)。
-
-        (v2.2 已作废的递增式 1000/3000/4000 不再使用。)
-        """
-        return getattr(self, '_al4pde_per_round_add', 1000)
+        """al4pde 指数递增调度: Iter 0 添加 initial_train_size (如 10k), Iter 1 添加 2x (如 20k)"""
+        iter_idx = getattr(self, '_al4pde_al_iter', 0)
+        base_add = getattr(self, 'initial_train_size', 10000)
+        scheduled = base_add * (2 ** iter_idx)
+        return min(scheduled, self._pool_size)
 
     # ==================================================================
     # al4pde 框架: 4 种 AL 策略 (从 v5 候选池查询)
@@ -2184,7 +2415,7 @@ class ActiveLearningCallback(pl.Callback):
 
     def _compute_train_features_spatial_mean(self, pl_module, dm, device, batch_size=200):
         """对训练集做 forward, 返回轨迹 spatial_mean 特征"""
-        train_X, train_P, _ = dm.train_dataset_synth.tensors
+        train_X, train_P, _ = dm.train_dataset_synth.tensors[:3]
         n_train = len(train_P)
         pl_module.eval()
         features = []
@@ -2291,7 +2522,7 @@ class ActiveLearningCallback(pl.Callback):
             idx += size
         return torch.cat(pool_parts, dim=1), torch.cat(train_parts, dim=1)
 
-    def _compute_pool_features_shape_aware(self, pl_module, dm, device, batch_size=500):
+    def _compute_pool_features_shape_aware(self, pl_module, dm, device, batch_size=2500):
         """返回候选池的轨迹形状感知特征 (raw, 未标准化)
         通过模型 forward_ic_time 快速批量预测生成轨迹特征 (无需前端耗时 ODE 求解)。
         """
@@ -2299,7 +2530,7 @@ class ActiveLearningCallback(pl.Callback):
             return self._pool_shape_features_cached
 
         pl_module.eval()
-        features = []
+        out_features = None
         with torch.no_grad():
             for i in range(0, self._pool_size, batch_size):
                 end_idx = min(i + batch_size, self._pool_size)
@@ -2307,16 +2538,20 @@ class ActiveLearningCallback(pl.Callback):
                 P_batch = self._pool_P[i:end_idx].to(device)
                 preds = pl_module.forward_ic_time(X_batch, P_batch)
                 feat = self._extract_shape_features(preds, P_batch).cpu()
-                features.append(feat)
+                del X_batch, P_batch, preds
+                if out_features is None:
+                    out_features = torch.empty((self._pool_size, feat.shape[1]), dtype=torch.float32)
+                out_features[i:end_idx] = feat
+                del feat
         pl_module.train()
-        return torch.cat(features, dim=0)
+        return out_features
 
     def _compute_train_features_shape_aware(self, pl_module, dm, device, batch_size=200):
         """从训练集真实 Y 轨迹提取形状特征 (raw, 未标准化)
 
         改进: 训练集已有真实轨迹 (数据集中的 Y), 直接用, 不需要模型预测。
         """
-        _, train_P, train_Y = dm.train_dataset_synth.tensors
+        _, train_P, train_Y = dm.train_dataset_synth.tensors[:3]
         n_train = len(train_P)
         features = []
         for i in range(0, n_train, batch_size):
@@ -2329,40 +2564,71 @@ class ActiveLearningCallback(pl.Callback):
         return torch.cat(features, dim=0)
 
     def _bmdal_max_dist_select(self, pool_features, train_features, n_select):
-        """用 bmdal_reg MaxDistSelectionMethod 选 batch (参考 al4pde distance_pool_based.py)"""
-        from bmdal_reg.bmdal.feature_data import TensorFeatureData
-        from bmdal_reg.bmdal.feature_maps import IdentityFeatureMap
-        from bmdal_reg.bmdal.features import Features
-        from bmdal_reg.bmdal.selection import MaxDistSelectionMethod
+        """原生 PyTorch 向量化 MaxDist 贪心最大距离选样 (等价于 bmdal_reg, 耗时由几百秒降至几秒, 兼具 NumPy 2 兼容性)"""
+        n_pool = pool_features.shape[0]
+        n_select = min(n_select, n_pool)
+        if n_select <= 0:
+            return np.array([], dtype=int)
 
-        n_features = pool_features.shape[1]
-        train_ft = Features(IdentityFeatureMap(n_features=n_features),
-                            TensorFeatureData(train_features))
-        pool_ft = Features(IdentityFeatureMap(n_features=n_features),
-                           TensorFeatureData(pool_features))
-        sel_method = MaxDistSelectionMethod(pool_features=pool_ft, train_features=train_ft,
-                                            sel_with_train=True)
-        sel_idx = sel_method.select(n_select).detach().cpu().numpy()
-        return sel_idx
+        try:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            pool_feat = pool_features.to(device)
+            train_feat = train_features.to(device)
+        except RuntimeError:
+            device = torch.device('cpu')
+            pool_feat = pool_features.cpu()
+            train_feat = train_features.cpu()
 
-    def _compute_diversity_scores(self, pool_features, train_features, chunk=500):
-        """计算每个候选样本到训练集的最小欧氏距离 (diversity score)
+        # 1. 计算每个候选样本到当前训练集的最小欧氏距离
+        chunk_size = 50000
+        min_dist_to_train = torch.full((n_pool,), float('inf'), device=device)
+        with torch.no_grad():
+            for i in range(0, n_pool, chunk_size):
+                end_c = min(i + chunk_size, n_pool)
+                p_chunk = pool_feat[i:end_c]
+                dists = torch.cdist(p_chunk, train_feat)  # (chunk, M)
+                min_dist_to_train[i:end_c] = dists.min(dim=1)[0]
+                del dists, p_chunk
 
-        Args:
-            pool_features: (N, D) torch.Tensor
-            train_features: (M, D) torch.Tensor
+            # 2. 贪心最大距离选择
+            selected_indices = []
+            curr_min_dist = min_dist_to_train.clone()
 
-        Returns:
-            scores: (N,) numpy array, 每个候选样本到训练集的最近距离
-        """
-        scores = []
-        for i in range(0, len(pool_features), chunk):
-            p_chunk = pool_features[i:i + chunk]  # (chunk, D)
-            # dist: (chunk, M)
-            dist = torch.cdist(p_chunk, train_features)
-            min_dist = dist.min(dim=1)[0]  # (chunk,)
-            scores.append(min_dist)
-        return torch.cat(scores, dim=0).numpy()
+            update_chunk = 100000
+            for step in range(n_select):
+                best_idx = torch.argmax(curr_min_dist).item()
+                selected_indices.append(best_idx)
+                curr_min_dist[best_idx] = -float('inf')
+                if step == n_select - 1:
+                    break
+                best_point = pool_feat[best_idx:best_idx + 1]  # (1, D)
+                for i in range(0, n_pool, update_chunk):
+                    end_u = min(i + update_chunk, n_pool)
+                    p_chunk = pool_feat[i:end_u]
+                    dist_to_new = torch.norm(p_chunk - best_point, dim=1)
+                    curr_min_dist[i:end_u] = torch.minimum(curr_min_dist[i:end_u], dist_to_new)
+
+        return np.array(selected_indices, dtype=int)
+
+    def _compute_diversity_scores(self, pool_features, train_features, chunk=50000):
+        """计算每个候选样本到训练集的最小欧氏距离 (diversity score), 支持 GPU 高速批处理 (流式传输, 显存 < 100MB)"""
+        try:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            train_feat = train_features.to(device)
+        except RuntimeError:
+            device = torch.device('cpu')
+            train_feat = train_features.cpu()
+
+        n_pool = pool_features.shape[0]
+        min_dists = torch.empty((n_pool,), dtype=torch.float32)
+        with torch.no_grad():
+            for i in range(0, n_pool, chunk):
+                end_i = min(i + chunk, n_pool)
+                p_chunk = pool_features[i:end_i].to(device)
+                dist = torch.cdist(p_chunk, train_feat)
+                min_dists[i:end_i] = dist.min(dim=1)[0].cpu()
+                del dist, p_chunk
+        return min_dists.numpy()
 
     def _compute_train_family_uncertainty(self, pl_module, dm, device, n_mc_samples=5, max_train_subset=2000):
         """对训练集做参数扰动集成 (pseudo MC dropout), 按家族分组计算平均不确定性
@@ -2391,7 +2657,7 @@ class ActiveLearningCallback(pl.Callback):
         Returns:
             family_uncertainty: {family_name: mean_uncertainty}
         """
-        train_X, train_P, _ = dm.train_dataset_synth.tensors
+        train_X, train_P, _ = dm.train_dataset_synth.tensors[:3]
         n_train = len(train_P)
 
         # 获取训练集 mutant_names (通过 dm._train_idx_synth 映射)
@@ -2578,35 +2844,29 @@ class ActiveLearningCallback(pl.Callback):
 
         # ODE 仿真
         print(f"[al4pde] ODE 仿真生成 {n_sel} 个选中样本的轨迹 (MASS 引擎)...")
+        tasks = []
+        for i in range(n_sel):
+            ovr = sel_ovrs[i] if sel_ovrs is not None else {k: v for k, v in zip(PARAM_KEYS, sel_P_real[i].tolist())}
+            tasks.append((str(sel_names[i]), ovr))
+
         sim_results = [None] * n_sel
-        with ProcessPoolExecutor(max_workers=32) as executor:
-            if sel_ovrs is not None:
-                futures = {i: executor.submit(solve_single_mass_bridge,
-                                              str(sel_names[i]), sel_ovrs[i])
-                           for i in range(n_sel)}
-            else:
-                futures = {i: executor.submit(solve_single_mass_bridge,
-                                              str(sel_names[i]),
-                                              {k: v for k, v in zip(
-                                                  PARAM_KEYS, sel_P_real[i].tolist())})
-                           for i in range(n_sel)}
+        import multiprocessing as mp
+        ctx = mp.get_context('spawn')
+        workers = min(6, os.cpu_count() or 4)
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor:
             done = 0
-            for i, f in futures.items():
-                try:
-                    sim_results[i] = f.result(timeout=MASS_SIM_TIMEOUT + 30)
-                except FutureTimeoutError:
-                    print(f"  ⚠️ 选中样本 {i} ({sel_names[i]}) 进程级超时,跳过")
-                    sim_results[i] = None
+            for idx, res in enumerate(executor.map(_solve_single_mass_task_wrapper, tasks, chunksize=50)):
+                sim_results[idx] = res
                 done += 1
                 if done % max(1, n_sel // 10) == 0 or done == n_sel:
                     print(f"  ODE 仿真进度: {done}/{n_sel} ({100*done//n_sel}%)")
 
-        # 动态浓度剔除 (阈值参考 real mutants, 复用 _physics_validate_and_prune 的阈值逻辑)
-        Y_real_norm = dm.test_dataset_real.tensors[2].cpu()
-        std_y_cpu = dm.std_y.cpu()
-        mean_y_cpu = dm.mean_y.cpu()
-        Y_real_raw = Y_real_norm * std_y_cpu + mean_y_cpu
-        real_envelope = Y_real_raw.max(dim=-1)[0].max(dim=0)[0].numpy()
+        # 动态浓度剔除 (阈值参考 real mutants, 复用物理空间的 real mutants 最大值)
+        if hasattr(dm, '_Y') and hasattr(dm, '_test_idx_real'):
+            real_envelope = dm._Y[dm._test_idx_real].max(dim=-1)[0].max(dim=0)[0].cpu().numpy()
+        else:
+            Y_real_phys = dm.denormalize_y(dm.test_dataset_real.tensors[2].cpu())
+            real_envelope = Y_real_phys.max(dim=-1)[0].max(dim=0)[0].cpu().numpy()
         dynamic_thresholds = np.maximum(real_envelope * 2.0, 2.0)
 
         valid_positions = []
@@ -2668,22 +2928,33 @@ class ActiveLearningCallback(pl.Callback):
             print(f"[al4pde] 候选池剩余: {self._pool_size} 样本")
             return None
 
-        # 归一化 Y (仿真输出为真实值空间, 需归一化以匹配训练集)
-        mean_y = dm.mean_y  # (1, 39, 1)
-        std_y = dm.std_y    # (1, 39, 1)
-        p_mean = dm.p_mean  # (1, 141)
-        p_std = dm.p_std    # (1, 141)
+        # 归一化 Y 和 P (仿真输出为真实物理值空间, 需按照 dm.norm_type 归一化以匹配训练集)
+        norm_type = getattr(dm, 'norm_type', 'log1p')
+        mean_y = dm.mean_y.cpu()  # (1, 39, 1)
+        std_y = dm.std_y.cpu()    # (1, 39, 1)
+        p_mean = dm.p_mean.cpu()  # (1, 141)
+        p_std = dm.p_std.cpu()    # (1, 141)
+        p_std_safe = torch.where(p_std > 1e-5, p_std, torch.ones_like(p_std))
 
         Y_list = []
         for y_real in valid_Y_real:
             y_t = torch.tensor(y_real, dtype=torch.float32)  # (39, 500)
-            y_norm = (y_t - mean_y.squeeze(0)) / std_y.squeeze(0)
+            if norm_type in ('log1p', 'asinh_z'):
+                y_trans = torch.log1p(torch.clamp(y_t, min=0.0))
+            else:
+                y_trans = y_t
+            y_norm = (y_trans - mean_y.squeeze(0)) / std_y.squeeze(0)
+            y_norm = torch.nan_to_num(y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
             Y_list.append(y_norm)
 
         P_list = []
         for p_real in valid_P_real:
-            p_t = torch.tensor(p_real, dtype=torch.float32)  # (141,)
-            p_norm = (p_t - p_mean.squeeze(0)) / p_std.squeeze(0)
+            p_t = torch.tensor(p_real, dtype=torch.float32).unsqueeze(0)  # (1, 141)
+            if norm_type == 'asinh_z':
+                z = (p_t - p_mean) / p_std_safe
+                p_norm = torch.asinh(z).squeeze(0)
+            else:
+                p_norm = ((p_t - p_mean) / p_std_safe).squeeze(0)
             p_norm = torch.nan_to_num(p_norm, nan=0.0, posinf=10.0, neginf=-10.0)
             P_list.append(p_norm)
 
@@ -2694,6 +2965,8 @@ class ActiveLearningCallback(pl.Callback):
             'X': X_tensor,
             'Y': torch.stack(Y_list),
             'P': torch.stack(P_list),
+            'Y_real': valid_Y_real,
+            'P_real': valid_P_real,
             'names': valid_names,
             'labels': valid_labels,
             'sample_plots': {}

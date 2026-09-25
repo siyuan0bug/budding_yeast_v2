@@ -1,4 +1,13 @@
 import os
+import sys
+
+# Ensure repository root is in sys.path regardless of where eval.py is launched from
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(_current_dir)
+for _p in [_repo_root, _current_dir]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import argparse
 import json
 import csv
@@ -182,20 +191,95 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             save_plot_path = os.path.join(plot_dir, f"{m_name}.png")
             plot_tasks.append((pred_i.numpy(), target_i.numpy(), f"{title_base}\nAll 39 Variables", save_plot_path, 5, 8, dm.t_max))
 
-    # 3. 多进程并发画图
-    if plot_tasks:
-        workers = min(max_workers, os.cpu_count() or 4)
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            list(executor.map(_render_and_save_plot, plot_tasks))
-
-    # 4. 全局汇总指标
+    # 3. 全局汇总指标
     summary = {
         "all_39_vars": calculate_metrics(all_preds, all_targets),
         "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
         "count": N
     }
 
-    return summary, csv_rows, [all_preds], [all_targets]
+    return summary, csv_rows, [all_preds], [all_targets], plot_tasks
+
+def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42, batch_size=512, max_plots=None, plot_workers=16):
+    """
+    对给定的 model 和 dm 执行全量评测，生成 global_metrics_denorm.json, per_mutant_metrics.csv 等标准成果。
+    """
+    if save_dir is None:
+        save_dir = './eval_result'
+    os.makedirs(save_dir, exist_ok=True)
+    if device is None:
+        device = next(model.parameters()).device
+    else:
+        device = torch.device(device)
+    model = model.to(device)
+    model.eval()
+
+    mean_y, std_y = dm.mean_y.to(device), dm.std_y.to(device)
+
+    # ======== 1. 评估 Real Mutants ========
+    real_summary, real_csv, real_preds, real_targets, real_plot_tasks = evaluate_dataset(
+        model, dm, dm.test_dataset_real, dm._test_idx_real,
+        device, mean_y, std_y, seed, save_dir,
+        sub_dir='real_mutants', batch_size=batch_size, max_plots=max_plots, max_workers=plot_workers
+    )
+
+    # ======== 2. 评估 Synthetic 测试集 ========
+    synth_dataset = dm.test_dataset_synth
+    synth_idx = dm._test_idx_synth
+    synth_plots = min(max_plots, 50) if max_plots is not None else 50
+    synth_summary, synth_csv, synth_preds, synth_targets, synth_plot_tasks = evaluate_dataset(
+        model, dm, synth_dataset, synth_idx,
+        device, mean_y, std_y, seed, save_dir,
+        sub_dir='synth_test', batch_size=batch_size, max_plots=synth_plots if max_plots != 0 else 0, max_workers=plot_workers
+    )
+
+    # ======== 3. 汇总 JSON (立即落盘) ========
+    all_preds = torch.cat(real_preds + synth_preds, dim=0)
+    all_targets = torch.cat(real_targets + synth_targets, dim=0)
+
+    all_test_summary = {
+        "all_39_vars": calculate_metrics(all_preds, all_targets),
+        "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
+        "count": len(all_preds)
+    }
+
+    global_metrics = {
+        "all_test": all_test_summary,
+        "real_mutants": real_summary,
+        "synth_test": synth_summary,
+    }
+
+    json_path = os.path.join(save_dir, 'global_metrics_denorm.json')
+    with open(json_path, 'w') as f:
+        json.dump(global_metrics, f, indent=2)
+    print(f"📊 Global metrics JSON saved to: {json_path}")
+    print(f"   all_test:     n={all_test_summary['count']}, MAE={all_test_summary['all_39_vars']['MAE']:.4f}, Corr={all_test_summary['all_39_vars']['Correlation']:.4f}")
+    print(f"   real_mutants: n={real_summary['count']}, MAE={real_summary['all_39_vars']['MAE']:.4f}, Corr={real_summary['all_39_vars']['Correlation']:.4f}")
+    print(f"   synth_test:   n={synth_summary['count']}, MAE={synth_summary['all_39_vars']['MAE']:.4f}, Corr={synth_summary['all_39_vars']['Correlation']:.4f}")
+
+    # ======== 4. 输出 CSV 记录 (立即落盘) ========
+    def write_csv(rows, path):
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        print(f"📝 CSV saved to: {path}")
+
+    write_csv(real_csv, os.path.join(save_dir, 'per_mutant_metrics.csv'))
+    write_csv(synth_csv, os.path.join(save_dir, 'per_synth_test_metrics.csv'))
+
+    # ======== 5. 多进程并发画图 (若有请求) ========
+    all_plot_tasks = real_plot_tasks + synth_plot_tasks
+    if all_plot_tasks:
+        print(f"🎨 正在多进程并发绘制曲线图 (共 {len(all_plot_tasks)} 幅)...")
+        workers = min(plot_workers, os.cpu_count() or 4)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(_render_and_save_plot, all_plot_tasks))
+        print(f"✅ 曲线图已成功保存至: {save_dir}")
+
+    return global_metrics
 
 def main():
     parser = argparse.ArgumentParser()
@@ -209,8 +293,8 @@ def main():
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--synth_test_plots', type=int, default=50, help='合成测试集最多画多少张图')
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
-    parser.add_argument('--norm_type', type=str, default='asinh_z', choices=['asinh_z', 'log1p', 'linear', 'asinh_scale'],
-                        help='数据归一化类型: asinh_z (推荐最优: 参数统一 asinh(Z) + 变量稳健 log1p), log1p, asinh_scale, linear')
+    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'asinh_z', 'linear', 'asinh_scale'],
+                        help='数据归一化类型: log1p (平滑对数归一化, 默认), asinh_z, asinh_scale, linear')
     parser.add_argument('--seed', type=int, default=None, help='随机种子 (默认自动从 ckpt 或 exp_dir 解析，兜底 42)')
     args = parser.parse_args()
 
@@ -270,60 +354,17 @@ def main():
         norm_type=resolved_norm_type
     )
     dm.setup('test')
-    mean_y, std_y = dm.mean_y.to(args.device), dm.std_y.to(args.device)
 
-    # ======== 1. 评估 Real Mutants ========
-    real_summary, real_csv, real_preds, real_targets = evaluate_dataset(
-        model, dm, dm.test_dataset_real, dm._test_idx_real,
-        args.device, mean_y, std_y, args.seed, args.save_dir,
-        sub_dir='real_mutants', batch_size=args.batch_size, max_plots=None, max_workers=args.plot_workers
+    evaluate_model_on_datamodule(
+        model=model,
+        dm=dm,
+        device=args.device,
+        save_dir=args.save_dir,
+        seed=args.seed,
+        batch_size=args.batch_size,
+        max_plots=args.synth_test_plots,
+        plot_workers=args.plot_workers
     )
-
-    # ======== 2. 评估 Synthetic 测试集 ========
-    synth_dataset = dm.test_dataset_synth
-    synth_idx = dm._test_idx_synth
-    synth_summary, synth_csv, synth_preds, synth_targets = evaluate_dataset(
-        model, dm, synth_dataset, synth_idx,
-        args.device, mean_y, std_y, args.seed, args.save_dir,
-        sub_dir='synth_test', batch_size=args.batch_size, max_plots=args.synth_test_plots, max_workers=args.plot_workers
-    )
-
-    # ======== 3. 汇总 JSON ========
-    all_preds = torch.cat(real_preds + synth_preds, dim=0)
-    all_targets = torch.cat(real_targets + synth_targets, dim=0)
-
-    all_test_summary = {
-        "all_39_vars": calculate_metrics(all_preds, all_targets),
-        "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
-        "count": len(all_preds)
-    }
-
-    global_metrics = {
-        "all_test": all_test_summary,
-        "real_mutants": real_summary,
-        "synth_test": synth_summary,
-    }
-
-    json_path = os.path.join(args.save_dir, 'global_metrics_denorm.json')
-    with open(json_path, 'w') as f:
-        json.dump(global_metrics, f, indent=2)
-    print(f"📊 Global metrics JSON saved to: {json_path}")
-    print(f"   all_test:     n={all_test_summary['count']}, MAE={all_test_summary['all_39_vars']['MAE']:.4f}, Corr={all_test_summary['all_39_vars']['Correlation']:.4f}")
-    print(f"   real_mutants: n={real_summary['count']}, MAE={real_summary['all_39_vars']['MAE']:.4f}, Corr={real_summary['all_39_vars']['Correlation']:.4f}")
-    print(f"   synth_test:   n={synth_summary['count']}, MAE={synth_summary['all_39_vars']['MAE']:.4f}, Corr={synth_summary['all_39_vars']['Correlation']:.4f}")
-
-    # ======== 4. 输出 CSV ========
-    def write_csv(rows, path):
-        with open(path, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(row)
-        print(f"📝 CSV saved to: {path}")
-
-    write_csv(real_csv, os.path.join(args.save_dir, 'per_mutant_metrics.csv'))
-    write_csv(synth_csv, os.path.join(args.save_dir, 'per_synth_test_metrics.csv'))
 
 if __name__ == '__main__':
     main()

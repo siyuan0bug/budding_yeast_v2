@@ -21,7 +21,7 @@ mkdir -p logs_v3 logs
 # 批量上传所有离线日志: wandb sync --sync-all
 # ==========================================
 NO_WANDB=1
-NORM_TYPE="asinh_z"
+NORM_TYPE="log1p"
 
 DATA_DIR="/home/users/zsy/mydata/budding_yeast"
 

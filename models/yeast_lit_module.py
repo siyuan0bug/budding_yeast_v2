@@ -170,7 +170,7 @@ class YeastLitModule(pl.LightningModule):
         huber_delta=1.0,
         # 自回归滚动选项
         rollout_type='one_time',  # 'one_time' (默认, 一次性预测) 或 'autoregressive' (自回归滚动)
-        norm_type='asinh_z',
+        norm_type='log1p',
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -355,7 +355,7 @@ class YeastLitModule(pl.LightningModule):
         if hasattr(self, 'mean_y') and isinstance(self.mean_y, torch.Tensor):
             self.mean_y.copy_(dm.mean_y.to(self.device))
             self.std_y.copy_(dm.std_y.to(self.device))
-        self.norm_type = getattr(dm, 'norm_type', getattr(self, 'norm_type', 'asinh_z'))
+        self.norm_type = getattr(dm, 'norm_type', getattr(self, 'norm_type', 'log1p'))
         if hasattr(dm, 's_c') and dm.s_c is not None and hasattr(self, 's_c'):
             self.s_c.copy_(dm.s_c.to(self.device))
         if hasattr(self.model, 'set_stats'):
@@ -377,7 +377,7 @@ class YeastLitModule(pl.LightningModule):
             mean_y = self.mean_y.to(y_norm.device)
             std_y = self.std_y.to(y_norm.device)
             y_shifted = y_norm * std_y + mean_y
-            norm_type = getattr(self, 'norm_type', 'asinh_z')
+            norm_type = getattr(self, 'norm_type', 'log1p')
             if norm_type == 'asinh_scale':
                 s_c = self.s_c.to(y_norm.device) if hasattr(self, 's_c') and self.s_c is not None else 1.0
                 y_clamped = torch.clamp(y_shifted, min=-10.0, max=10.0)
@@ -407,7 +407,7 @@ class YeastLitModule(pl.LightningModule):
                     'jump_ratio': self.hparams.jump_ratio,
                     'residual_subsample': self.hparams.residual_subsample,
                     'event_weight': self.hparams.event_weight,
-                    'norm_type': getattr(dm, 'norm_type', 'asinh_z'),
+                    'norm_type': getattr(dm, 'norm_type', 'log1p'),
                 }
                 if loss_type == 'pino':
                     pinn_kwargs.update({'lambda_h1': self.hparams.lambda_h1, 'h1_beta': self.hparams.h1_beta})
