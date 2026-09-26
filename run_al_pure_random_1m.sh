@@ -2,11 +2,10 @@
 # ==============================================================================
 # 100万级纯随机主动学习 (AL4PDE 几何倍增 + K-Means 初始冷启动) 一键式四卡并行运行脚本
 # ==============================================================================
-# 硬件分配 (4 张 NVIDIA RTX A6000 48GB 独立显卡):
-#   - GPU 0: al4pde_random      (纯随机抽样消融基准)
-#   - GPU 1: al4pde_uncertainty (MC-Dropout 输入扰动模型认知不确定性)
-#   - GPU 2: al4pde_diversity   (BMDAL MaxDist 动力学轨迹特征多样性)
-#   - GPU 3: al4pde_novelty     (上位性组合新颖性 + 家族不确定性 + 轨迹多样性)
+# 硬件分配 (3 张 NVIDIA RTX A6000 48GB 独立显卡并行评估三大独立理论路线):
+#   - GPU 0: al4pde_bifurcation   (路线一: 相空间极限环吸引子与分岔临界流形主动学习 BM-AL)
+#   - GPU 1: al4pde_event_entropy (路线二: 生物检验点离散事件转移熵 HETE-AL)
+#   - GPU 2: al4pde_fisher_oed    (路线三: 泛函空间贝叶斯最优实验设计 F-OED)
 # ==============================================================================
 
 set -e
@@ -40,14 +39,11 @@ if [ -n "$NORM_TYPE" ] && [ "$NORM_TYPE" != "log1p" ]; then
     HPARAM_SIG="${HPARAM_SIG}_${NORM_TYPE}"
 fi
 
-# 算法配置数组: "GPU_ID STRATEGY" (分别使用 0 到 3 号显卡运行 4 大主动学习算法)
+# 算法配置数组: "GPU_ID STRATEGY" (分别使用 0 到 2 号显卡独立运行三大新路线)
 AL_JOBS=(
-    #"0 al4pde_random"
-    #"1 al4pde_uncertainty"
-    #"2 al4pde_diversity"
-    #"3 al4pde_novelty"
-    "0 al4pde_residual"
-    "1 al4pde_residual_diversity"
+    "0 al4pde_bifurcation"
+    "1 al4pde_event_entropy"
+    "2 al4pde_fisher_oed"
 )
 
 JOB_DESC=""

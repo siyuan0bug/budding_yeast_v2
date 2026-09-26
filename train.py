@@ -217,7 +217,9 @@ def main():
     parser.add_argument('--al_strategy', type=str, default='none',
                           choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'pial',
                                    'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_mass',
-                                   'al4pde_novelty', 'al4pde_residual', 'al4pde_residual_diversity', 'al4pde_res_div'],
+                                   'al4pde_novelty', 'al4pde_residual', 'al4pde_residual_diversity', 'al4pde_res_div',
+                                   'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_event',
+                                   'al4pde_fisher_oed', 'al4pde_foed'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
                                "us/is/random/pial=标准池化AL; "
                                "al4pde_random/uncertainty/diversity=al4pde风格池化AL; "
@@ -225,7 +227,10 @@ def main():
                                "al4pde_mass=按通路频率×机制频率优先选择生物学高频典型突变; "
                                "al4pde_novelty=纯随机候选池(无定向采样)+组合新颖性选择; "
                                "al4pde_residual=局部连续生化通道流速自适应相对物理残差选择; "
-                               "al4pde_residual_diversity=相对残差门控+轨迹拓扑多样性混合选择)")
+                               "al4pde_residual_diversity=相对残差门控+轨迹拓扑多样性混合选择; "
+                               "al4pde_bifurcation=路线一:相空间吸引子与分岔临界流形主动学习; "
+                               "al4pde_event_entropy=路线二:生物检验点离散事件转移熵; "
+                               "al4pde_fisher_oed=路线三:泛函空间贝叶斯最优实验设计)")
     parser.add_argument('--atlas_csv', type=str, default=None,
                         help="已弃用 (保留仅用于兼容)")
     # al4pde 框架专用参数
@@ -378,7 +383,9 @@ def main():
 
     AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
                          'maal', 'al4pde_mass', 'al4pde_novelty', 'al4pde_residual',
-                         'al4pde_residual_diversity', 'al4pde_res_div')
+                         'al4pde_residual_diversity', 'al4pde_res_div',
+                         'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_event',
+                         'al4pde_fisher_oed', 'al4pde_foed')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)
 
