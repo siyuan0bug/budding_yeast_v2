@@ -1,55 +1,116 @@
-from .pure_fno import PureFNO_ICLR2021
-from .pure_wno import PureWNO_2022
-from .cross_fno import NIPSYeastFNO
-from .ultimate_fno import UltimateFNO
-from .wno_cross import NIPSYeastWNO
-from .lno_cross import NIPSYeastLNO
-from .hyper_fno import HyperFNO
-from .channel_hyper_fno import ChannelHyperFNO
-from .resnet_film import ResNetFiLM
-from .deeponet import DeepONet
-from .hp_fno import hpYeastFNO
-from .neural_ode import NeuralODEModel
-from .graph_resnet_film import GraphResNetFiLM
-from .gated_graph_resnet_film import GatedGraphResNetFiLM
-from .multiscale_diffgraph import MultiScaleDiffGraphNet
-from .dualpath_spectralgraph import DualPathSpectralGraphNet
-from .bio_statespace_graph import BioStateSpaceGraphNet
-from .gcgnet import GCGNetYeast
-from .bio_hetero_causal_graph import BioHeteroCausalGraphNet
-from .hetero_graph_resnet_film import HeteroGraphResNetFiLM
-from .hetero_graph_dualpath import HeteroGraphDualPathNet
-from .hetero_graph_channel_hyper_fno import HeteroGraphChannelHyperFNO
-from .dynamic_reaction_flux_operator import DynamicReactionFluxOperator
-from .spectral_temporal_hybrid_operator import SpectralTemporalHybridOperator
-from .physics_constrained_biochemical_operator import PhysicsConstrainedBiochemicalOperator
-from .bio_mechanistic_operator import (
-    BioMechanisticOperator, BioMechFull,
-    BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly
+"""
+Backward Compatibility Facade Layer.
+
+This module re-exports all architectures from:
+- `budding_yeast_v2.models.baselines`: External literature baselines (FNO, WNO, CNO, Transolver, etc.)
+- `budding_yeast_v2.models.ours`: Custom specialized biological neural operators (BioRefiner, HANO, etc.)
+
+Ensures existing imports, training scripts, checkpoints, and evaluation pipelines continue
+to work seamlessly without any breaking changes.
+"""
+
+from budding_yeast_v2.models.baselines import (
+    PureFNO_ICLR2021,
+    FNO1d_Standard,
+    PureWNO_2022,
+    CNO1d,
+    MWT1d,
+    GalerkinTransformer1d,
+    Transolver1d,
+    DPOT1d,
+    GCGNetYeast,
+    DeepONet,
+    NeuralODEModel,
+    UNet1d,
+    ResNetFiLM,
 )
-from .bio_refiner import BioRefiner
-from .bio_refiner_plus import (
-    BioRefinerBase, BioRefinerCurvature,
-    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
-    BioRefinerBifurcate, BioRefinerGraphFlux, BioRefinerMechanistic
-)
-from .bio_refiner_causal import (
+
+from budding_yeast_v2.models.ours import (
+    NIPSYeastFNO,
+    UltimateFNO,
+    NIPSYeastWNO,
+    NIPSYeastLNO,
+    HyperFNO,
+    ChannelHyperFNO,
+    hpYeastFNO,
+    GraphResNetFiLM,
+    GatedGraphResNetFiLM,
+    MultiScaleDiffGraphNet,
+    DualPathSpectralGraphNet,
+    BioStateSpaceGraphNet,
+    BioHeteroCausalGraphNet,
+    HeteroGraphResNetFiLM,
+    HeteroGraphDualPathNet,
+    HeteroGraphChannelHyperFNO,
+    DynamicReactionFluxOperator,
+    SpectralTemporalHybridOperator,
+    PhysicsConstrainedBiochemicalOperator,
+    BioMechanisticOperator,
+    BioMechFull,
+    BioMechEventOnly,
+    BioMechTitrationOnly,
+    BioMechPathwayOnly,
+    UniversalBiochemicalGate,
+    BioRefiner,
+    BioRefinerBase,
+    BioRefinerCurvature,
+    BioRefinerPyramid,
+    BioRefinerGraph,
+    BioRefinerPlus,
+    BioRefinerBifurcate,
+    BioRefinerGraphFlux,
+    BioRefinerMechanistic,
     CausalMutantAdapter,
-    BioRefinerCausalBase, BioRefinerCausalCurvature,
-    BioRefinerCausalPyramid, BioRefinerCausalGraph,
-    BioRefinerCausalPlus, BioRefinerCausal
+    BioRefinerCausalBase,
+    BioRefinerCausalCurvature,
+    BioRefinerCausalPyramid,
+    BioRefinerCausalGraph,
+    BioRefinerCausalPlus,
+    BioRefinerCausal,
+    BioRefinerDynamicCausalPlus,
+    BioRefinerLatchCausalPlus,
+    BioRefinerDynamicPlus,
+    BioEventHybridRefiner,
+    CausalODEEventDetectors,
+    HybridPhaseStateMachine,
+    UniversalEventFluxCoupler,
+    HANO,
+    HANO_NoEvent,
+    HANO_NoFlux,
+    HANO_NoGraph,
+    HANO_Refine,
+    HANO_Dual,
 )
-from .bio_refiner_dynamic_causal import BioRefinerDynamicCausalPlus
-from .bio_refiner_latch_causal import BioRefinerLatchCausalPlus
-from .bio_refiner_dynamic_plus import BioRefinerDynamicPlus
-from .bio_event_refiner import BioEventHybridRefiner
-from .hano import (
-    HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
-)
-from .fno1d import FNO1d_Standard
-from .unet1d import UNet1d
-from .galerkin_transformer1d import GalerkinTransformer1d
-from .cno1d import CNO1d
-from .mwt1d import MWT1d
-from .transolver1d import Transolver1d
-from .dpot1d import DPOT1d
+
+# Export all names
+__all__ = [
+    # Baselines
+    'PureFNO_ICLR2021', 'FNO1d_Standard', 'PureWNO_2022', 'CNO1d', 'MWT1d',
+    'GalerkinTransformer1d', 'Transolver1d', 'DPOT1d', 'GCGNetYeast',
+    'DeepONet', 'NeuralODEModel', 'UNet1d', 'ResNetFiLM',
+    # Ours
+    'NIPSYeastFNO', 'UltimateFNO', 'NIPSYeastWNO', 'NIPSYeastLNO',
+    'HyperFNO', 'ChannelHyperFNO', 'hpYeastFNO',
+    'GraphResNetFiLM', 'GatedGraphResNetFiLM', 'MultiScaleDiffGraphNet',
+    'DualPathSpectralGraphNet', 'BioStateSpaceGraphNet',
+    'BioHeteroCausalGraphNet', 'HeteroGraphResNetFiLM',
+    'HeteroGraphDualPathNet', 'HeteroGraphChannelHyperFNO',
+    'DynamicReactionFluxOperator', 'SpectralTemporalHybridOperator',
+    'PhysicsConstrainedBiochemicalOperator',
+    'BioMechanisticOperator', 'BioMechFull',
+    'BioMechEventOnly', 'BioMechTitrationOnly', 'BioMechPathwayOnly',
+    'UniversalBiochemicalGate',
+    'BioRefiner', 'BioRefinerBase', 'BioRefinerCurvature',
+    'BioRefinerPyramid', 'BioRefinerGraph', 'BioRefinerPlus',
+    'BioRefinerBifurcate', 'BioRefinerGraphFlux', 'BioRefinerMechanistic',
+    'CausalMutantAdapter',
+    'BioRefinerCausalBase', 'BioRefinerCausalCurvature',
+    'BioRefinerCausalPyramid', 'BioRefinerCausalGraph',
+    'BioRefinerCausalPlus', 'BioRefinerCausal',
+    'BioRefinerDynamicCausalPlus',
+    'BioRefinerLatchCausalPlus',
+    'BioRefinerDynamicPlus',
+    'BioEventHybridRefiner',
+    'CausalODEEventDetectors', 'HybridPhaseStateMachine', 'UniversalEventFluxCoupler',
+    'HANO', 'HANO_NoEvent', 'HANO_NoFlux', 'HANO_NoGraph', 'HANO_Refine', 'HANO_Dual',
+]

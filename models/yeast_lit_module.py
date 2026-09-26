@@ -3,22 +3,21 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
 
-import math
-
-from .components.pure_fno import PureFNO_ICLR2021
-from .components.cross_fno import NIPSYeastFNO
-from .components.ultimate_fno import UltimateFNO
-from .components.wno_cross import NIPSYeastWNO
 import os
+import math
 import numpy as np
 
-from budding_yeast_v2.models.components import (
-    PureFNO_ICLR2021, PureWNO_2022, NIPSYeastFNO, UltimateFNO,
-    NIPSYeastWNO, NIPSYeastLNO, HyperFNO, ChannelHyperFNO,
-    ResNetFiLM, DeepONet, hpYeastFNO, NeuralODEModel, GraphResNetFiLM,
+from budding_yeast_v2.models.baselines import (
+    PureFNO_ICLR2021, PureWNO_2022, FNO1d_Standard, UNet1d,
+    GalerkinTransformer1d, CNO1d, MWT1d, Transolver1d, DPOT1d,
+    GCGNetYeast, DeepONet, NeuralODEModel, ResNetFiLM
+)
+
+from budding_yeast_v2.models.ours import (
+    NIPSYeastFNO, UltimateFNO, NIPSYeastWNO, NIPSYeastLNO,
+    HyperFNO, ChannelHyperFNO, hpYeastFNO, GraphResNetFiLM,
     GatedGraphResNetFiLM, MultiScaleDiffGraphNet, DualPathSpectralGraphNet,
-    BioStateSpaceGraphNet, GCGNetYeast,
-    BioHeteroCausalGraphNet, HeteroGraphResNetFiLM,
+    BioStateSpaceGraphNet, BioHeteroCausalGraphNet, HeteroGraphResNetFiLM,
     HeteroGraphDualPathNet, HeteroGraphChannelHyperFNO,
     DynamicReactionFluxOperator, SpectralTemporalHybridOperator,
     PhysicsConstrainedBiochemicalOperator,
@@ -30,14 +29,10 @@ from budding_yeast_v2.models.components import (
     BioRefinerCausalBase, BioRefinerCausalCurvature,
     BioRefinerCausalPyramid, BioRefinerCausalGraph,
     BioRefinerCausalPlus, BioRefinerCausal,
-    BioRefinerDynamicCausalPlus,
-    BioRefinerLatchCausalPlus,
-    HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual,
-    FNO1d_Standard, UNet1d, GalerkinTransformer1d,
-    CNO1d, MWT1d, Transolver1d, DPOT1d
+    BioRefinerDynamicCausalPlus, BioRefinerLatchCausalPlus,
+    BioRefinerDynamicPlus, BioEventHybridRefiner,
+    HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
 )
-from .components.bio_refiner_dynamic_plus import BioRefinerDynamicPlus
-from .components.bio_event_refiner import BioEventHybridRefiner
 
 from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
 from budding_yeast_v2.utils.metrics import relative_l2_loss
@@ -184,6 +179,8 @@ class YeastLitModule(pl.LightningModule):
         ModelClass = MODEL_REGISTRY[model_name]
 
         if model_name == 'ultimate_fno':
+            if causal_matrix is None:
+                causal_matrix = torch.eye(num_vars)
             self.model = ModelClass(causal_matrix=causal_matrix, param_dim=param_dim, modes=modes)
         elif model_name == 'cross_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
@@ -349,7 +346,8 @@ class YeastLitModule(pl.LightningModule):
         self._inject_model_stats()
 
     def _inject_model_stats(self):
-        dm = getattr(getattr(self, 'trainer', None), 'datamodule', None)
+        trainer = getattr(self, '_trainer', None)
+        dm = getattr(trainer, 'datamodule', None) if trainer is not None else None
         if dm is None or not hasattr(dm, 'mean_y') or dm.mean_y is None:
             return
         if hasattr(self, 'mean_y') and isinstance(self.mean_y, torch.Tensor):
@@ -369,7 +367,8 @@ class YeastLitModule(pl.LightningModule):
         将归一化张量 y_norm (B, V, T) 反归一化到真实物理浓度空间。
         优先使用 trainer.datamodule.denormalize_y，兜底使用自身缓存的 mean_y / std_y / norm_type。
         """
-        dm = getattr(getattr(self, 'trainer', None), 'datamodule', None)
+        trainer = getattr(self, '_trainer', None)
+        dm = getattr(trainer, 'datamodule', None) if trainer is not None else None
         if dm is not None and hasattr(dm, 'denormalize_y'):
             return dm.denormalize_y(y_norm, device=y_norm.device)
 
