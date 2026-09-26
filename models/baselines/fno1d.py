@@ -3,12 +3,18 @@
 """
 Standard 1D Fourier Neural Operator (FNO1d)
 ===========================================
-Adapted from RealPDEBench and PDEBench (Zongyi Li et al., ICLR 2021).
-Channel-mode 1D FNO with:
-- Continuous 1D Fourier spectral convolutions in frequency domain.
-- 1x1 local convolution spatial skip connections.
-- Parameter FiLM (Feature-wise Linear Modulation) conditioning.
-- AMP (bfloat16/float32) safe FFT/iFFT operations.
+- Paper Title: Fourier Neural Operator for Parametric Partial Differential Equations
+- Authors: Zongyi Li, Nikola Kovachki, Kamyar Azizzadenesheli, Burigede Liu, Kaushik Bhattacharya, Andrew Stuart, Anima Anandkumar
+- Conference: ICLR 2021
+- Paper Link: https://arxiv.org/abs/2010.08895
+- Official Code: https://github.com/zongyi-li/fourier_neural_operator
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Affine transformation parameters gamma(P), beta(P) = Linear(P).chunk(2) scale and shift
+  intermediate frequency-domain features: h' = (1 + gamma(P)) * h + beta(P).
+- Biological Rationale: Directly modulates spectral reaction modes across time according to kinetic parameters.
 """
 
 import torch

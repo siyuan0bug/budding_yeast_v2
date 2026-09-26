@@ -9,8 +9,13 @@ import numpy as np
 
 from budding_yeast_v2.models.baselines import (
     PureFNO_ICLR2021, PureWNO_2022, FNO1d_Standard, UNet1d,
-    GalerkinTransformer1d, CNO1d, MWT1d, Transolver1d, DPOT1d,
-    GCGNetYeast, DeepONet, NeuralODEModel, ResNetFiLM
+    GalerkinTransformer1d, CNO1d, MWT1d, Transolver1d, Transolver3_1d, DPOT1d,
+    GCGNetYeast, DeepONet, NeuralODEModel, ResNetFiLM,
+    iTransformer, DLinear, NLinear, Linear, Autoformer, Informer,
+    iInformer, Flowformer, iFlowformer, Reformer, iReformer,
+    Flashformer, iFlashformer, VanillaTransformer, FEDformer, Pyraformer,
+    GNOT, LatentNeuralOperator, LaMO_RegularGrid, DeepKoopmanOperator, WDNO,
+    ICONGPT, BAMPNO, G_FNO, NOBLE
 )
 
 from budding_yeast_v2.models.ours import (
@@ -54,8 +59,37 @@ MODEL_REGISTRY = {
     'mwt': MWT1d,
     'transolver1d': Transolver1d,
     'transolver': Transolver1d,
+    'transolver3_1d': Transolver3_1d,
+    'transolver3': Transolver3_1d,
     'dpot1d': DPOT1d,
     'dpot': DPOT1d,
+    'itransformer': iTransformer,
+    'dlinear': DLinear,
+    'nlinear': NLinear,
+    'linear': Linear,
+    'autoformer': Autoformer,
+    'informer': Informer,
+    'iinformer': iInformer,
+    'flowformer': Flowformer,
+    'iflowformer': iFlowformer,
+    'reformer': Reformer,
+    'ireformer': iReformer,
+    'flashformer': Flashformer,
+    'iflashformer': iFlashformer,
+    'vanilla_transformer': VanillaTransformer,
+    'fedformer': FEDformer,
+    'pyraformer': Pyraformer,
+    'gnot': GNOT,
+    'latent_lno': LatentNeuralOperator,
+    'lamo': LaMO_RegularGrid,
+    'koopman_dmd': DeepKoopmanOperator,
+    'koopman': DeepKoopmanOperator,
+    'wdno': WDNO,
+    'icon': ICONGPT,
+    'bampno': BAMPNO,
+    'gfno': G_FNO,
+    'g_fno': G_FNO,
+    'noble': NOBLE,
     'cross_fno': NIPSYeastFNO,
     'ultimate_fno': UltimateFNO,
     'wno': NIPSYeastWNO,
@@ -282,6 +316,17 @@ class YeastLitModule(pl.LightningModule):
         elif model_name in ('hano', 'hano_no_event', 'hano_no_flux', 'hano_no_graph', 'hano_refine', 'hano_dual'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, n_blocks=n_blocks)
+        elif model_name in (
+            'transolver3_1d', 'transolver3', 'itransformer', 'dlinear', 'nlinear',
+            'linear', 'autoformer', 'informer', 'iinformer', 'flowformer', 'iflowformer',
+            'reformer', 'ireformer', 'flashformer', 'iflashformer', 'vanilla_transformer',
+            'fedformer', 'pyraformer', 'gnot', 'latent_lno', 'lamo', 'koopman_dmd',
+            'koopman', 'wdno', 'icon', 'bampno', 'gfno', 'g_fno', 'noble'
+        ):
+            try:
+                self.model = ModelClass(num_vars=num_vars, param_dim=param_dim)
+            except TypeError:
+                self.model = ModelClass()
         else:
             raise ValueError(f"Unknown model_name: {model_name}")
 

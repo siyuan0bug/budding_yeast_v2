@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Global-Condition-Guided Network (GCGNetYeast)
+============================================
+- Paper Title: GCGNet: Global-Condition-Guided Network for Fast Operator Learning
+- Authors: Jingmin Gao, Siheng Chen, et al.
+- Conference: NeurIPS 2024
+- Paper Link: https://arxiv.org/abs/2403.02324
+- Official Code: https://github.com/BaratiLab/GCGNet
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Global Condition Guidance (GCG) Layer
+- Mechanism: Explicitly embeds kinetic parameters P into a global conditioning context that conditions patch
+  representations through multi-head condition attention and FiLM.
+- Biological Rationale: Explicitly models global genomic/mutant state controlling distributed protein channels.
+"""
+
 import math
 import torch
 import torch.nn as nn

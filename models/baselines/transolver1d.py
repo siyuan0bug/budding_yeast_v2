@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1D Transolver Operator (Transolver1d)
-=====================================
-Adapted from RealPDEBench (Haixu Wu et al., 2024).
-Physics-Informed Attention with Continuous Physical Slices for 1D dynamical systems:
-- Learns M physical reference slices across continuous time space.
-- Token-to-Slice physical aggregation with linear complexity O(T * M).
-- Slice-to-Token physical field reconstruction.
-- Parameter FiLM conditioning for biochemical kinetic constants.
+1D Transolver (Transolver1d)
+============================
+- Paper Title: Transolver: A Fast Transformer Solver for PDEs on General Geometries
+- Authors: Haixu Wu, Hang Zhou, Mingsheng Long, Jianmin Wang
+- Conference: ICML 2024 (Spotlight)
+- Paper Link: https://arxiv.org/abs/2405.15196
+- Official Code: https://github.com/thuml/Transolver
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Affine scaling gamma(P), beta(P) modulates Physics-Attention spatial-temporal sliced tokens.
+- Biological Rationale: Discrete physical states (e.g. G1/S/G2/M phases) adapt dynamically to kinetic rates.
 """
 
 import math

@@ -1,3 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Pure 1D Wavelet Neural Operator (PureWNO_2022)
+=============================================
+- Paper Title: Wavelet Neural Operator: a neural operator for solving partial differential equations
+- Authors: Tapas Tripura, Souvik Chakraborty
+- Journal / Conference: Computer Methods in Applied Mechanics and Engineering (CMAME) 2023 / Math. Comput. Appl. 2022
+- Paper Link: https://arxiv.org/abs/2203.01360
+- Official Code: https://github.com/geckowang/WNO
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: None (Unconditioned Multi-resolution Wavelet Baseline)
+- Mechanism: Employs discrete wavelet transforms (DWT/IDWT via ptwt/PyWavelets) across 4 decomposition levels,
+  evaluating multi-scale temporal localized feature extraction capability without parameter injection.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

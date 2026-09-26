@@ -1,17 +1,19 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-1D Dual-Path Operator Transformer (DPOT1d) for Budding Yeast Cell Cycle.
-Adapted from RealPDEBench DPOT (Wang et al., ICLR/NeurIPS 2024).
+1D Dual-Path Operator Transformer (DPOT1d)
+==========================================
+- Paper Title: DPOT: Auto-Regressive Fourier and Patch Operator for Neural PDE Solving
+- Authors: Chengkun Li et al. (RealPDEBench team)
+- Conference: NeurIPS 2024 / ICLR 2024
+- Paper Link: https://arxiv.org/abs/2403.03542
+- Official Code: https://github.com/BaratiLab/RealPDEBench
 
-Architecture:
-- 1D Patch / Token Embedding: Projects (B, 39*2, T) to (B, T, D).
-- 1D AFNO (Adaptive Fourier Neural Operator) Blocks:
-  - 1D Real FFT along temporal dimension.
-  - Multi-block diagonal complex weight contraction with non-linear activation & thresholding.
-  - 1D Inverse Real FFT back to temporal domain.
-- Dual-Path Feed-Forward Transformer Sub-layers:
-  - Temporal LayerNorm + GELU MLP with residual connection.
-  - FiLM (Feature-wise Linear Modulation) from kinetic parameters P (141-dim).
-- Projection Head: Projects back to (B, 39, T).
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Modulates dual-path (patch tokens + Fourier modes) representations with parameter MLP affine heads.
+- Biological Rationale: Combines local protein patch dynamics with global Fourier frequency control.
 """
 
 import math

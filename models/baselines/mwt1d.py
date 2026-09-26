@@ -2,13 +2,19 @@
 # -*- coding: utf-8 -*-
 """
 1D Multiwavelet Neural Operator (MWT1d)
-=======================================
-Adapted from RealPDEBench and NeurIPS 2021 (Gaurav Gupta et al.).
-Multiwavelet-based Operator in 1D with:
-- Piecewise polynomial Legendre multiresolution analysis (MRA).
-- Multiwavelet decomposition into multi-scale wavelet coefficients.
-- Scale-wise dynamic tensor contractions with parameter FiLM modulation.
-- Inverse multiwavelet reconstruction.
+======================================
+- Paper Title: Multiwavelet-based Operator Learning for Differential Equations
+- Authors: Gaurav Gupta, Xiongye Xiao, Paul Bogdan
+- Conference: NeurIPS 2021
+- Paper Link: https://arxiv.org/abs/2106.01554
+- Official Code: https://github.com/Gaurav-Gupta-STEM/Multiwavelet-based-Operator-Learning
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Affine transformation gamma(P), beta(P) = Linear(P).chunk(2) modulates wave multi-scale
+  Alpert polynomial transform coefficients.
+- Biological Rationale: Multi-scale temporal decomposition aligns with cell cycle phase checkpoints.
 """
 
 import math

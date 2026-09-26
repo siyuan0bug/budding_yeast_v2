@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1D Galerkin Transformer Operator (GalerkinTransformer1d)
-========================================================
-Adapted from RealPDEBench (Shuhao Cao et al., ICLR 2021).
-Linear-complexity continuous Hilbert space attention for 1D dynamical systems:
-- Softmax-free Galerkin inner product kernel: Attn(Q, K, V) = Q * (K^T * V) / T.
-- Multi-head continuous Galerkin attention with O(T * D_h^2) linear time complexity.
-- Parameter FiLM conditioning for biochemical ODE parameters.
-- Continuous time positional encoding.
+1D Galerkin Transformer (GalerkinTransformer1d)
+===============================================
+- Paper Title: Choose a Transformer: Fourier or Galerkin
+- Authors: Shuhao Cao
+- Conference: ICLR 2021 / NeurIPS 2021
+- Paper Link: https://arxiv.org/abs/2105.14995
+- Official Code: https://github.com/scaomath/galerkin-transformer
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Linearly projects parameters P to affine scale gamma and shift beta, applied after softmax-free
+  linear-complexity Galerkin integral attention.
+- Biological Rationale: Non-local continuous integral kernel across time modulated by kinetic parameters.
 """
 
 import math

@@ -1,3 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Pure 1D Fourier Neural Operator (PureFNO_ICLR2021)
+=================================================
+- Paper Title: Fourier Neural Operator for Parametric Partial Differential Equations
+- Authors: Zongyi Li, Nikola Kovachki, Kamyar Azizzadenesheli, Burigede Liu, Kaushik Bhattacharya, Andrew Stuart, Anima Anandkumar
+- Conference: ICLR 2021
+- Paper Link: https://arxiv.org/abs/2010.08895
+- Official Code: https://github.com/zongyi-li/fourier_neural_operator
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: None (Unconditioned Pure Baseline)
+- Mechanism: Maps (IC, time_grid) directly to trajectory without parameter conditioning, serving as an
+  unconditioned neural operator baseline to quantify the exact performance gain brought by kinetic conditioning.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

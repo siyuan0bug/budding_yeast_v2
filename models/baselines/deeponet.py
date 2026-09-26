@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Deep Operator Network (DeepONet)
+================================
+- Paper Title: Learning nonlinear operators via DeepONet based on the universal approximation theorem of operators
+- Authors: Lu Lu, Pengzhan Jin, Guofei Pang, Zhongqiang Zhang, George Em Karniadakis
+- Journal: Nature Machine Intelligence 2021
+- Paper Link: https://doi.org/10.1038/s42256-021-00302-5
+- Official Code: https://github.com/lululxvi/deeponet
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Branch-Trunk Dual-Network Inner Product (Chen & Chen 1995 Operator Theorem)
+- Mechanism: Branch net encodes biochemical kinetic parameters P into p_basis basis coefficients; Trunk net
+  encodes temporal coordinates and initial conditions Y0. Output is inner product: y(t) = sum(Branch_k * Trunk_k).
+- Biological Rationale: Decouples time trajectory basis functions from mutant-specific parameter amplitude weights.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

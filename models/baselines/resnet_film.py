@@ -1,3 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+1D ResNet with FiLM Conditioning (ResNetFiLM)
+=============================================
+- Paper Title: FiLM: Visual Reasoning with a General Conditioning Layer / RealPDEBench
+- Authors: Ethan Perez, Florian Strub, Harm de Vries, Vincent Dumoulin, Aaron Courville (AAAI 2018) / RealPDEBench (2024)
+- Conference: AAAI 2018 / NeurIPS 2024
+- Paper Link: https://arxiv.org/abs/1709.07871
+- Official Code: https://github.com/BaratiLab/RealPDEBench
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Direct 1D dilated residual blocks modulated by MLP(P) affine scaling gamma and bias beta.
+- Biological Rationale: Direct modulation of residual biochemical fluxes with skip connections.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

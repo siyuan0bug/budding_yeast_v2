@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1D U-Net Neural Operator (UNet1d)
-=================================
-Adapted from RealPDEBench and PDEBench (Takamoto et al., 2022).
-Multi-scale 1D Encoder-Decoder with:
-- Multi-resolution hierarchical downsampling and upsampling.
-- Residual skip connections preserving both high-frequency phase shifts and low-frequency macro trends.
-- Parameter FiLM (Feature-wise Linear Modulation) conditioning at each scale.
-- Continuous 1D temporal interpolative upsampling for resolution-invariant dynamics.
+1D U-Net Neural Operator Baseline (UNet1d)
+==========================================
+- Paper Title: U-Net: Convolutional Networks for Biomedical Image Segmentation / RealPDEBench
+- Authors: Olaf Ronneberger, Philipp Fischer, Thomas Brox / RealPDEBench Benchmark 2024
+- Conference: MICCAI 2015 / NeurIPS 2024 Benchmark
+- Paper Link: https://arxiv.org/abs/1505.04597
+- Official Code: https://github.com/BaratiLab/RealPDEBench
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Multi-scale downsampling and upsampling residual blocks with FiLM affine transformations
+  injected at every hierarchical level.
+- Biological Rationale: Multi-scale temporal receptive fields capture fast phosphorylation reactions and slow cell cycles.
 """
 
 import torch

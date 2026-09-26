@@ -3,12 +3,18 @@
 """
 1D Continuous Neural Operator (CNO1d)
 =====================================
-Adapted from RealPDEBench (Bogdan Raonic et al., ICLR 2023).
-Continuous Neural Operator in 1D with:
-- Bandlimited continuous convolutions with antialiasing filters.
-- Continuous multi-scale residual hierarchy.
-- Parameter FiLM conditioning for biochemical kinetic control.
-- Invariant to temporal sampling grids.
+- Paper Title: Convolutional Neural Operators for robust and accurate learning of PDEs
+- Authors: Bogdan Raonić, Roberto Molinaro, Tim De Ryck, Tobias Rohner, Francesca Bartolucci, Rima Alaifari, Siddhartha Mishra
+- Conference: ICLR 2023 / NeurIPS 2023
+- Paper Link: https://arxiv.org/abs/2302.01178
+- Official Code: https://github.com/camlab-ethz/CNO
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Feature-wise Linear Modulation (FiLM)
+- Mechanism: Affine transformation gamma(P), beta(P) = Linear(P).chunk(2) scales and shifts feature maps
+  after antialiasing lowpass continuous convolution: h' = (1 + gamma(P)) * h + beta(P).
+- Biological Rationale: Regulates bandlimited biochemical frequencies according to kinetic rates.
 """
 
 import math

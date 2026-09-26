@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Neural Ordinary Differential Equations (NeuralODEModel)
+======================================================
+- Paper Title: Neural Ordinary Differential Equations
+- Authors: Ricky T. Q. Chen, Yulia Rubanova, Jesse Bettencourt, David Duvenaud
+- Conference: NeurIPS 2018 (Best Paper Award)
+- Paper Link: https://arxiv.org/abs/1806.07366
+- Official Code: https://github.com/rtqichen/torchdiffeq
+
+Biochemical Parameter Conditioning Mechanism:
+---------------------------------------------
+- Conditioning Method: Parameterized Vector Field Concatenation
+- Mechanism: Vector field network f_theta(t, y; P) takes current concentration state y concatenated with
+  parameter vector P, integrated over [0, T] via adaptive Runge-Kutta / Dormand-Prince (dopri5) ODE solver.
+- Biological Rationale: Directly mimics continuous biophysical reaction rate derivative dy/dt = f(y; P).
+"""
+
 import torch
 import torch.nn as nn
 
