@@ -26,3 +26,9 @@ eval_results*/
 tests/
 scratch_*.py
 data/test_*.py
+scratch/test_al_residual_integration.py
+scratch/test_batch_residual.py
+scratch/test_residual_aggregations.py
+scratch/test_residual_analysis.py
+scratch/test_residual_v2_comprehensive.py
+scratch/test_vectorized_residual.py

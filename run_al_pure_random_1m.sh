@@ -42,10 +42,12 @@ fi
 
 # 算法配置数组: "GPU_ID STRATEGY" (分别使用 0 到 3 号显卡运行 4 大主动学习算法)
 AL_JOBS=(
-    "0 al4pde_random"
-    "1 al4pde_uncertainty"
-    "2 al4pde_diversity"
-    "3 al4pde_novelty"
+    #"0 al4pde_random"
+    #"1 al4pde_uncertainty"
+    #"2 al4pde_diversity"
+    #"3 al4pde_novelty"
+    "0 al4pde_residual"
+    "1 al4pde_residual_diversity"
 )
 
 JOB_DESC=""

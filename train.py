@@ -217,13 +217,15 @@ def main():
     parser.add_argument('--al_strategy', type=str, default='none',
                           choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'pial',
                                    'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_mass',
-                                   'al4pde_novelty'],
+                                   'al4pde_novelty', 'al4pde_residual', 'al4pde_residual_diversity', 'al4pde_res_div'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
                                "us/is/random/pial=标准池化AL; "
                                "al4pde_random/uncertainty/diversity=al4pde风格池化AL; "
                                "maal=Mutant-Aware AL (diversity+target priority); "
                                "al4pde_mass=按通路频率×机制频率优先选择生物学高频典型突变; "
-                               "al4pde_novelty=纯随机候选池(无定向采样)+组合新颖性选择)")
+                               "al4pde_novelty=纯随机候选池(无定向采样)+组合新颖性选择; "
+                               "al4pde_residual=局部连续生化通道流速自适应相对物理残差选择; "
+                               "al4pde_residual_diversity=相对残差门控+轨迹拓扑多样性混合选择)")
     parser.add_argument('--atlas_csv', type=str, default=None,
                         help="已弃用 (保留仅用于兼容)")
     # al4pde 框架专用参数
@@ -375,7 +377,8 @@ def main():
     logger = setup_wandb_logger(args, exp_dir=actual_exp_dir, project=args.project)
 
     AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
-                         'maal', 'al4pde_mass', 'al4pde_novelty')
+                         'maal', 'al4pde_mass', 'al4pde_novelty', 'al4pde_residual',
+                         'al4pde_residual_diversity', 'al4pde_res_div')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)
 
