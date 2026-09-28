@@ -75,6 +75,18 @@ DATASET_GIBBS_BOLTZMANN_100000="${DATA_DIR}/gibbs_boltzmann_100000_210m_500s.npz
 # 8. Gibbs-Sobol 低差异准随机加扰采样版 (Scrambled Sobol + Gibbs-Boltzmann, 100,000 样本 + 126 Real Mutants):
 DATASET_GIBBS_SOBOL_100000="${DATA_DIR}/gibbs_sobol_100000_210m_500s.npz"
 
+# 9. 参数分布消融孪生实验数据集 (严格控制单变量对比: 仅 ts, db, APC-A, TAB6-1, CA, CSL, CKO, scc1-RR, PM 参数采样分布不同):
+#   - Twin B: 完整体系 B 连续物理包络与边界缓冲采样 (mutant_aware.py v5.2)
+#   - Twin A: 体系 B 骨架 + 体系 A 参数采样分布与赋值规则 (mass_dataset_generator.py)
+DATASET_DIST_TWIN_B="${DATA_DIR}/distribution_twin_b_continuous_100000_210m_500s.npz"
+DATASET_DIST_TWIN_A="${DATA_DIR}/distribution_twin_a_direct_100000_210m_500s.npz"
+
+# 10. 纯随机无拓扑参数分布消融孪生实验数据集 (零拓扑、零 Motif、27基因完全均匀随机、突变类型完全均匀随机):
+#   - Twin B: 纯随机骨架 + 完整体系 B 连续物理包络与边界缓冲采样
+#   - Twin A: 纯随机骨架 + 体系 A 参数采样分布与赋值规则
+DATASET_PURE_RANDOM_DIST_TWIN_B="${DATA_DIR}/pure_random_distribution_twin_b_continuous_100000_210m_500s.npz"
+DATASET_PURE_RANDOM_DIST_TWIN_A="${DATA_DIR}/pure_random_distribution_twin_a_direct_100000_210m_500s.npz"
+
 DATASET_MASS_100000_BLIND="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels.npz"
 
 DATASET_MASS_100000_BLIND_S5="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels_s5mode.npz"
@@ -111,18 +123,90 @@ EXPERIMENTS=(
     # 格式 (16列，空格分隔，彻底精简冗余的 DATASET_TAG):
 #   MODEL LOSS_TYPE USE_ADJ DATASET_PATH MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
 
-    # ====== 🌟🌟🌟 新归一化方案 (asinh_z: 参数统一 asinh(Z) + 变量稳健 log1p) 三大基准对比实验 (GPU 0, 1, 2) 🌟🌟🌟 ======
-    # [新归一化对比 1 | GPU 0]: 纯随机数据集 (mutant_aware_pure_random) × biom_refiner_plus + hybrid_mse_rel
-    #   对标基准: experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    # ====== 🌟🌟🌟 新归一化方案 (asinh_z: 参数统一 asinh(Z) + 变量稳健 log1p) 三大基准对比实验 (已归档) 🌟🌟🌟 ======
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000} 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
-    # [新归一化对比 2 | GPU 1]: MASS 含 Motif 数据集 × biom_refiner_plus + triple_dynamic
-    #   对标基准: experiments/mass_100000_dataset_210min_500steps_dual_labels/biom_refiner_plus/triple_dynamic_none/w128_m32_b512_ep100_lr1.7e-3/seed_42
-    "biom_refiner_plus triple_dynamic false ${DATASET_MASS_100000} 32 128 512 100 none 1.7e-3 10 0 0 0 one_time 1"
+    # ==============================================================================
+    # 🌟🌟🌟 全量 39 种经典 Baseline 神经算子与深度序列模型全家桶 (10万纯随机数据集对照) 🌟🌟🌟
+    # 数据集: mutant_aware_pure_random_100000_210m_500s.npz
+    # 实验配置参考: biom_refiner_plus 经典基准 (hybrid_mse_rel, m24, w192, b256, ep100, lr8.8e-4, wm8)
+    # 硬件分配 (5 卡并行，每卡智能单进程串行排队):
+    #   - GPU 0 (8个): pure_fno, fno1d, pure_wno, cno1d, mwt1d, galerkin_transformer1d, transolver1d, transolver3_1d
+    #   - GPU 1 (8个): dpot1d, gcgnet, deeponet, neural_ode, unet1d, resnet_film, gnot, latent_lno
+    #   - GPU 2 (8个): lamo, koopman_dmd, wdno, icon, bampno, gfno, noble, itransformer
+    #   - GPU 3 (8个): dlinear, nlinear, linear, autoformer, informer, iinformer, flowformer, iflowformer
+    #   - GPU 7 (7个): reformer, ireformer, flashformer, iflashformer, vanilla_transformer, fedformer, pyraformer (独占卡串行)
+    # ==============================================================================
 
-    # [新归一化对比 3 | GPU 2]: Gibbs-Boltzmann 连续热力学能量采样数据集 × biom_refiner_plus + hybrid_mse_rel
-    #   对标基准: experiments/gibbs_boltzmann_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_GIBBS_BOLTZMANN_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    # ==============================================================================
+    # 🌟🌟🌟 参数分布消融孪生对照实验 (Strict Distribution Ablation Twins) 🌟🌟🌟
+    # 严格控制单变量: 突变骨架、模式、离散 MC 拷贝、GAL-OE、硬零 KO 100% 相同
+    # 唯一变量: 仅对 ts, db, APC-A, TAB6-1, CA, CSL, CKO, scc1-RR, PM 参数采样分布进行消融对比
+    # 配置完全对齐基准: biom_refiner_plus, hybrid_mse_rel, false, m24, w192, b256, ep100, lr8.8e-4, wm8
+    # ==============================================================================
+    # [Twin B | GPU 0]: 完整体系 B 连续物理包络与边界缓冲采样 (mutant_aware.py v5.2 - 已归档注释)
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_DIST_TWIN_B} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # [Twin A | GPU 1]: 体系 B 骨架 + 体系 A 参数采样分布与赋值规则 (mass_dataset_generator.py - 已归档注释)
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_DIST_TWIN_A} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # ====== 🌟🌟🌟 纯随机无拓扑参数分布消融孪生对照实验 (100% 零拓扑、零 Motif、完全均匀随机) 🌟🌟🌟 ======
+    # [Pure Random Twin B | GPU 0]: 纯随机骨架 + 完整体系 B 连续物理包络与边界缓冲采样
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_PURE_RANDOM_DIST_TWIN_B} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # [Pure Random Twin A | GPU 1]: 纯随机骨架 + 体系 A 参数采样分布与赋值规则
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_PURE_RANDOM_DIST_TWIN_A} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # [GPU 0: 连续神经算子组 (8 模型) - 已归档注释]
+    #"pure_fno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"fno1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"pure_wno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"cno1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"mwt1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"galerkin_transformer1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"transolver1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"transolver3_1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # [GPU 1: 物理感知与深度算子组 (8 模型) - 已归档注释]
+    #"dpot1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"gcgnet hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"deeponet hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"neural_ode hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"unet1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 64 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"resnet_film hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"gnot hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"latent_lno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # [GPU 2: 几何图结构与隐空间算子组 (8 模型) - 已归档注释]
+    #"lamo hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"koopman_dmd hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"wdno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"icon hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"bampno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"gfno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"noble hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"itransformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # [GPU 3: 线性反转与经典时间序列组 (8 模型) - 已归档注释]
+    #"dlinear hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"nlinear hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"linear hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"autoformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"informer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"iinformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"flowformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"iflowformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # [GPU 7: 稀疏分解与高效注意力时序组 (7 模型, 独占卡严格单任务串行) - 已归档注释]
+    #"reformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"ireformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"flashformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"iflashformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"vanilla_transformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"fedformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"pyraformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
 
     # ====== ⚡⚡⚡ 39 通道自适应梯度平衡 GradNormHybrid 对照实验 (GPU 0-1) ⚡⚡⚡ ======
     # [实验 GN-1 | GPU 0]: 新 Gibbs-Sobol 数据集 × 全事件混合模型 + gradnorm_hybrid (39 通道微观自适应平衡)
@@ -331,7 +415,8 @@ mkdir -p "$EXP_ROOT" logs_v3 logs
 # =========================================================================
 MEM_SAFETY_MARGIN_MB=2048   # 仅预留 2GB 防 CUDA 内存碎片与波动的安全缓冲 (绝不限制单任务显存)
 STABILIZE_WAIT_SEC=35       # 任务启动后等待显存分配稳定的秒数 (让 PyTorch 完成显存建立)
-MAX_CONCURRENT_PER_GPU=0    # 单卡最大并发数 (设为 0 表示不限制数量，完全由实测剩余显存自适应决定)
+MAX_CONCURRENT_PER_GPU=1    # 智能串行调度: 每卡严格执行单任务串行排队 (前序实验完成并评测后再执行下一个实验)
+MIN_LAUNCH_VRAM_MB=12000    # 启动新任务所需的最低剩余可用显存阈值 (12GB)
 
 get_gpu_used_vram() {
     local g=$1
@@ -569,10 +654,46 @@ run_single_task() {
             $WANDB_FLAG >> "$LOG_FILE" 2>&1
 
         local TRAIN_EXIT=$?
+        # 自适应 OOM 容错重试: 若遇到显存不足 (CUDA OOM 或 SIGKILL=137)，自动将 BatchSize 减半重试一次
         if [ $TRAIN_EXIT -ne 0 ]; then
-            echo "❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练异常退出 (exit=$TRAIN_EXIT), 自动跳过评估" >> "$LOG_FILE" 2>&1
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练失败: $RUN_NAME (exit=$TRAIN_EXIT, 详细报错见 $LOG_FILE)"
-            return $TRAIN_EXIT
+            if grep -qi "out of memory" "$LOG_FILE" 2>/dev/null || [ $TRAIN_EXIT -eq 137 ]; then
+                local FALLBACK_BS=$((BATCH_SIZE / 2))
+                echo "⚠️ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 检测到显存溢出 (OOM)，自动自适应降级 BatchSize: $BATCH_SIZE -> $FALLBACK_BS 重试训练..." >> "$LOG_FILE" 2>&1
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🔄 [GPU $gpu | 任务 $task_idx/$total_for_gpu] OOM 自适应降级重试: $RUN_NAME (BS: $BATCH_SIZE -> $FALLBACK_BS)"
+                if [ -d "$CKPT_DIR" ]; then
+                    rm -f "${CKPT_DIR}"/*.ckpt
+                fi
+                CUDA_VISIBLE_DEVICES=$gpu $PYTHON_BIN train.py \
+                    --model $MODEL \
+                    --wavelet haar \
+                    --loss_type $LOSS_TYPE \
+                    --dataset_name "$DATASET" \
+                    --modes $MODES \
+                    --width $WIDTH \
+                    --batch_size $FALLBACK_BS \
+                    --max_epochs $EPOCHS \
+                    --seed $SEED \
+                    --name $RUN_NAME \
+                    --lr $LR \
+                    --warmup_epochs $WARMUP \
+                    --num_workers 4 \
+                    --val_batch_size $FALLBACK_BS \
+                    --devices 1 \
+                    $AL_PARAMS \
+                    $ADJ_PARAM \
+                    $PINN_PARAMS \
+                    --rollout_type $ROLLOUT_TYPE \
+                    --norm_type $NORM_TYPE \
+                    $DIR_PARAMS \
+                    $WANDB_FLAG >> "$LOG_FILE" 2>&1
+                TRAIN_EXIT=$?
+            fi
+        fi
+
+        if [ $TRAIN_EXIT -ne 0 ]; then
+            echo "❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练异常退出 (exit=$TRAIN_EXIT), 自动跳过评估并保留日志，继续执行下一任务" >> "$LOG_FILE" 2>&1
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ [GPU $gpu | 任务 $task_idx/$total_for_gpu] 训练失败: $RUN_NAME (exit=$TRAIN_EXIT, 详细见 $LOG_FILE)，自动调度下一个任务"
+            return 0
         fi
     fi
 
@@ -646,8 +767,8 @@ for gpu in "${ALL_GPUS[@]}"; do
                 else
                     wait "$p" 2>/dev/null
                     local status=$?
-                    if [ $status -eq 130 ] || [ $status -eq 137 ] || [ $status -eq 143 ]; then
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 [GPU $gpu] 任务被用户中断 (code=$status)，终止该卡后续队列！"
+                    if [ $status -eq 130 ] || [ $status -eq 143 ]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 [GPU $gpu] 任务被用户主动中断 (code=$status)，终止该卡后续队列！"
                         cleanup_worker
                     fi
                 fi
@@ -655,6 +776,14 @@ for gpu in "${ALL_GPUS[@]}"; do
             ACTIVE_PIDS=("${still_running[@]}")
             worker_pids=("${still_running[@]}")
         }
+
+        # 独占模式检测 (如 GPU 7 的 Exclusive_Process)
+        gpu_mode=$(nvidia-smi --query-gpu=compute_mode --format=csv,noheader -i "$gpu" 2>/dev/null | tr -d ' ')
+        is_exclusive=0
+        if [ "$gpu_mode" = "Exclusive_Process" ] || [ "$gpu" -eq 7 ]; then
+            is_exclusive=1
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🔒 [GPU $gpu] 检测为独占计算模式 (Exclusive_Process)，强制启用严格单进程串行排队机制！"
+        fi
 
         for ((idx=0; idx<total_for_gpu; idx++)); do
             task_line="${VALID_TASKS[$idx]}"
@@ -666,25 +795,45 @@ for gpu in "${ALL_GPUS[@]}"; do
             # ----------------------------------------------------
             reap_active_pids
             while true; do
-                # 检查并发数上限 (若设了 MAX_CONCURRENT_PER_GPU > 0)
-                if [ "$MAX_CONCURRENT_PER_GPU" -gt 0 ] && [ "${#ACTIVE_PIDS[@]}" -ge "$MAX_CONCURRENT_PER_GPU" ]; then
+                # 独占卡规则: 如果已有本 worker 任务在跑，必须等待其结束
+                if [ "$is_exclusive" -eq 1 ] && [ "${#ACTIVE_PIDS[@]}" -gt 0 ]; then
                     sleep 5
                     reap_active_pids
                     continue
                 fi
 
-                # 若已有任务正在运行，检查剩余可用显存是否足以容纳新任务
-                if [ "${#ACTIVE_PIDS[@]}" -gt 0 ]; then
-                    curr_free=$(get_gpu_free_vram "$gpu")
-                    required_vram=$((LAST_TASK_VRAM_DELTA + MEM_SAFETY_MARGIN_MB))
+                # 单卡并发数上限规则 (若设了 MAX_CONCURRENT_PER_GPU > 0，或独占卡强制为 1)
+                local max_c=$MAX_CONCURRENT_PER_GPU
+                [ "$is_exclusive" -eq 1 ] && max_c=1
+                if [ "$max_c" -gt 0 ] && [ "${#ACTIVE_PIDS[@]}" -ge "$max_c" ]; then
+                    sleep 5
+                    reap_active_pids
+                    continue
+                fi
 
-                    # 若上次实测显存消耗大于0，且当前卡剩余显存不足预估量，则转入串行排队等待
-                    if [ "$LAST_TASK_VRAM_DELTA" -gt 0 ] && [ "$curr_free" -lt "$required_vram" ]; then
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏳ [GPU $gpu] 剩余显存 (${curr_free}MiB) 不足容纳新任务 (需 ~${required_vram}MiB)，转入安全串行等待已有实验完成释放显存..."
+                # 独占卡额外保护: 检查是否有外部非本 worker 进程占用该独占 GPU
+                if [ "$is_exclusive" -eq 1 ]; then
+                    ext_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader -i "$gpu" 2>/dev/null | tr -d ' ')
+                    if [ -n "$ext_procs" ]; then
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏳ [GPU $gpu] 独占显卡当前有外部进程 (PID: $ext_procs) 占用，等待其释放..."
                         sleep 10
-                        reap_active_pids
                         continue
                     fi
+                fi
+
+                # 显存阈值检查: 启动任何新任务前，确保当前卡剩余显存充足
+                curr_free=$(get_gpu_free_vram "$gpu")
+                required_vram=${MIN_LAUNCH_VRAM_MB:-12000}
+                if [ "${#ACTIVE_PIDS[@]}" -gt 0 ] && [ "$LAST_TASK_VRAM_DELTA" -gt 0 ]; then
+                    required_vram=$((LAST_TASK_VRAM_DELTA + MEM_SAFETY_MARGIN_MB))
+                fi
+
+                # 若当前卡剩余显存不足预估量，则转入安全等待
+                if [ "$curr_free" -lt "$required_vram" ]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏳ [GPU $gpu] 剩余显存 (${curr_free}MiB) 低于启动安全阈值 (${required_vram}MiB)，等待显存释放..."
+                    sleep 10
+                    reap_active_pids
+                    continue
                 fi
 
                 # 显存充裕或卡处于空闲状态，跳出等待
@@ -701,23 +850,28 @@ for gpu in "${ALL_GPUS[@]}"; do
             worker_pids+=("$task_pid")
 
             # ----------------------------------------------------
-            # 步骤 3: 若本卡队列还有后续任务，等待稳定并实测显存增量
+            # 步骤 3: 若为串行模式/独占卡则同步等待完成；否则动态并发实测显存增量
             # ----------------------------------------------------
-            if [ "$idx" -lt "$((total_for_gpu - 1))" ]; then
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏱️ [GPU $gpu] 等待 ${STABILIZE_WAIT_SEC}s 待任务显存分配稳定，以动态评估下一个任务能否并发加入..."
-                for ((w=0; w<STABILIZE_WAIT_SEC; w+=5)); do
-                    sleep 5
-                    if ! kill -0 "$task_pid" 2>/dev/null; then
-                        break
-                    fi
-                done
+            if [ "$is_exclusive" -eq 1 ] || [ "$MAX_CONCURRENT_PER_GPU" -eq 1 ]; then
+                wait "$task_pid" 2>/dev/null || true
+                reap_active_pids
+            else
+                if [ "$idx" -lt "$((total_for_gpu - 1))" ]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⏱️ [GPU $gpu] 等待 ${STABILIZE_WAIT_SEC}s 待任务显存分配稳定，以动态评估下一个任务能否并发加入..."
+                    for ((w=0; w<STABILIZE_WAIT_SEC; w+=5)); do
+                        sleep 5
+                        if ! kill -0 "$task_pid" 2>/dev/null; then
+                            break
+                        fi
+                    done
 
-                mem_after=$(get_gpu_used_vram "$gpu")
-                delta=$((mem_after - mem_before))
-                if [ "$delta" -gt 500 ]; then
-                    LAST_TASK_VRAM_DELTA=$delta
-                    curr_free=$(get_gpu_free_vram "$gpu")
-                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 📊 [GPU $gpu] 实测任务实际消耗显存: ${LAST_TASK_VRAM_DELTA}MiB (~$((LAST_TASK_VRAM_DELTA / 1024))GB)，当前剩余显存: ${curr_free}MiB (~$((curr_free / 1024))GB)"
+                    mem_after=$(get_gpu_used_vram "$gpu")
+                    delta=$((mem_after - mem_before))
+                    if [ "$delta" -gt 500 ]; then
+                        LAST_TASK_VRAM_DELTA=$delta
+                        curr_free=$(get_gpu_free_vram "$gpu")
+                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 📊 [GPU $gpu] 实测任务实际消耗显存: ${LAST_TASK_VRAM_DELTA}MiB (~$((LAST_TASK_VRAM_DELTA / 1024))GB)，当前剩余显存: ${curr_free}MiB (~$((curr_free / 1024))GB)"
+                    fi
                 fi
             fi
         done

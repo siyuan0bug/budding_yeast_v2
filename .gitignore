@@ -34,3 +34,6 @@ scratch/test_residual_v2_comprehensive.py
 scratch/test_vectorized_residual.py
 scratch/verify_all_models_train_eval.py
 scratch/test_model_reorganization.py
+scratch/comprehensive_baseline_and_badcase_analysis.py
+scratch/detailed_badcase_breakdown.py
+scratch/verify_all_4_twins.py
