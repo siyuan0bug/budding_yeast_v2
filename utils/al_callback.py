@@ -216,7 +216,7 @@ class ActiveLearningCallback(pl.Callback):
         支持两大 AL 范式：
         1. **al4pde 框架策略 (推荐)**：'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
            'maal', 'al4pde_mass', 'al4pde_novelty', 'al4pde_residual', 'al4pde_residual_diversity',
-           'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_fisher_oed'。
+           'al4pde_bifurcation', 'al4pde_bifurcation_entropy', 'al4pde_event_entropy', 'al4pde_fisher_oed'。
            候选池为纯参数空间采样，选中 Top-K 后通过 MASS 物理引擎在线 ODE 仿真打标加入合成训练集。
         2. **标准池化 AL (Pool-Based)**：'us', 'is', 'random', 'wrs', 'vessal', 'hggs'。
            从已有的合成数据池中选取样本加入训练集。
@@ -230,7 +230,7 @@ class ActiveLearningCallback(pl.Callback):
                 f"Strategy '{self.strategy}' (Query Synthesis) has been permanently removed "
                 f"due to test-set data leakage. Please use al4pde strategies (e.g. 'al4pde_random', "
                 f"'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_mass', 'al4pde_novelty', "
-                f"'al4pde_residual', 'al4pde_residual_diversity', 'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_fisher_oed') "
+                f"'al4pde_residual', 'al4pde_residual_diversity', 'al4pde_bifurcation', 'al4pde_bifurcation_entropy', 'al4pde_event_entropy', 'al4pde_fisher_oed') "
                 f"or standard pool-based strategies ('us', 'is')."
             )
 
@@ -285,7 +285,8 @@ class ActiveLearningCallback(pl.Callback):
         if self.strategy in ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
                              'maal', 'al4pde_mass', 'al4pde_novelty', 'al4pde_residual',
                              'al4pde_residual_diversity', 'al4pde_res_div',
-                             'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_event',
+                             'al4pde_bifurcation', 'al4pde_bifurcation_entropy', 'al4pde_bif_entropy',
+                             'al4pde_event_entropy', 'al4pde_event',
                              'al4pde_fisher_oed', 'al4pde_foed'):
             self.initial_train_size = initial_train_size
             self.trigger_every_n_epochs = 4  # 保留字段, 外层重训模式下不生效
@@ -579,6 +580,8 @@ class ActiveLearningCallback(pl.Callback):
             bd = self._al4pde_residual_diversity_sample(None, pl_module, dm, device, 0)
         elif self.strategy == 'al4pde_bifurcation':
             bd = self._al4pde_bifurcation_sample(None, pl_module, dm, device, 0)
+        elif self.strategy in ('al4pde_bifurcation_entropy', 'al4pde_bif_entropy'):
+            bd = self._al4pde_bifurcation_entropy_sample(None, pl_module, dm, device, 0)
         elif self.strategy in ('al4pde_event_entropy', 'al4pde_event'):
             bd = self._al4pde_event_entropy_sample(None, pl_module, dm, device, 0)
         elif self.strategy in ('al4pde_fisher_oed', 'al4pde_foed'):
@@ -714,6 +717,8 @@ class ActiveLearningCallback(pl.Callback):
                 broadcast_data = self._al4pde_residual_diversity_sample(trainer, pl_module, dm, device, current_epoch)
             elif self.strategy == 'al4pde_bifurcation':
                 broadcast_data = self._al4pde_bifurcation_sample(trainer, pl_module, dm, device, current_epoch)
+            elif self.strategy in ('al4pde_bifurcation_entropy', 'al4pde_bif_entropy'):
+                broadcast_data = self._al4pde_bifurcation_entropy_sample(trainer, pl_module, dm, device, current_epoch)
             elif self.strategy in ('al4pde_event_entropy', 'al4pde_event'):
                 broadcast_data = self._al4pde_event_entropy_sample(trainer, pl_module, dm, device, current_epoch)
             elif self.strategy in ('al4pde_fisher_oed', 'al4pde_foed'):
@@ -2006,7 +2011,8 @@ class ActiveLearningCallback(pl.Callback):
                                  'al4pde_diversity', 'maal',
                                  'al4pde_mass', 'al4pde_novelty', 'al4pde_residual',
                                  'al4pde_residual_diversity', 'al4pde_res_div',
-                                 'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_event',
+                                 'al4pde_bifurcation', 'al4pde_bifurcation_entropy', 'al4pde_bif_entropy',
+                                 'al4pde_event_entropy', 'al4pde_event',
                                  'al4pde_fisher_oed', 'al4pde_foed')
 
     def _al4pde_scheduled_num_add(self):
@@ -3167,6 +3173,130 @@ class ActiveLearningCallback(pl.Callback):
         print(f"[al4pde_bifurcation] ✅ 分岔流形评估完成 (耗时 {eval_time:.2f}s, 速率 {self._pool_size/eval_time:.1f} 样本/s)")
         print(f"[al4pde_bifurcation] 门控剪枝: 剔除 {pruned_count}/{self._pool_size} 异常候选")
         print(f"[al4pde_bifurcation] 最高分岔临界度候选: min={bif_scores_all[ranked_candidates[-1]]:.4f}, max={bif_scores_all[ranked_candidates[0]]:.4f}")
+        return self._build_broadcast_from_pool(ranked_candidates, dm, target_valid_num=n_select)
+
+    def _al4pde_bifurcation_entropy_sample(self, trainer, pl_module, dm, device, current_epoch):
+        """al4pde 分岔相变信息熵主动学习 (Bifurcation Shannon Entropy Active Learning, BSE-AL)
+
+        第一性原理与理论创新:
+        - 酵母细胞周期动力系统具有陡峭的高维相变分岔超曲面 (Limit Cycle vs. Fixed-Point Arrest);
+        - 在相变边界附近，动力学对参数微小扰动极其敏感，系统在增殖振荡 (Pattern A/B) 与致死停滞 (Pattern C) 之间发生剧烈拓扑跃迁;
+        - 通过模型自带的分岔判别头 P(C | p)（或由训练集在线训练的高速分岔判别器），对 100 万未标注候选池的参数批次计算香农分岔信息熵:
+            H(p) = - \\sum_{k \\in {A, B, C}} P_k(p) * ln(P_k(p) + 1e-12)
+        - 挑选 H(p) 最高的临界样本（即模型在分类决策上最不确定、最接近分岔相变临界面的样本）调用真实 ODE 求解器打标并增补进训练集;
+        - 这样能用最少的样本代价，把高维相变边界刻画得极其陡峭精准，彻底消除盲目起振或虚假阻滞的泛化缺陷。
+        """
+        if self._pool_size == 0:
+            print("[al4pde_bifurcation_entropy] 候选池已空, 跳过本轮 AL")
+            return None
+
+        from budding_yeast_v2.utils.ode_residual_engine import VectorizedYeastODE
+
+        print(f"[al4pde_bifurcation_entropy] 🚀 启动分岔相变信息熵主动学习评估 (池大小: {self._pool_size})...")
+        t_start = time.time()
+        
+        # 1. 获取/构建分岔分类器
+        classifier_fn = None
+        if pl_module is not None and hasattr(pl_module, 'model') and hasattr(pl_module.model, 'pattern_head'):
+            pl_module.eval()
+            classifier_fn = lambda p_batch: pl_module.model.pattern_head(p_batch)
+            print("[al4pde_bifurcation_entropy] 使用主模型内置 pattern_head 分岔预测头")
+        else:
+            # 在线训练极速 2 层 MLP 分类器
+            print("[al4pde_bifurcation_entropy] 主模型无 pattern_head，在线训练高速分岔分类器...")
+            t_clf_start = time.time()
+            train_tensors = dm.train_dataset_synth.tensors
+            train_P = train_tensors[1].to(device)
+            if len(train_tensors) >= 4:
+                train_labels = train_tensors[3].to(device)
+            else:
+                train_Y = train_tensors[2].to(device)
+                amp = train_Y[:, 2, :].max(dim=-1)[0] - train_Y[:, 2, :].min(dim=-1)[0]
+                train_labels = torch.where(amp > 0.5, torch.zeros_like(amp, dtype=torch.long), 
+                                           torch.where(amp > 0.1, torch.ones_like(amp, dtype=torch.long), 
+                                                       torch.full_like(amp, 2, dtype=torch.long)))
+            
+            mlp_clf = torch.nn.Sequential(
+                torch.nn.Linear(train_P.shape[1], 128),
+                torch.nn.GELU(),
+                torch.nn.Linear(128, 64),
+                torch.nn.GELU(),
+                torch.nn.Linear(64, 3)
+            ).to(device)
+            optimizer = torch.optim.AdamW(mlp_clf.parameters(), lr=3e-3, weight_decay=1e-4)
+            criterion = torch.nn.CrossEntropyLoss()
+            
+            mlp_clf.train()
+            for _ in range(15):
+                logits = mlp_clf(train_P)
+                loss = criterion(logits, train_labels)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            mlp_clf.eval()
+            classifier_fn = lambda p_batch: mlp_clf(p_batch)
+            print(f"[al4pde_bifurcation_entropy] 高速分类器训练完成, 耗时 {time.time() - t_clf_start:.3f}s")
+
+        # 2. 准备 ODE 物理引擎用于通量异常初筛
+        param_keys = getattr(self, '_param_names_cached', None)
+        if param_keys is None:
+            pool_ds = self.al_pool_dataset or getattr(dm, 'dataset_path', None)
+            if pool_ds and os.path.exists(pool_ds):
+                npz_data = np.load(pool_ds, allow_pickle=True)
+                if 'param_names' in npz_data:
+                    param_keys = list(npz_data['param_names'])
+        if param_keys is None:
+            from data.mutant_aware import get_default_params
+            param_keys = sorted(list(get_default_params().keys()) + [
+                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
+                'init_Cdc15', 'init_PPX', 'init_CLN2'
+            ])
+        ode_engine = VectorizedYeastODE(param_keys).to(device)
+
+        batch_size = 10000
+        pool_indices = np.arange(self._pool_size)
+        all_entropies = []
+        p_mean = dm.p_mean.to(device)
+        p_std = dm.p_std.to(device)
+        pruned_count = 0
+
+        with torch.no_grad():
+            for i in range(0, len(pool_indices), batch_size):
+                end_idx = min(i + batch_size, len(pool_indices))
+                b_idx = pool_indices[i:end_idx]
+
+                P_batch = self._pool_P[b_idx].to(device)
+
+                if self._pool_P_real is not None:
+                    P_real_batch = self._pool_P_real[b_idx].to(device)
+                else:
+                    P_real_batch = P_batch * p_std + p_mean
+
+                flux_mask = ode_engine.check_nominal_flux_mask(P_real_batch, max_individual_ratio=3.0, max_sum_ratio=3.0)
+                pruned_count += (~flux_mask).sum().item()
+
+                logits = classifier_fn(P_batch)
+                probs = F.softmax(logits, dim=-1)
+
+                entropy = -torch.sum(probs * torch.log(probs + 1e-12), dim=-1)
+                entropy = torch.where(flux_mask, entropy, torch.full_like(entropy, -1.0))
+                all_entropies.append(entropy.cpu().numpy())
+
+        if pl_module is not None:
+            pl_module.train()
+        entropies_all = np.concatenate(all_entropies)
+        eval_time = time.time() - t_start
+
+        ranked_idx = np.argsort(entropies_all)[::-1]
+        valid_candidate_mask = entropies_all[ranked_idx] >= 0.0
+        ranked_candidates = ranked_idx[valid_candidate_mask]
+
+        n_select = min(self._al4pde_scheduled_num_add(), self._pool_size)
+        max_ent = entropies_all[ranked_candidates[0]] if len(ranked_candidates) > 0 else 0.0
+        print(f"[al4pde_bifurcation_entropy] ✅ 分岔信息熵评估完成 (耗时 {eval_time:.2f}s, 吞吐量 {self._pool_size/eval_time:.1f} 样本/s)")
+        print(f"[al4pde_bifurcation_entropy] 门控剪枝: 剔除 {pruned_count}/{self._pool_size} 异常参数候选")
+        print(f"[al4pde_bifurcation_entropy] 选中前 {n_select} 个最高熵临界样本: 最大熵={max_ent:.4f} (理论上限 ln(3)≈1.0986)")
+
         return self._build_broadcast_from_pool(ranked_candidates, dm, target_valid_num=n_select)
 
     def _al4pde_event_entropy_sample(self, trainer, pl_module, dm, device, current_epoch):

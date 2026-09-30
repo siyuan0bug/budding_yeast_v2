@@ -171,16 +171,24 @@ EXPERIMENTS=(
     #   - GPU 3: gfno (修复重跑), bregman_fno (全新), bregman_wno (全新)
     #   - GPU 7: ncflow (全新), iganet_transformer (全新)
     # ==============================================================================
-    # 🌟🌟🌟 多任务分岔引导神经算子 (Bifurcation Multi-task Learning) 实验组 🌟🌟🌟
+    # ==============================================================================
+    # 🌟🌟🌟 新一代双吸引子解耦与因果可达性神经算子 (Mixture-of-Attractors Suite) 🌟🌟🌟
+    # 彻底解决非线性分岔拓扑奇点与残差穿透缺陷 (攻克 Mutant 15, Mutant 26, 合成 1472/7317 badcases)
     # 损失函数: hybrid_bifurcate (联合时序拟合 + Pattern A/B/C 分岔分类 + 阻滞平坦稳态惩罚)
     # 数据集: mutant_aware_pure_random_100000_210m_500s.npz
     # 配置: hybrid_bifurcate, m24, w192, b256, ep100, lr8.8e-4, wm8
     # 硬件分配:
-    #   - GPU 0: biom_refiner_bifurcate (两阶段分岔解耦模型)
-    #   - GPU 1: biom_refiner_mechanistic (全机制与分岔大融合旗舰模型)
+    #   - GPU 0: biom_refiner_attractor (双吸引子乘法熔断算子)
+    #   - GPU 1: biom_refiner_attractor_plus (双吸引子 + 因果调控图可达性旗舰算子)
+    #   - GPU 2: biom_refiner_causal_reach (生物调控图因果可达性算子)
     # ==============================================================================
-    "biom_refiner_bifurcate hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
-    "biom_refiner_mechanistic hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    "biom_refiner_attractor hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    "biom_refiner_attractor_plus hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    "biom_refiner_causal_reach hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # [已归档注释]
+    #"biom_refiner_bifurcate hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_mechanistic hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # [已归档注释]
     #"biom_mass_action_refiner hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"

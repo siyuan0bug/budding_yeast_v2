@@ -218,7 +218,8 @@ def main():
                           choices=['none', 'random', 'us', 'is', 'wrs', 'vessal', 'hggs', 'pial',
                                    'al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity', 'maal', 'al4pde_mass',
                                    'al4pde_novelty', 'al4pde_residual', 'al4pde_residual_diversity', 'al4pde_res_div',
-                                   'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_event',
+                                   'al4pde_bifurcation', 'al4pde_bifurcation_entropy', 'al4pde_bif_entropy',
+                                   'al4pde_event_entropy', 'al4pde_event',
                                    'al4pde_fisher_oed', 'al4pde_foed'],
                           help="主动学习采样策略 (默认 none 代表锁定数据集; "
                                "us/is/random/pial=标准池化AL; "
@@ -384,7 +385,8 @@ def main():
     AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
                          'maal', 'al4pde_mass', 'al4pde_novelty', 'al4pde_residual',
                          'al4pde_residual_diversity', 'al4pde_res_div',
-                         'al4pde_bifurcation', 'al4pde_event_entropy', 'al4pde_event',
+                         'al4pde_bifurcation', 'al4pde_bifurcation_entropy', 'al4pde_bif_entropy',
+                         'al4pde_event_entropy', 'al4pde_event',
                          'al4pde_fisher_oed', 'al4pde_foed')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)

@@ -39,11 +39,13 @@ if [ -n "$NORM_TYPE" ] && [ "$NORM_TYPE" != "log1p" ]; then
     HPARAM_SIG="${HPARAM_SIG}_${NORM_TYPE}"
 fi
 
-# 算法配置数组: "GPU_ID STRATEGY" (分别使用 0 到 2 号显卡独立运行三大新路线)
+# 算法配置数组: "GPU_ID STRATEGY" (使用 GPU 3 独立运行，与 run_pipeline.sh 的 GPU 0/1/2 互不冲突)
 AL_JOBS=(
-    "0 al4pde_bifurcation"
-    "1 al4pde_event_entropy"
-    "2 al4pde_fisher_oed"
+    "3 al4pde_bifurcation_entropy"
+    #"0 al4pde_bifurcation_entropy"
+    #"1 al4pde_bifurcation"
+    #"2 al4pde_event_entropy"
+    #"3 al4pde_fisher_oed"
 )
 
 JOB_DESC=""

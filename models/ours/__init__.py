@@ -57,6 +57,9 @@ from .hano import (
 )
 
 from .bio_mass_action_refiner import BioMassActionRefiner
+from .bio_refiner_attractor import BioRefinerAttractor
+from .bio_refiner_causal_reach import BioRefinerCausalReach
+from .bio_refiner_attractor_plus import BioRefinerAttractorPlus
 
 __all__ = [
     'NIPSYeastFNO', 'UltimateFNO', 'NIPSYeastWNO', 'NIPSYeastLNO',
@@ -74,6 +77,7 @@ __all__ = [
     'BioRefinerPyramid', 'BioRefinerGraph', 'BioRefinerPlus',
     'BioRefinerBifurcate', 'BioRefinerGraphFlux', 'BioRefinerMechanistic',
     'BioMassActionRefiner',
+    'BioRefinerAttractor', 'BioRefinerCausalReach', 'BioRefinerAttractorPlus',
     'CausalMutantAdapter',
     'BioRefinerCausalBase', 'BioRefinerCausalCurvature',
     'BioRefinerCausalPyramid', 'BioRefinerCausalGraph',
@@ -85,3 +89,4 @@ __all__ = [
     'CausalODEEventDetectors', 'HybridPhaseStateMachine', 'UniversalEventFluxCoupler',
     'HANO', 'HANO_NoEvent', 'HANO_NoFlux', 'HANO_NoGraph', 'HANO_Refine', 'HANO_Dual',
 ]
+

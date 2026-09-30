@@ -33,6 +33,7 @@ from budding_yeast_v2.models.ours import (
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
     BioRefinerBifurcate, BioRefinerGraphFlux, BioRefinerMechanistic,
     BioMassActionRefiner,
+    BioRefinerAttractor, BioRefinerCausalReach, BioRefinerAttractorPlus,
     BioRefinerCausalBase, BioRefinerCausalCurvature,
     BioRefinerCausalPyramid, BioRefinerCausalGraph,
     BioRefinerCausalPlus, BioRefinerCausal,
@@ -150,6 +151,12 @@ MODEL_REGISTRY = {
     'biom_refiner_mechanistic': BioRefinerMechanistic,
     'biom_mass_action_refiner': BioMassActionRefiner,
     'biom_mass_action': BioMassActionRefiner,
+    'biom_refiner_attractor': BioRefinerAttractor,
+    'bio_refiner_attractor': BioRefinerAttractor,
+    'biom_refiner_causal_reach': BioRefinerCausalReach,
+    'bio_refiner_causal_reach': BioRefinerCausalReach,
+    'biom_refiner_attractor_plus': BioRefinerAttractorPlus,
+    'bio_refiner_attractor_plus': BioRefinerAttractorPlus,
     'biom_refiner_causal_base': BioRefinerCausalBase,
     'biom_refiner_causal_curvature': BioRefinerCausalCurvature,
     'biom_refiner_causal_curv': BioRefinerCausalCurvature,
@@ -221,7 +228,7 @@ class YeastLitModule(pl.LightningModule):
         self.save_hyperparameters()
 
         # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
-        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_mass_action_refiner', 'biom_mass_action', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_mass_action_refiner', 'biom_mass_action', 'biom_refiner_attractor', 'bio_refiner_attractor', 'biom_refiner_causal_reach', 'bio_refiner_causal_reach', 'biom_refiner_attractor_plus', 'bio_refiner_attractor_plus', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
             adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
             if os.path.exists(adj_path):
                 adj_matrix = np.load(adj_path)
@@ -321,6 +328,9 @@ class YeastLitModule(pl.LightningModule):
         elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
                             'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic',
                             'biom_mass_action_refiner', 'biom_mass_action',
+                            'biom_refiner_attractor', 'bio_refiner_attractor',
+                            'biom_refiner_causal_reach', 'bio_refiner_causal_reach',
+                            'biom_refiner_attractor_plus', 'bio_refiner_attractor_plus',
                             'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn',
                             'biom_refiner_causal_plus', 'biom_refiner_causal',
                             'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal',
