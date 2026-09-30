@@ -1,0 +1,46 @@
+Real-Mutant Reachability + Zero-Training Probe (v3)
+Dataset: /home/users/zsy/projects/budding_yeast_cell_cycle/scratch/test_bams_5000.npz
+===========================================================================
+  Real mutants           : 126
+  Synthetic support      : 5000 samples, 141 parameters
+  min-dist (z-space)     : median=0.51 | mean=1.11 | P90=3.57 | max=5.86
+  可达性判定             : WARNING: 局部突变存在外推支撑空洞（min-dist > 5.0σ）
+
+  [Top 15 worst real mutants by reachability (min-dist)]
+  #   Real Mutant                                   min-dist
+  ----------------------------------------------------------
+  1   122_APC-A_cdh1Δ_multi-copy_CDC20                  5.86
+      └─ 核心偏移参数: kamcm=3.5σ, init_CDH1=2.9σ, init_CDH1T=2.9σ
+  2   57_CLB2-dbΔ_multi-copy_SIC1                       5.78
+      └─ 核心偏移参数: kasbf=4.1σ, ksc1pp=2.6σ, mdt=2.3σ
+  3   83_GAL-PDS1-dbΔ                                   5.55
+      └─ 核心偏移参数: kspdsp=5.5σ
+  4   84_GAL-PDS1-dbΔ_esp1-ts                           5.55
+      └─ 核心偏移参数: kspdsp=5.5σ
+  5   107_cdc14-ts_GAL-CLN2                             5.43
+      └─ 核心偏移参数: ksn2p=5.4σ, ksn2pp=0.6σ
+  6   120_APC-A_cdh1Δ_multi-copy_CDC6                   5.35
+      └─ 核心偏移参数: kamcm=3.5σ, kspdsp=3.0σ, mdt=2.0σ
+  7   118_APC-A_cdh1Δ_multi-copy_SIC1                   5.07
+      └─ 核心偏移参数: ka20pp=3.8σ, ksc1pp=2.6σ, ksc1p=1.9σ
+  8   121_APC-A_cdh1Δ_GAL-CDC6                          4.95
+      └─ 核心偏移参数: ksf6p=5.0σ
+  9   42_sic1Δ_cdc6Δ_2-49_cdh1Δ_GAL-CDC20               4.27
+      └─ 核心偏移参数: ks20p=4.1σ, ksc1pp=0.5σ
+  10  124_APC-A_GAL-CLB2                                4.13
+      └─ 核心偏移参数: ka20pp=3.8σ, ksb2p=1.6σ
+  11  119_APC-A_cdh1Δ_GAL-SIC1                          3.92
+      └─ 核心偏移参数: ka20pp=3.8σ, ksc1p=0.8σ, ks14=0.5σ
+  12  37_sic1Δ_cdh1Δ_GAL-CDC20                          3.86
+      └─ 核心偏移参数: kamcm=3.5σ, ks20p=1.1σ, ksc1pp=0.5σ
+  13  70_CLB5-dbΔ_pds1Δ                                 3.59
+      └─ 核心偏移参数: kamcm=3.5σ, ks20pp=0.6σ
+  14  71_CLB5-dbΔ_pds1Δ_cdc20Δ                          3.54
+      └─ 核心偏移参数: kamcm=3.5σ
+  15  46_swi5Δ_cdh1Δ_GAL-SIC1                           3.46
+      └─ 核心偏移参数: ksc1p=3.4σ, C0=0.7σ
+
+  [k-NN probe & Lipschitz] SKIP: 已启用 --fast 极速模式（不载入 12GB 轨迹数据）
+  ★ 全局数据集质量综合评分 (Dataset Quality Score) : 54.0 / 100 分
+
+  体检耗时: 0.03 秒

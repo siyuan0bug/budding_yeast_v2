@@ -1,0 +1,41 @@
+Real-Mutant Reachability + Zero-Training Probe (v3)
+Dataset: /home/users/zsy/mydata/budding_yeast/gibbs_energy_100000_210m_500s_fast.npz
+===========================================================================
+  Real mutants           : 126
+  Synthetic support      : 100000 samples, 141 parameters
+  min-dist (z-space)     : median=0.01 | mean=0.28 | P90=0.62 | max=3.24
+  可达性判定             : OK（Real 落在合成流形良好插值支撑内）
+
+  [Top 15 worst real mutants by reachability (min-dist)]
+  #   Real Mutant                                   min-dist
+  ----------------------------------------------------------
+  1   107_cdc14-ts_GAL-CLN2                             3.24
+      └─ 核心偏移参数: ksn2p=3.2σ
+  2   57_CLB2-dbΔ_multi-copy_SIC1                       3.11
+      └─ 核心偏移参数: ksc1pp=2.5σ, ksc1p=1.7σ
+  3   33_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ_cdh1Δ            3.07
+      └─ 核心偏移参数: ksc1p=3.1σ
+  4   46_swi5Δ_cdh1Δ_GAL-SIC1                           1.93
+      └─ 核心偏移参数: ksc1p=1.9σ
+  5   71_CLB5-dbΔ_pds1Δ_cdc20Δ                          1.79
+      └─ 核心偏移参数: ksb5pp=1.4σ, ksb5p=0.8σ, Tem1T=0.5σ
+  6   70_CLB5-dbΔ_pds1Δ                                 1.70
+      └─ 核心偏移参数: ksb5pp=1.4σ, ksb5p=0.8σ, Tem1T=0.5σ
+  7   59_CLB2-dbΔ_multi-copy_CDC6                       1.65
+      └─ 核心偏移参数: ksf6pp=1.0σ, ksf6ppp=1.0σ, ksf6p=0.7σ
+  8   120_APC-A_cdh1Δ_multi-copy_CDC6                   1.54
+      └─ 核心偏移参数: ksf6pp=1.0σ, ksf6ppp=1.0σ, ksf6p=0.7σ
+  9   42_sic1Δ_cdc6Δ_2-49_cdh1Δ_GAL-CDC20               0.98
+  10  119_APC-A_cdh1Δ_GAL-SIC1                          0.73
+      └─ 核心偏移参数: ksc1p=0.7σ
+  11  31_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ                  0.70
+  12  89_tem1-ts_GAL-CDC15                              0.69
+      └─ 核心偏移参数: Cdc15T=0.7σ
+  13  37_sic1Δ_cdh1Δ_GAL-CDC20                          0.64
+  14  105_cdc14-ts_sic1Δ                                0.60
+  15  58_CLB2-dbΔ_GAL-SIC1                              0.60
+
+  [k-NN probe & Lipschitz] SKIP: 已启用 --fast 极速模式（不载入 12GB 轨迹数据）
+  ★ 全局数据集质量综合评分 (Dataset Quality Score) : 61.6 / 100 分
+
+  体检耗时: 0.68 秒

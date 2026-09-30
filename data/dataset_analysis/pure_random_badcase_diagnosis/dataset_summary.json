@@ -1,0 +1,23 @@
+{
+  "dataset": "/home/users/zsy/mydata/budding_yeast/mutant_aware_pure_random_100000_210m_500s.npz",
+  "n_total": 100126,
+  "n_real": 126,
+  "n_synthetic": 100000,
+  "real_pattern_counts": {
+    "Pattern_C: Exponential-Arrest (==0)": 58,
+    "Pattern_B: Single-Division (==1)": 47,
+    "Pattern_A: Multi-Division (>=2)": 21
+  },
+  "synthetic_pattern_counts": {
+    "Pattern_C: Exponential-Arrest (==0)": 64547,
+    "Pattern_B: Single-Division (==1)": 29124,
+    "Pattern_A: Multi-Division (>=2)": 6329
+  },
+  "real_label_counts": {
+    "Viable": 45,
+    "Inviable: M-phase Arrest": 37,
+    "Inviable: G1 Arrest": 21,
+    "Inviable: Unbudded Division": 20,
+    "Inviable: Sequence Failure": 3
+  }
+}

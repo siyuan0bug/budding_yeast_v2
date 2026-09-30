@@ -1,0 +1,40 @@
+Real-Mutant Reachability + Zero-Training Probe (v3)
+Dataset: /home/users/zsy/mydata/budding_yeast/mutant_aware_100000_210m_500s.npz
+===========================================================================
+  Real mutants           : 126
+  Synthetic support      : 100000 samples, 141 parameters
+  min-dist (z-space)     : median=0.09 | mean=0.28 | P90=0.60 | max=3.66
+  可达性判定             : OK（Real 落在合成流形良好插值支撑内）
+
+  [Top 15 worst real mutants by reachability (min-dist)]
+  #   Real Mutant                                   min-dist
+  ----------------------------------------------------------
+  1   118_APC-A_cdh1Δ_multi-copy_SIC1                   3.66
+      └─ 核心偏移参数: ka20pp=3.6σ
+  2   57_CLB2-dbΔ_multi-copy_SIC1                       2.71
+      └─ 核心偏移参数: mdt=2.0σ, ksswip=1.4σ, ksc1pp=1.0σ
+  3   107_cdc14-ts_GAL-CLN2                             1.68
+      └─ 核心偏移参数: ksn2p=0.8σ, kppc1=0.7σ, kaswi=0.7σ
+  4   120_APC-A_cdh1Δ_multi-copy_CDC6                   1.56
+      └─ 核心偏移参数: ksf6ppp=0.9σ, ksf6pp=0.9σ, ksf6p=0.7σ
+  5   33_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ_cdh1Δ            1.15
+      └─ 核心偏移参数: ksn2p=1.0σ, ksc1p=0.6σ
+  6   94_cdc15Δ_multi-copy_TEM1                         1.15
+      └─ 核心偏移参数: Tem1T=1.1σ
+  7   121_APC-A_cdh1Δ_GAL-CDC6                          0.99
+      └─ 核心偏移参数: ksf6p=0.9σ
+  8   42_sic1Δ_cdc6Δ_2-49_cdh1Δ_GAL-CDC20               0.99
+  9   59_CLB2-dbΔ_multi-copy_CDC6                       0.88
+  10  31_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ                  0.86
+      └─ 核心偏移参数: ksc1p=0.7σ, ksn2p=0.5σ
+  11  58_CLB2-dbΔ_GAL-SIC1                              0.76
+  12  119_APC-A_cdh1Δ_GAL-SIC1                          0.71
+      └─ 核心偏移参数: ks20pp=0.5σ
+  13  24_cln1Δ_cln2Δ_cln3Δ_multi-copy_BCK2              0.62
+  14  37_sic1Δ_cdh1Δ_GAL-CDC20                          0.58
+  15  122_APC-A_cdh1Δ_multi-copy_CDC20                  0.58
+
+  [k-NN probe & Lipschitz] SKIP: 已启用 --fast 极速模式（不载入 12GB 轨迹数据）
+  ★ 全局数据集质量综合评分 (Dataset Quality Score) : 60.1 / 100 分
+
+  体检耗时: 1.08 秒

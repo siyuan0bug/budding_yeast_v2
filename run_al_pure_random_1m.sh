@@ -19,8 +19,7 @@ PYTHON_BIN="${PYTHON_BIN:-/home/users/zsy/.conda/envs/neuralop/bin/python}"
 POOL_FILE="/home/users/zsy/mydata/budding_yeast/pure_random_1m_pool.npz"
 INIT_DATASET="/home/users/zsy/mydata/budding_yeast/al_iter0_10000_210m_500s.npz"
 EXP_ROOT="./experiments"
-LOG_DIR="./logs"
-mkdir -p "$LOG_DIR" "$EXP_ROOT" /home/users/zsy/mydata/budding_yeast
+mkdir -p "$EXP_ROOT" /home/users/zsy/mydata/budding_yeast
 
 # 实验超参数定义
 MODEL="biom_refiner_plus"
@@ -117,8 +116,6 @@ for JOB in "${AL_JOBS[@]}"; do
     fi
     RUN_NAME="${RUN_NAME}_seed${SEED}"
     LOG_FILE="${EXP_DIR}/train.log"
-    mkdir -p "$LOG_DIR"
-    ln -sf "$(pwd)/${LOG_FILE}" "${LOG_DIR}/${RUN_NAME}.log" 2>/dev/null || true
     LOG_FILES+=("$LOG_FILE")
 
     echo "🚀 启动 [GPU $GPU_ID] -> 策略: ${STRATEGY} | 日志: $LOG_FILE"

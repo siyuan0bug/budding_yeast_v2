@@ -638,9 +638,12 @@ def main():
     args = parser.parse_args()
 
     if args.out_dir:
+        args.out_dir = os.path.abspath(args.out_dir)
         os.makedirs(args.out_dir, exist_ok=True)
     else:
-        args.out_dir = os.path.dirname(os.path.abspath(__file__))
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        args.out_dir = os.path.join(_script_dir, "reachability")
+        os.makedirs(args.out_dir, exist_ok=True)
 
     use_gpu = not args.no_gpu
 

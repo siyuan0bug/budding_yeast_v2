@@ -1,0 +1,68 @@
+Real-Mutant Reachability + Zero-Training Probe (v3)
+Dataset: /home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast/kdpp_gated_100000_210m_500s.npz
+===========================================================================
+  Real mutants           : 126
+  Synthetic support      : 100000 samples, 141 parameters
+  min-dist (z-space)     : median=0.14 | mean=0.31 | P90=0.66 | max=3.24
+  可达性判定             : OK（Real 落在合成流形良好插值支撑内）
+
+  [Top 15 worst real mutants by reachability (min-dist)]
+  #   Real Mutant                                   min-dist
+  ----------------------------------------------------------
+  1   33_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ_cdh1Δ            3.24
+      └─ 核心偏移参数: ksc1p=3.2σ
+  2   124_APC-A_GAL-CLB2                                2.29
+      └─ 核心偏移参数: ksb2p=2.3σ
+  3   57_CLB2-dbΔ_multi-copy_SIC1                       1.91
+      └─ 核心偏移参数: ksc1pp=1.6σ, ksc1p=1.1σ
+  4   37_sic1Δ_cdh1Δ_GAL-CDC20                          1.44
+      └─ 核心偏移参数: ks20p=1.3σ, ksc1pp=0.5σ
+  5   121_APC-A_cdh1Δ_GAL-CDC6                          1.27
+      └─ 核心偏移参数: ksf6p=1.3σ
+  6   31_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ                  1.22
+      └─ 核心偏移参数: ksc1p=1.2σ
+  7   119_APC-A_cdh1Δ_GAL-SIC1                          1.19
+      └─ 核心偏移参数: ksc1p=1.0σ, ks20pp=0.6σ
+  8   107_cdc14-ts_GAL-CLN2                             1.07
+      └─ 核心偏移参数: ksn2p=0.7σ
+  9   42_sic1Δ_cdc6Δ_2-49_cdh1Δ_GAL-CDC20               1.01
+      └─ 核心偏移参数: ksc1pp=0.5σ, ksf6pp=0.5σ, ksf6ppp=0.5σ
+  10  122_APC-A_cdh1Δ_multi-copy_CDC20                  0.86
+      └─ 核心偏移参数: ks20pp=0.6σ, ksc1pp=0.5σ
+  11  94_cdc15Δ_multi-copy_TEM1                         0.82
+      └─ 核心偏移参数: Tem1T=0.6σ
+  12  59_CLB2-dbΔ_multi-copy_CDC6                       0.81
+      └─ 核心偏移参数: ksf6pp=0.5σ, ksf6ppp=0.5σ
+  13  58_CLB2-dbΔ_GAL-SIC1                              0.69
+      └─ 核心偏移参数: ksc1p=0.7σ
+  14  41_sic1Δ_cdc6Δ_2-49_cdh1Δ                         0.64
+      └─ 核心偏移参数: ksc1pp=0.5σ
+  15  53_GAL-CLB2_sic1Δ                                 0.63
+      └─ 核心偏移参数: ksc1pp=0.5σ
+
+  [k-NN Zero-Training Probe] k=16 逆距离加权 (有效 126/126)
+  All 39 Vars  -> MAE: median=0.1281 | mean=0.2830
+                  Rel L2: median=0.2150 | mean=0.5173 | Corr: 0.7930
+  Core 9 Vars  -> MAE: median=0.3021 | Rel L2: median=0.2523
+  （注：探针为零训练最简流形插值下界；优秀 DL 模型经训练后指标通常可比探针好 1.5~3x）
+
+  [Top 10 predicted worst badcases (ranked by Probe MAE)]
+  #   Real Mutant                                    MAE   RelL2  C9-MAE min-dist
+  ---------------------------------------------------------------------------
+  1   124_APC-A_GAL-CLB2                          3.6964  0.4661 15.4641     2.29
+  2   26_cln1Δ_cln2Δ_cln3Δ_apc-ts                 1.6979  6.6962  6.2683     0.49
+  3   71_CLB5-dbΔ_pds1Δ_cdc20Δ                    1.4023  0.7143  5.2545     0.58
+  4   36_sic1Δ_cdh1Δ                              1.2482  0.8984  4.5187     0.28
+  5   62_GAL-CLB2-dbΔ                             1.2466  0.2261  5.0906     0.19
+  6   45_swi5Δ_cdh1Δ                              1.1664  0.6013  4.5401     0.33
+  7   22_cln1Δ_cln2Δ_cln3Δ_multi-copy_CLB5        0.9684  0.9478  3.0297     0.49
+  8   96_cdc15-ts_multi-copy_CDC14                0.9567  1.8639  1.9227     0.49
+  9   15_cln3Δ_bck2Δ_multi-copy_CLN2              0.8753  8.1527  2.0711     0.46
+  10  33_GAL-SIC1_GAL-CLN2_cln1Δ_cln2Δ_cdh1Δ      0.8597  0.8311  2.8353     3.24
+
+  [Lipschitz Audit] k_lip=50: L×h/||y|| median=0.695 | max=9.298
+  相空间最陡 5 株: 58_CLB2-dbΔ_GAL-SIC1(9.30), 59_CLB2-dbΔ_multi-copy_CDC6(8.35), 57_CLB2-dbΔ_multi-copy_SIC1(7.59), 26_cln1Δ_cln2Δ_cln3Δ_apc-ts(7.12), 36_sic1Δ_cdh1Δ(5.93)
+
+  ★ 全局数据集质量综合评分 (Dataset Quality Score) : 75.1 / 100 分
+
+  体检耗时: 77.33 秒

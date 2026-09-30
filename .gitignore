@@ -1,39 +1,50 @@
-# --- 默认忽略所有文件，仅跟踪 Python / Shell / Markdown ---
-*
-!*/
+# ====================================================================
+# Budding Yeast Neural Operator Project .gitignore
+# ====================================================================
 
-# 允许版本管理的文件类型
-!*.py
-!*.sh
-!*.md
-!.gitignore
+# 1. Byte-compiled / optimized / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
 
-# --- 日志文件（明确忽略，防止误提交）---
+# 2. Datasets, weights, and binary artifacts
+*.npz
+*.npy
+*.csv
+*.zip
+*.tar
+*.tar.gz
+*.ckpt
+*.pt
+*.pth
+*.pkl
+*.h5
+
+# 3. Logs and runtime output directories
 *.log
 logs/
-
-# --- Python 缓存 ---
-__pycache__/
-*.pyc
-
-# --- 评测与实验输出（明确忽略所有内容）---
+logs_v3/
+lightning_logs/
+train_result/
 eval_result/
 eval_results*/
-/eval_result/**
-/eval_results*/**
+tune_results/
+swanlog/
+wandb/
+model_visualizations/
 
-# --- AI 测试与临时探针脚本 ---
+# 4. Experimental checkpoints & big directories
+experiments/
+archive/
+scratch/
 tests/
-scratch_*.py
-data/test_*.py
-scratch/test_al_residual_integration.py
-scratch/test_batch_residual.py
-scratch/test_residual_aggregations.py
-scratch/test_residual_analysis.py
-scratch/test_residual_v2_comprehensive.py
-scratch/test_vectorized_residual.py
-scratch/verify_all_models_train_eval.py
-scratch/test_model_reorganization.py
-scratch/comprehensive_baseline_and_badcase_analysis.py
-scratch/detailed_badcase_breakdown.py
-scratch/verify_all_4_twins.py
+
+# 5. OS & IDE artifacts
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~

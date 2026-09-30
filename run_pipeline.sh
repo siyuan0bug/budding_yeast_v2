@@ -11,8 +11,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 PYTHON_BIN="/home/users/zsy/.conda/envs/neuralop/bin/python"
 export WANDB_API_KEY="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"  
 
-# 创建并行实验日志目录
-mkdir -p logs_v3 logs
+# export WANDB_API_KEY if needed
 
 # ==========================================
 # 全局开关：设为 1 启用 W&B 离线模式（日志保存在本地 wandb/ 目录，不联网）
@@ -467,7 +466,7 @@ EXPERIMENTS=(
 # ==========================================
 USE_HIERARCHICAL=1
 EXP_ROOT="./experiments"
-mkdir -p "$EXP_ROOT" logs_v3 logs
+mkdir -p "$EXP_ROOT"
 
 # =========================================================================
 # 1. 动态自适应显存装载与资源配置 (零单任务限额, 纯实测动态驱动)
@@ -643,7 +642,6 @@ run_single_task() {
         EVAL_OUT_DIR="${EXP_DIR}/eval"
         LOG_FILE="${EXP_DIR}/train.log"
         mkdir -p "$CKPT_DIR" "$EVAL_OUT_DIR"
-        ln -sf "$(pwd)/${LOG_FILE}" "logs_v3/${RUN_NAME}.log" 2>/dev/null
         DIR_PARAMS="--exp_dir $EXP_DIR --dataset_tag $DATASET_NAME"
     else
         EXP_DIR="./train_results_v3/${RUN_NAME}"
@@ -976,5 +974,5 @@ fi
 if [ "$USE_HIERARCHICAL" = "1" ] && [ -d "$EXP_ROOT" ]; then
     echo ""
     echo "📊 正在自动汇总多 Seed 统计指标并生成排行榜..."
-    $PYTHON_BIN analyze_experiments.py --exp_root "$EXP_ROOT" --sort_by real_mae
+    $PYTHON_BIN scripts/analysis/analyze_experiments.py --exp_root "$EXP_ROOT" --sort_by real_mae
 fi
