@@ -94,27 +94,34 @@ def load_model_from_checkpoint(ckpt_path, device='cpu'):
 
 def _render_and_save_plot(task):
     """独立的多进程画图函数，充分利用多核 CPU"""
-    pred, target, title, save_path, rows, cols, t_max = task
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
-    axes = axes.flatten()
-    t = np.linspace(0, t_max, pred.shape[-1])
-    for i in range(pred.shape[0]):
-        ax = axes[i]
-        ax.plot(t, target[i], 'b-', label='Truth', linewidth=1.5)
-        ax.plot(t, pred[i], 'r--', label='Pred', linewidth=1.5)
-        ax.set_xlabel('Time (min)', fontsize=8)
-        ax.set_ylabel('Concentration', fontsize=8)
-        var_name = VARIABLE_NAMES[i] if i < len(VARIABLE_NAMES) else f"Var {i}"
-        ax.set_title(f'{i}: {var_name}', fontweight='bold', fontsize=9)
-        ax.grid(True, alpha=0.3)
-        if i == 0:
-            ax.legend(fontsize=8)
-    for i in range(pred.shape[0], len(axes)):
-        axes[i].set_visible(False)
-    plt.suptitle(title, fontsize=12, fontweight='bold', y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.90])
-    plt.savefig(save_path, dpi=120, bbox_inches='tight')
-    plt.close(fig)
+    try:
+        pred, target, title, save_path, rows, cols, t_max = task
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
+        axes = axes.flatten()
+        t = np.linspace(0, t_max, pred.shape[-1])
+        for i in range(pred.shape[0]):
+            ax = axes[i]
+            ax.plot(t, target[i], 'b-', label='Truth', linewidth=1.5)
+            ax.plot(t, pred[i], 'r--', label='Pred', linewidth=1.5)
+            ax.set_xlabel('Time (min)', fontsize=8)
+            ax.set_ylabel('Concentration', fontsize=8)
+            var_name = VARIABLE_NAMES[i] if i < len(VARIABLE_NAMES) else f"Var {i}"
+            ax.set_title(f'{i}: {var_name}', fontweight='bold', fontsize=9)
+            ax.grid(True, alpha=0.3)
+            if i == 0:
+                ax.legend(fontsize=8)
+        for i in range(pred.shape[0], len(axes)):
+            axes[i].set_visible(False)
+        plt.suptitle(title, fontsize=12, fontweight='bold', y=0.98)
+        plt.tight_layout(rect=[0, 0, 1, 0.90])
+        plt.savefig(save_path, dpi=120, bbox_inches='tight')
+        plt.close(fig)
+    except Exception as e:
+        print(f"⚠️ 画图失败 ({save_path}): {e}")
+        try:
+            plt.close('all')
+        except Exception:
+            pass
 
 def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, save_dir, 
                      sub_dir, batch_size=512, max_plots=None, max_workers=16):
@@ -200,7 +207,8 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
 
     return summary, csv_rows, [all_preds], [all_targets], plot_tasks
 
-def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42, batch_size=512, max_plots=None, plot_workers=16):
+def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42, batch_size=512, 
+                                 max_plots=None, max_real_plots=None, synth_test_plots=50, plot_workers=16):
     """
     对给定的 model 和 dm 执行全量评测，生成 global_metrics_denorm.json, per_mutant_metrics.csv 等标准成果。
     """
@@ -216,21 +224,29 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
 
     mean_y, std_y = dm.mean_y.to(device), dm.std_y.to(device)
 
+    # 确定画图数量限制：
+    # 真实突变体 (126株) 是最重要的生物学验证基准，除非明确指定为 0，否则默认必须全量保存所有图片 (None)。
+    if max_plots == 0:
+        actual_real_plots = 0
+        actual_synth_plots = 0
+    else:
+        actual_real_plots = max_real_plots  # None 即全量保存全部 126 张真实突变体图片
+        actual_synth_plots = synth_test_plots
+
     # ======== 1. 评估 Real Mutants ========
     real_summary, real_csv, real_preds, real_targets, real_plot_tasks = evaluate_dataset(
         model, dm, dm.test_dataset_real, dm._test_idx_real,
         device, mean_y, std_y, seed, save_dir,
-        sub_dir='real_mutants', batch_size=batch_size, max_plots=max_plots, max_workers=plot_workers
+        sub_dir='real_mutants', batch_size=batch_size, max_plots=actual_real_plots, max_workers=plot_workers
     )
 
     # ======== 2. 评估 Synthetic 测试集 ========
     synth_dataset = dm.test_dataset_synth
     synth_idx = dm._test_idx_synth
-    synth_plots = min(max_plots, 50) if max_plots is not None else 50
     synth_summary, synth_csv, synth_preds, synth_targets, synth_plot_tasks = evaluate_dataset(
         model, dm, synth_dataset, synth_idx,
         device, mean_y, std_y, seed, save_dir,
-        sub_dir='synth_test', batch_size=batch_size, max_plots=synth_plots if max_plots != 0 else 0, max_workers=plot_workers
+        sub_dir='synth_test', batch_size=batch_size, max_plots=actual_synth_plots, max_workers=plot_workers
     )
 
     # ======== 3. 汇总 JSON (立即落盘) ========
@@ -291,7 +307,8 @@ def main():
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--save_dir', type=str, default=None, help='评估输出目录 (默认保存在 exp_dir/eval 或 ./eval_result)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--synth_test_plots', type=int, default=50, help='合成测试集最多画多少张图')
+    parser.add_argument('--real_mutant_plots', type=int, default=-1, help='真实突变体最多画多少张图 (-1 表示完整保存全部 126 个真实突变体图片)')
+    parser.add_argument('--synth_test_plots', type=int, default=50, help='合成测试集最多画多少张图 (0 表示不画合成测试集)')
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
     parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'asinh_z', 'linear', 'asinh_scale'],
                         help='数据归一化类型: log1p (平滑对数归一化, 默认), asinh_z, asinh_scale, linear')
@@ -355,6 +372,7 @@ def main():
     )
     dm.setup('test')
 
+    max_real_plots = None if args.real_mutant_plots < 0 else args.real_mutant_plots
     evaluate_model_on_datamodule(
         model=model,
         dm=dm,
@@ -362,7 +380,8 @@ def main():
         save_dir=args.save_dir,
         seed=args.seed,
         batch_size=args.batch_size,
-        max_plots=args.synth_test_plots,
+        max_real_plots=max_real_plots,
+        synth_test_plots=args.synth_test_plots,
         plot_workers=args.plot_workers
     )
 

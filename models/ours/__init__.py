@@ -56,6 +56,8 @@ from .hano import (
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
 )
 
+from .bio_mass_action_refiner import BioMassActionRefiner
+
 __all__ = [
     'NIPSYeastFNO', 'UltimateFNO', 'NIPSYeastWNO', 'NIPSYeastLNO',
     'HyperFNO', 'ChannelHyperFNO', 'hpYeastFNO',
@@ -71,6 +73,7 @@ __all__ = [
     'BioRefiner', 'BioRefinerBase', 'BioRefinerCurvature',
     'BioRefinerPyramid', 'BioRefinerGraph', 'BioRefinerPlus',
     'BioRefinerBifurcate', 'BioRefinerGraphFlux', 'BioRefinerMechanistic',
+    'BioMassActionRefiner',
     'CausalMutantAdapter',
     'BioRefinerCausalBase', 'BioRefinerCausalCurvature',
     'BioRefinerCausalPyramid', 'BioRefinerCausalGraph',

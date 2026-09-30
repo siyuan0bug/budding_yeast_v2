@@ -94,6 +94,13 @@ from .bampno import BAMPNO
 from .gfno import G_FNO
 from .noble import NOBLE
 
+# Batch 4: New SOTA 2025 Baselines (SC-FNO, KoNODE, BregmanNO, NCFlow, IGANet)
+from .sc_fno import SC_FNO, PNO1d, MPNO1d
+from .konode import KoNODE
+from .bregman_no import BregmanFNO, BregmanWNO
+from .ncflow import NCFlow
+from .iganet_transformer import IgaNetTransformer
+
 __all__ = [
     # Continuous Operators
     'PureFNO_ICLR2021',
@@ -136,4 +143,13 @@ __all__ = [
     'VanillaTransformer',
     'FEDformer',
     'Pyraformer',
+    # New 2025 Baselines
+    'SC_FNO',
+    'PNO1d',
+    'MPNO1d',
+    'KoNODE',
+    'BregmanFNO',
+    'BregmanWNO',
+    'NCFlow',
+    'IgaNetTransformer',
 ]

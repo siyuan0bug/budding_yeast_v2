@@ -73,11 +73,14 @@ class NOBLE(nn.Module):
 
     def _spectral_conv(self, x, weights):
         B, C, T = x.shape
-        x_ft = torch.fft.rfft(x)
+        orig_dtype = x.dtype
+        x_float = x.float()
+        x_ft = torch.fft.rfft(x_float)
         out_ft = torch.zeros(B, C, x_ft.shape[-1], device=x.device, dtype=torch.cfloat)
         modes = min(self.modes, x_ft.shape[-1])
         out_ft[:, :, :modes] = torch.einsum('bct,cot->bot', x_ft[:, :, :modes], weights[:, :, :modes])
-        return torch.fft.irfft(out_ft, n=T)
+        out = torch.fft.irfft(out_ft, n=T)
+        return out.to(orig_dtype)
 
     def forward(self, ic_time_grid, params):
         B, V, F_in, T = ic_time_grid.shape

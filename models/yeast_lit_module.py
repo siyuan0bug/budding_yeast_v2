@@ -15,7 +15,8 @@ from budding_yeast_v2.models.baselines import (
     iInformer, Flowformer, iFlowformer, Reformer, iReformer,
     Flashformer, iFlashformer, VanillaTransformer, FEDformer, Pyraformer,
     GNOT, LatentNeuralOperator, LaMO_RegularGrid, DeepKoopmanOperator, WDNO,
-    ICONGPT, BAMPNO, G_FNO, NOBLE
+    ICONGPT, BAMPNO, G_FNO, NOBLE,
+    SC_FNO, PNO1d, MPNO1d, KoNODE, BregmanFNO, BregmanWNO, NCFlow, IgaNetTransformer
 )
 
 from budding_yeast_v2.models.ours import (
@@ -31,6 +32,7 @@ from budding_yeast_v2.models.ours import (
     BioRefiner, BioRefinerCurvature,
     BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
     BioRefinerBifurcate, BioRefinerGraphFlux, BioRefinerMechanistic,
+    BioMassActionRefiner,
     BioRefinerCausalBase, BioRefinerCausalCurvature,
     BioRefinerCausalPyramid, BioRefinerCausalGraph,
     BioRefinerCausalPlus, BioRefinerCausal,
@@ -90,6 +92,18 @@ MODEL_REGISTRY = {
     'gfno': G_FNO,
     'g_fno': G_FNO,
     'noble': NOBLE,
+    # New SOTA 2025 Baselines
+    'sc_fno': SC_FNO,
+    'pno1d': PNO1d,
+    'pno': PNO1d,
+    'mpno1d': MPNO1d,
+    'mpno': MPNO1d,
+    'konode': KoNODE,
+    'bregman_fno': BregmanFNO,
+    'bregman_wno': BregmanWNO,
+    'ncflow': NCFlow,
+    'iganet_transformer': IgaNetTransformer,
+    'iganet': IgaNetTransformer,
     'cross_fno': NIPSYeastFNO,
     'ultimate_fno': UltimateFNO,
     'wno': NIPSYeastWNO,
@@ -134,6 +148,8 @@ MODEL_REGISTRY = {
     'biom_refiner_bifurcate': BioRefinerBifurcate,
     'biom_refiner_graph_flux': BioRefinerGraphFlux,
     'biom_refiner_mechanistic': BioRefinerMechanistic,
+    'biom_mass_action_refiner': BioMassActionRefiner,
+    'biom_mass_action': BioMassActionRefiner,
     'biom_refiner_causal_base': BioRefinerCausalBase,
     'biom_refiner_causal_curvature': BioRefinerCausalCurvature,
     'biom_refiner_causal_curv': BioRefinerCausalCurvature,
@@ -205,7 +221,7 @@ class YeastLitModule(pl.LightningModule):
         self.save_hyperparameters()
 
         # 自动加载生物符号反应拓扑图 (如果可用且未手动传入)
-        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
+        if adj_matrix is None and model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'dualpath_spectralgraph', 'bio_statespace_graph', 'cross_fno', 'channel_hyper_fno', 'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_mass_action_refiner', 'biom_mass_action', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
             adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
             if os.path.exists(adj_path):
                 adj_matrix = np.load(adj_path)
@@ -304,6 +320,7 @@ class YeastLitModule(pl.LightningModule):
                                     modes=modes, width=width, n_blocks=n_blocks)
         elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
                             'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic',
+                            'biom_mass_action_refiner', 'biom_mass_action',
                             'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn',
                             'biom_refiner_causal_plus', 'biom_refiner_causal',
                             'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal',
@@ -316,6 +333,12 @@ class YeastLitModule(pl.LightningModule):
         elif model_name in ('hano', 'hano_no_event', 'hano_no_flux', 'hano_no_graph', 'hano_refine', 'hano_dual'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, n_blocks=n_blocks)
+        elif model_name in ('sc_fno', 'bregman_fno'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width, modes=modes)
+        elif model_name in ('bregman_wno',):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width, wavelet=wavelet)
+        elif model_name in ('pno1d', 'pno', 'mpno1d', 'mpno', 'konode', 'ncflow', 'iganet_transformer', 'iganet'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width)
         elif model_name in (
             'transolver3_1d', 'transolver3', 'itransformer', 'dlinear', 'nlinear',
             'linear', 'autoformer', 'informer', 'iinformer', 'flowformer', 'iflowformer',
@@ -324,9 +347,12 @@ class YeastLitModule(pl.LightningModule):
             'koopman', 'wdno', 'icon', 'bampno', 'gfno', 'g_fno', 'noble'
         ):
             try:
-                self.model = ModelClass(num_vars=num_vars, param_dim=param_dim)
+                self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width)
             except TypeError:
-                self.model = ModelClass()
+                try:
+                    self.model = ModelClass(num_vars=num_vars, param_dim=param_dim)
+                except TypeError:
+                    self.model = ModelClass()
         else:
             raise ValueError(f"Unknown model_name: {model_name}")
 

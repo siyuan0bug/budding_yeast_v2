@@ -67,11 +67,14 @@ class AutoCorrelation(nn.Module):
             values = values[:, :L, :, :]
             keys = keys[:, :L, :, :]
 
-        # Period-based dependencies via Wiener-Khinchin theorem
-        q_fft = torch.fft.rfft(queries.permute(0, 2, 3, 1).contiguous(), dim=-1)
-        k_fft = torch.fft.rfft(keys.permute(0, 2, 3, 1).contiguous(), dim=-1)
+        # Period-based dependencies via Wiener-Khinchin theorem (with AMP bfloat16 safe float32 cast)
+        orig_dtype = queries.dtype
+        q_in = queries.permute(0, 2, 3, 1).contiguous().float()
+        k_in = keys.permute(0, 2, 3, 1).contiguous().float()
+        q_fft = torch.fft.rfft(q_in, dim=-1)
+        k_fft = torch.fft.rfft(k_in, dim=-1)
         res = q_fft * torch.conj(k_fft)
-        corr = torch.fft.irfft(res, n=L, dim=-1)
+        corr = torch.fft.irfft(res, n=L, dim=-1).to(orig_dtype)
 
         # Time delay aggregation
         V = self.time_delay_agg(values.permute(0, 2, 3, 1).contiguous(), corr)

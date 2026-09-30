@@ -34,7 +34,9 @@ class SpectralGConv1d(nn.Module):
 
     def forward(self, x):
         B, C, T = x.shape
-        x_ft = torch.fft.rfft(x)
+        orig_dtype = x.dtype
+        x_float = x.float()
+        x_ft = torch.fft.rfft(x_float)
         out_ft = torch.zeros(B, self.out_channels, x_ft.shape[-1], device=x.device, dtype=torch.cfloat)
 
         modes = min(self.modes, x_ft.shape[-1])
@@ -42,13 +44,14 @@ class SpectralGConv1d(nn.Module):
 
         out = torch.fft.irfft(out_ft, n=T)
         # Symmetrized group equivariant combination (Z2 reflection invariance)
-        x_flip = torch.flip(x, dims=[-1])
+        x_flip = torch.flip(x_float, dims=[-1])
         x_flip_ft = torch.fft.rfft(x_flip)
         out_flip_ft = torch.zeros_like(out_ft)
         out_flip_ft[:, :, :modes] = torch.einsum('bct,cot->bot', x_flip_ft[:, :, :modes], self.weights[:, :, :modes])
         out_flip = torch.fft.irfft(out_flip_ft, n=T)
 
-        return 0.5 * (out + torch.flip(out_flip, dims=[-1]))
+        res = 0.5 * (out + torch.flip(out_flip, dims=[-1]))
+        return res.to(orig_dtype)
 
 
 class G_FNO(nn.Module):

@@ -45,15 +45,17 @@ class WDNO(nn.Module):
         x = ic_time_grid.reshape(B, V * F_in, T)
         h = self.in_proj(x)
 
-        # Multi-level DWT
-        coeffs = ptwt.wavedec(h, self.wavelet, level=self.level)
+        # Multi-level DWT (cast to float32 for ptwt compatibility)
+        orig_dtype = h.dtype
+        h_float = h.float()
+        coeffs = ptwt.wavedec(h_float, self.wavelet, level=self.level)
         processed_coeffs = []
         for c, conv in zip(coeffs, self.wavelet_convs):
-            c_proc = F.gelu(conv(c))
-            processed_coeffs.append(c_proc)
+            c_proc = F.gelu(conv(c.to(conv.weight.dtype)))
+            processed_coeffs.append(c_proc.float())
 
         # IDWT
-        h_recon = ptwt.waverec(processed_coeffs, self.wavelet)
+        h_recon = ptwt.waverec(processed_coeffs, self.wavelet).to(orig_dtype)
         if h_recon.shape[-1] != T:
             h_recon = F.interpolate(h_recon, size=T, mode='linear', align_corners=False)
 

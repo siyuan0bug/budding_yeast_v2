@@ -147,17 +147,68 @@ EXPERIMENTS=(
     # 配置完全对齐基准: biom_refiner_plus, hybrid_mse_rel, false, m24, w192, b256, ep100, lr8.8e-4, wm8
     # ==============================================================================
     # [Twin B | GPU 0]: 完整体系 B 连续物理包络与边界缓冲采样 (mutant_aware.py v5.2 - 已归档注释)
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_DIST_TWIN_B} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_DIST_TWIN_B} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
 
     # [Twin A | GPU 1]: 体系 B 骨架 + 体系 A 参数采样分布与赋值规则 (mass_dataset_generator.py - 已归档注释)
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_DIST_TWIN_A} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_DIST_TWIN_A} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
 
     # ====== 🌟🌟🌟 纯随机无拓扑参数分布消融孪生对照实验 (100% 零拓扑、零 Motif、完全均匀随机) 🌟🌟🌟 ======
     # [Pure Random Twin B | GPU 0]: 纯随机骨架 + 完整体系 B 连续物理包络与边界缓冲采样
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_PURE_RANDOM_DIST_TWIN_B} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_PURE_RANDOM_DIST_TWIN_B} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
     # [Pure Random Twin A | GPU 1]: 纯随机骨架 + 体系 A 参数采样分布与赋值规则
-    "biom_refiner_plus hybrid_mse_rel false ${DATASET_PURE_RANDOM_DIST_TWIN_A} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"biom_refiner_plus hybrid_mse_rel false ${DATASET_PURE_RANDOM_DIST_TWIN_A} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # ==============================================================================
+    # 🌟🌟🌟 4 个未完成修复模型 + 8 个全新引入 Baseline 神经算子 (10万纯随机数据集对照) 🌟🌟🌟
+    # 修复未完成: wdno, autoformer, gfno, noble (修复 BF16 rfft/wavedec 精度下推问题，排除 pure_fno)
+    # 全新引入: sc_fno (ICLR 2025), pno1d, mpno1d, konode, bregman_fno (ICML 2025), bregman_wno, ncflow (ICLR 2025), iganet_transformer
+    # 数据集: mutant_aware_pure_random_100000_210m_500s.npz
+    # 硬件分配 (5 卡并行，每卡智能单进程串行排队):
+    #   - GPU 0: autoformer (修复重跑), sc_fno (全新)
+    #   - GPU 1: noble (修复重跑), pno1d (全新)
+    #   - GPU 2: wdno (修复重跑), mpno1d (全新), konode (全新)
+    #   - GPU 3: gfno (修复重跑), bregman_fno (全新), bregman_wno (全新)
+    #   - GPU 7: ncflow (全新), iganet_transformer (全新)
+    # ==============================================================================
+    # 🌟🌟🌟 多任务分岔引导神经算子 (Bifurcation Multi-task Learning) 实验组 🌟🌟🌟
+    # 损失函数: hybrid_bifurcate (联合时序拟合 + Pattern A/B/C 分岔分类 + 阻滞平坦稳态惩罚)
+    # 数据集: mutant_aware_pure_random_100000_210m_500s.npz
+    # 配置: hybrid_bifurcate, m24, w192, b256, ep100, lr8.8e-4, wm8
+    # 硬件分配:
+    #   - GPU 0: biom_refiner_bifurcate (两阶段分岔解耦模型)
+    #   - GPU 1: biom_refiner_mechanistic (全机制与分岔大融合旗舰模型)
+    # ==============================================================================
+    "biom_refiner_bifurcate hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    "biom_refiner_mechanistic hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # [已归档注释]
+    #"biom_mass_action_refiner hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # ==============================================================================
+    # 🌟🌟🌟 4 个未完成修复模型 + 8 个全新引入 Baseline 神经算子 (已归档注释) 🌟🌟🌟
+    # ==============================================================================
+    # [GPU 0]
+    #"autoformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"sc_fno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+
+    # [GPU 1]
+    #"noble hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"pno1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+
+    # [GPU 2]
+    #"wdno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"mpno1d hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"konode hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # [GPU 3]
+    #"gfno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"bregman_fno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+    #"bregman_wno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 3"
+
+    # [GPU 7]
+    #"ncflow hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
+    #"iganet_transformer hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 7"
 
     # [GPU 0: 连续神经算子组 (8 模型) - 已归档注释]
     #"pure_fno hybrid_mse_rel false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
