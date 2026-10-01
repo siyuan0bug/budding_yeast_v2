@@ -23,8 +23,13 @@ from concurrent.futures import ProcessPoolExecutor
 
 # Ensure project paths
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-sys.path.insert(0, CURRENT_DIR)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+PARENT_DIR = os.path.dirname(PROJECT_ROOT)
+
+for p in [PROJECT_ROOT, PARENT_DIR, DATA_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 # Import mutant_aware module WITHOUT MODIFICATION
 import mutant_aware as ma
@@ -255,7 +260,7 @@ def main():
     print(f"Successfully simulated and audited {len(eval_records)} KO mutants in {time.time() - t0:.2f}s.\n")
 
     # Step 3: Statistical Analysis & Aggregation
-    out_dir = os.path.join(PROJECT_ROOT, "experiments", "ko_sensitivity_analysis")
+    out_dir = os.path.join(PROJECT_ROOT, "scripts", "analysis", "outputs", "ko_sensitivity_analysis")
     os.makedirs(out_dir, exist_ok=True)
 
     rows = []

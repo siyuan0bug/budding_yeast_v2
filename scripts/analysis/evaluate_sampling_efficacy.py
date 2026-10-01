@@ -36,21 +36,18 @@ from scipy.stats import wasserstein_distance
 
 # Ensure mutant_aware can be imported regardless of execution working directory
 _script_dir = os.path.dirname(os.path.abspath(__file__))
-if _script_dir not in sys.path:
-    sys.path.insert(0, _script_dir)
-_data_dir = os.path.join(_script_dir, 'budding_yeast_v2', 'data')
-if os.path.exists(_data_dir) and _data_dir not in sys.path:
-    sys.path.insert(0, _data_dir)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(_script_dir))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+PARENT_DIR = os.path.dirname(PROJECT_ROOT)
+
+for p in [_script_dir, PROJECT_ROOT, PARENT_DIR, DATA_DIR]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
 
 try:
     import mutant_aware as ma
 except ImportError:
-    # Try parent directory relative import
-    _up = os.path.abspath(os.path.join(_script_dir, '..', '..'))
-    _up_data = os.path.join(_up, 'budding_yeast_v2', 'data')
-    if _up_data not in sys.path:
-        sys.path.insert(0, _up_data)
-    import mutant_aware as ma
+    from budding_yeast_v2.data import mutant_aware as ma
 
 
 # ==============================================================================

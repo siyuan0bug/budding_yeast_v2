@@ -54,6 +54,39 @@
 | **自动化单元测试 / 回归测试** | `tests/` | 如 `test_bio_refiner_causal.py`, `verify_training_loop.py` | 供开发验证与 CI 冒烟测试使用，已被 `.gitignore` 忽略。 |
 | **AI 临时探针 / 调试沙盒 / 一次性脚本** | `scratch/` 或 `scratch/probes/` | 如 `_cap_probe_tmp.py`, `test_batch_residual.py` | **所有临时、探针、排查脚本强制存入此处，随用随弃**，已被 `.gitignore` 忽略。 |
 
+### 1.3 绝对工程铁律：同步维护权威文档 (Mandatory Synchronous Documentation)
+> [!IMPORTANT]
+> **每当向代码库新增功能或产生新的实验结果时，必须在对应的 `docs/` 文档中同步更新：**
+> 1. **新增模型/模块**：在 `models/` 编写并注册新模型后，必须同步在 [docs/1_ARCHITECTURE_AND_MODELS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/1_ARCHITECTURE_AND_MODELS.md) 补充模型架构说明、输入输出、参数量与调用命令。
+> 2. **新增主动学习策略**：在 `utils/al_callback.py` 实现新策略后，必须同步在 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md) 补充数学设计、采样目标函数与实测性能。
+> 3. **新增损失函数/物理约束**：在 `utils/losses.py` 新增损失后，必须同步在 [docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md) 补充数学公式与梯度特性。
+> 4. **新增数据生成器/归一化**：在 `data/` 编写新生成引擎或验证归一化后，必须同步在 [docs/4_DATASETS_AND_NORMALIZATION.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/4_DATASETS_AND_NORMALIZATION.md) 补充采样空间分布与物理基准。
+> 5. **实验完成/评测出炉**：任何批次实验（如 `run_pipeline.sh`, `run_al_pure_random_1m.sh` 等）运行完毕后，必须运行分析脚本提取关键指标，并同步更新至 [docs/5_BENCHMARK_AND_LEADERBOARD.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/5_BENCHMARK_AND_LEADERBOARD.md)（与对应的专门指南中），严禁只在终端汇报而导致专著文档脱节！
+
+### 1.4 AI 专用分析、探针与评测工具库导航 (AI Tooling Navigation Guide)
+代码库为 AI Agent 和科研人员配备了多层次的诊断工具链，当遇到性能瓶颈、收敛异常或需开展归因分析时，**优先复用以下现有成熟工具，避免重复造轮子**：
+
+#### 1. 深度实验分析工具库 (`scripts/analysis/`)
+- [analyze_experiments.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/analyze_experiments.py)：自动化多实验横向对比，可自动遍历多级目录提取 `global_metrics_denorm.json`，生成 Markdown 排行榜表格与 CSV 矩阵。
+- [test_ko_perturbation_sensitivity.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/test_ko_perturbation_sensitivity.py)：基因敲除参数微扰敏感度分析器，探测模型在敲除边界条件（如连续 $[0, 10^{-4}]$ 微扰）下的梯度平滑性与鲁棒性。
+- [evaluate_sampling_efficacy.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/evaluate_sampling_efficacy.py)：定量评测采样策略在高维参数空间中的空间覆盖率（Space-Filling Index）、均匀度与多样性。
+
+#### 2. 数据集高维几何诊断与 Badcase 根因归因库 (`scripts/analysis/dataset_diagnosis/`)
+- [analyze_pure_random_badcases.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/dataset_diagnosis/analyze_pure_random_badcases.py)：纯随机训练集泛化至 126 突变体的 Badcase 详细逐通道时序对比与根因诊断。
+- [analyze_massv2_badcase_attribution.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/dataset_diagnosis/analyze_massv2_badcase_attribution.py)：MassV2 等大样本数据集的坏例数据归因分析（分析特征邻域、支撑集稀疏度与相空间流速）。
+- [deep_dataset_diagnosis.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/dataset_diagnosis/deep_dataset_diagnosis.py)：深入诊断训练集参数流形覆盖与支撑集完整度。
+- [deep_genotype_distribution_analysis.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/dataset_diagnosis/deep_genotype_distribution_analysis.py)：对比合成数据集与 126 真实实验突变体的基因型频率、敲除模式重叠率与 Sim-to-Real 覆盖盲区。
+- [generate_multimetric_top20_badcases.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/dataset_diagnosis/generate_multimetric_top20_badcases.py)：多指标综合打分生成 Top-20 最具代表性的真实突变体坏例，并输出高分辨时序曲线与误差热图。
+
+#### 3. 评测与突变体验证工具库 (`scripts/eval/`)
+- [eval_ensemble_benchmark.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/eval/eval_ensemble_benchmark.py)：多模型集成（Ensemble）推断与评测，对比单模型 vs 集成在 126 突变体上的方差缩减与鲁棒性提升。
+
+#### 4. 自动化单元测试与算子验证 (`tests/`)
+- [test_bio_refiner_causal.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/tests/test_bio_refiner_causal.py) 等：涵盖因果掩码单向可达性验证、维度对齐校验、前向与反向梯度流通测试。
+
+#### 5. AI 临时探针与调试沙盒 (`scratch/` & `scratch/probes/`)
+- 当 AI Agent 需要针对特定模块编写单次排查脚本时，统一写入 `scratch/probes/`，支持快速验证，不会污染版本控制。
+
 ---
 
 ## 二、科学背景与预测任务定义

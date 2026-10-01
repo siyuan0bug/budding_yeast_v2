@@ -27,15 +27,15 @@ plt.rcParams['axes.unicode_minus'] = False
 sns.set_theme(style='whitegrid')
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.dirname(CURRENT_DIR)
-V2_ROOT = os.path.dirname(DATA_DIR)
+V2_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 PROJECT_ROOT = os.path.dirname(V2_ROOT)
+DATA_DIR = os.path.join(V2_ROOT, 'data')
 
-for p in [PROJECT_ROOT, V2_ROOT]:
+for p in [PROJECT_ROOT, V2_ROOT, DATA_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-OUTPUT_DIR = CURRENT_DIR
+OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'multimetric_top20_badcases')
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
@@ -54,7 +54,14 @@ def format_table(df_sub, metric_col, metric_label, ascending=True):
     return "\n".join(lines)
 
 def main():
-    csv_path = os.path.join(OUTPUT_DIR, 'massv2_biom_refiner_badcase_train_attribution.csv')
+    candidate_csvs = [
+        os.path.join(V2_ROOT, 'data', 'dataset_analysis', 'massv2_biom_refiner_badcase_train_attribution.csv'),
+        os.path.join(V2_ROOT, 'archive', 'dataset_analysis_reports', 'massv2_biom_refiner_badcase_train_attribution.csv'),
+        os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'massv2_badcase_attribution', 'massv2_biom_refiner_badcase_train_attribution.csv'),
+    ]
+    csv_path = next((c for c in candidate_csvs if os.path.exists(c)), None)
+    if not csv_path:
+        raise FileNotFoundError(f"Attribution CSV not found in candidate paths: {candidate_csvs}")
     df = pd.read_csv(csv_path)
 
     # 1. Generate Individual Top-20 CSVs

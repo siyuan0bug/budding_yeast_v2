@@ -34,8 +34,15 @@ plt.rcParams['axes.unicode_minus'] = False
 sns.set_theme(style='whitegrid')
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
-OUTPUT_DIR = CURRENT_DIR
+V2_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
+PROJECT_ROOT = os.path.dirname(V2_ROOT)
+DATA_DIR = os.path.join(V2_ROOT, 'data')
+
+for p in [PROJECT_ROOT, V2_ROOT, DATA_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'deep_dataset_diagnosis')
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 

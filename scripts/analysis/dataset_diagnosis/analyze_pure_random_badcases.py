@@ -26,14 +26,16 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_EXPERIMENTS = ROOT / "experiments/mutant_aware_pure_random_100000_210m_500s"
 DEFAULT_DATASET = Path("/home/users/zsy/mydata/budding_yeast/mutant_aware_pure_random_100000_210m_500s.npz")
 DEFAULT_REFERENCE = (
     DEFAULT_EXPERIMENTS
     / "biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv"
 )
-DEFAULT_COVERAGE = ROOT / "data/dataset_analysis/real_mutants_synthetic_coverage.csv"
+_legacy_cov = ROOT / "data/dataset_analysis/real_mutants_synthetic_coverage.csv"
+_archived_cov = ROOT / "archive/dataset_analysis_reports/real_mutants_synthetic_coverage.csv"
+DEFAULT_COVERAGE = _legacy_cov if _legacy_cov.exists() else _archived_cov
 
 
 def mutant_id(name: str) -> str:
@@ -92,7 +94,7 @@ def main() -> None:
     parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE,
                         help="The one run used for the primary bad-case decision.")
     parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE)
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "data/dataset_analysis/pure_random_badcase_diagnosis")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "scripts/analysis/outputs/pure_random_badcase_diagnosis")
     parser.add_argument("--mae", type=float, default=0.15)
     parser.add_argument("--rel-l2", type=float, default=0.25)
     parser.add_argument("--corr", type=float, default=0.75)

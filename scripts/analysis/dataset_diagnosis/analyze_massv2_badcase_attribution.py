@@ -38,15 +38,15 @@ plt.rcParams['axes.unicode_minus'] = False
 sns.set_theme(style='whitegrid')
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.dirname(CURRENT_DIR)
-V2_ROOT = os.path.dirname(DATA_DIR)
+V2_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 PROJECT_ROOT = os.path.dirname(V2_ROOT)
+DATA_DIR = os.path.join(V2_ROOT, 'data')
 
-for p in [PROJECT_ROOT, V2_ROOT]:
+for p in [PROJECT_ROOT, V2_ROOT, DATA_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-OUTPUT_DIR = CURRENT_DIR
+OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'massv2_badcase_attribution')
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
