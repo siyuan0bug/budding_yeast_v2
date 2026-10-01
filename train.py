@@ -28,6 +28,7 @@ import wandb
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.utils.curve_logger import TrainingCurveCallback, extract_and_plot_from_log
 
 VARIABLE_NAMES = [
     "MASS", "CLN2", "CLB2", "CLB5", "SIC1", "CDC6", "C2", "C5", "F2", "F5",
@@ -128,8 +129,8 @@ class EpochSummaryCallback(Callback):
         train_loss = float(m.get('train_loss', float('nan')))
         val_synth = float(m.get('val_loss_synth', float('nan')))
         test_synth = float(m.get('test_loss_synth', float('nan')))
-        test_real = float(m.get('test_loss_real', float('nan')))
-        test_real_denorm = float(m.get('test_loss_real_denorm', float('nan')))
+        test_real_mse = float(m.get('test_loss_real', float('nan')))
+        test_real_denorm = float(m.get('test_real_denorm_rel_l2', m.get('test_loss_real_denorm', float('nan'))))
         lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0.0
         elapsed = time.time() - self.epoch_start_time
         gn_str = ""
@@ -137,8 +138,8 @@ class EpochSummaryCallback(Callback):
             gn_str = f" | GN[clb2={float(m['train_w_clb2']):.2f}, sic1={float(m['train_w_sic1']):.2f}, max={float(m.get('train_w_max', 0.0)):.2f}]"
         print(f"[Epoch {epoch+1:03d}/{trainer.max_epochs:03d}] "
               f"train_loss={train_loss:.6f} | val_synth={val_synth:.6f} | "
-              f"test_synth={test_synth:.6f} | test_real={test_real:.6f} | "
-              f"test_real_denorm={test_real_denorm:.6f}"
+              f"test_synth={test_synth:.6f} | test_real_mse={test_real_mse:.6f} | "
+              f"test_real_denorm_rel_l2={test_real_denorm:.4f}"
               f"{gn_str} | "
               f"lr={lr:.2e} | {elapsed:.1f}s", flush=True)
 
@@ -212,6 +213,8 @@ def main():
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument('--no_wandb', action='store_true', default=False,
                         help='禁用 W&B 上传，仅本地日志')
+    parser.add_argument('--plot_every_n_epochs', type=int, default=10,
+                        help='定期在 W&B 记录代表性样本轨迹图的 Epoch 间隔 (默认 10)')
     
     # 🌟🌟🌟 新增 1：主动学习专属传参 🌟🌟🌟
     parser.add_argument('--al_strategy', type=str, default='none',
@@ -389,7 +392,7 @@ def main():
                          'al4pde_event_entropy', 'al4pde_event',
                          'al4pde_fisher_oed', 'al4pde_foed')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
-    visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=10, seed=args.seed)
+    visualizer = SimToRealVisualizerCallback(plot_every_n_epochs=args.plot_every_n_epochs, seed=args.seed)
 
     if args.al_strategy in AL4PDE_STRATEGIES:
         # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
@@ -433,10 +436,11 @@ def main():
             n_train = len(datamodule.train_dataset_synth)
             print(f"\n===== [al4pde v2.3] AL 轮 {r + 1}/{NUM_AL_ROUNDS} | 当前训练集: {n_train} =====")
             model = build_fresh_model()  # 冷启动: 全新随机初始化 + 全新余弦周期
+            curve_callback = TrainingCurveCallback(save_dir=actual_exp_dir, exp_name=f"{run_name}_round{r+1}", loss_type=args.loss_type, model_name=args.model)
             trainer = pl.Trainer(
                 max_epochs=args.max_epochs,
                 logger=logger,
-                callbacks=[lr_monitor, visualizer, EpochSummaryCallback()],
+                callbacks=[lr_monitor, visualizer, EpochSummaryCallback(), curve_callback],
                 accelerator=args.device if args.device != 'cpu' else 'auto',
                 devices=args.devices,
                 gradient_clip_val=1.0,
@@ -524,7 +528,8 @@ def main():
             mode='min',
             save_top_k=1,
         )
-        callbacks = [checkpoint_callback, lr_monitor, visualizer, EpochSummaryCallback()]
+        curve_callback = TrainingCurveCallback(save_dir=actual_exp_dir, exp_name=run_name, loss_type=args.loss_type, model_name=args.model)
+        callbacks = [checkpoint_callback, lr_monitor, visualizer, EpochSummaryCallback(), curve_callback]
 
         if args.al_strategy != 'none':
             from budding_yeast_v2.utils.al_callback import ActiveLearningCallback

@@ -697,7 +697,10 @@ class YeastLitModule(pl.LightningModule):
             pred_real = self.denormalize_y(pred)
             target_real = self.denormalize_y(target)
             rel_l2_real = relative_l2_loss(pred_real, target_real, eps=0.1)
-            self.log('test_loss_real_denorm', rel_l2_real, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
+            # 1. 新标准名称 (显式标注反归一化物理空间与相对 L2 误差)
+            self.log('test_real_denorm_rel_l2', rel_l2_real, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
+            # 2. 兼容历史别名
+            self.log('test_loss_real_denorm', rel_l2_real, on_step=False, on_epoch=True, add_dataloader_idx=False, sync_dist=True)
 
         return mse_val
 

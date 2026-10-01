@@ -385,5 +385,20 @@ def main():
         plot_workers=args.plot_workers
     )
 
+    # 自动检查并补充生成 5 合 1 loss 曲线图 (若训练日志存在)
+    try:
+        from budding_yeast_v2.utils.curve_logger import extract_and_plot_from_log
+        exp_root = os.path.dirname(os.path.abspath(args.save_dir)) if os.path.basename(os.path.abspath(args.save_dir)) == 'eval' else args.save_dir
+        candidate_logs = [
+            os.path.join(exp_root, 'train.log'),
+            os.path.join(os.path.dirname(exp_root), 'train.log'),
+        ]
+        for clog in candidate_logs:
+            if os.path.exists(clog):
+                extract_and_plot_from_log(clog, output_dir=args.save_dir)
+                break
+    except Exception as e:
+        print(f"⚠️ [Loss Curves] 自动生成曲线提示: {e}")
+
 if __name__ == '__main__':
     main()

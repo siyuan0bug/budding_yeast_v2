@@ -274,7 +274,7 @@ class YeastDataModule(pl.LightningDataModule):
         self.test_dataset_synth = TensorDataset(X[test_idx_synth], Params_norm[test_idx_synth], Y_norm[test_idx_synth])
         self.test_dataset_real = TensorDataset(X[test_idx_real], Params_norm[test_idx_real], Y_norm[test_idx_real])
 
-        # ======== 4. 基于 Pattern Label 的分层画图样本选取 ========
+        # ======== 4. 基于 Pattern 与 Badcase 靶向监控样本选取 (精简至 14 个核心样本, 零 LHS 标识) ========
         self.fixed_samples_for_plot = {}
         patterns = ['Pattern_A', 'Pattern_B', 'Pattern_C']
         
@@ -285,36 +285,53 @@ class YeastDataModule(pl.LightningDataModule):
                 matched = indices[:n_samples] if len(indices) >= n_samples else indices
             return matched[:n_samples]
 
-        # A. 合成训练集: 每个 Pattern 选 2 个
+        def find_real_sample_by_prefix(indices, prefix):
+            """从真实突变体 indices 中按前缀精确查找样本索引"""
+            for idx in indices:
+                name = str(mutant_names[idx])
+                if name.startswith(prefix) or name.split('_')[0] == prefix.rstrip('_'):
+                    return idx
+            # 备用容错匹配
+            for idx in indices:
+                name = str(mutant_names[idx])
+                if prefix in name:
+                    return idx
+            return None
+
+        # A. 合成训练集: 每个 Pattern 选 1 个 (共 3 个)
         for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(train_idx_synth, p, 2)):
-                self.fixed_samples_for_plot[f'synth_train/{p}_{i}'] = (
+            for idx in find_samples_by_pattern(train_idx_synth, p, 1):
+                self.fixed_samples_for_plot[f'synth_train/{p}'] = (
                     X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
                     Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
                 )
 
-        # B. 合成验证集: 每个 Pattern 选 2 个
+        # B. 合成测试集: 每个 Pattern 选 1 个 (共 3 个)
         for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(val_idx_synth, p, 2)):
-                self.fixed_samples_for_plot[f'synth_val/{p}_{i}'] = (
+            for idx in find_samples_by_pattern(test_idx_synth, p, 1):
+                self.fixed_samples_for_plot[f'synth_test/{p}'] = (
                     X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
                     Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
                 )
 
-        # C. 合成测试集: 每个 Pattern 选 2 个
-        for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(test_idx_synth, p, 2)):
-                self.fixed_samples_for_plot[f'synth_test/{p}_{i}'] = (
-                    X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
-                    Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
+        # C. 真实突变体典型对照样本 (指定 3 个非 WT 高保真样本: #112 mad2Δ, #87 GAL-TEM1, #100 GAL-CDC14)
+        typical_prefixes = ['112_', '87_', '100_']
+        for prefix in typical_prefixes:
+            matched_idx = find_real_sample_by_prefix(test_idx_real, prefix)
+            if matched_idx is not None:
+                self.fixed_samples_for_plot[f'real_typical/{mutant_names[matched_idx]}'] = (
+                    X[matched_idx:matched_idx+1].clone(), Params_norm[matched_idx:matched_idx+1].clone(),
+                    Y_norm[matched_idx:matched_idx+1].clone(), mutant_names[matched_idx], pattern_labels[matched_idx]
                 )
 
-        # D. Real Mutants: 每个 Pattern 选 10 个
-        for p in patterns:
-            for i, idx in enumerate(find_samples_by_pattern(test_idx_real, p, 10)):
-                self.fixed_samples_for_plot[f'real_mutants/{p}_{i}'] = (
-                    X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(), 
-                    Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx]
+        # D. 真实突变体共有核心 Badcase (指定 5 个跨全部实验共有最差样本: #15, #22, #20, #42, #76)
+        badcase_prefixes = ['15_', '22_', '20_', '42_', '76_']
+        for prefix in badcase_prefixes:
+            matched_idx = find_real_sample_by_prefix(test_idx_real, prefix)
+            if matched_idx is not None:
+                self.fixed_samples_for_plot[f'real_badcases/{mutant_names[matched_idx]}'] = (
+                    X[matched_idx:matched_idx+1].clone(), Params_norm[matched_idx:matched_idx+1].clone(),
+                    Y_norm[matched_idx:matched_idx+1].clone(), mutant_names[matched_idx], pattern_labels[matched_idx]
                 )
 
         self._raw_data = raw_data
