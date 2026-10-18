@@ -1,0 +1,21 @@
+{
+  "scope": "exact equality of float32 P and transformed IC; same time grid for every sample",
+  "lower_bound_due_to_normalization_rounding": true,
+  "splits": {
+    "val_synth": {
+      "total": 10001,
+      "identical_input_in_training": 1633,
+      "identical_input_and_full_target_in_training": 1633
+    },
+    "test_synth": {
+      "total": 10001,
+      "identical_input_in_training": 1604,
+      "identical_input_and_full_target_in_training": 1604
+    },
+    "test_real": {
+      "total": 126,
+      "identical_input_in_training": 3,
+      "identical_input_and_full_target_in_training": 3
+    }
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "scope": "post-hoc diagnostic only; never used to select training samples",
+  "git_commit": "24b8799ef6af05031798fb877f8e2697e7505bf4",
+  "dataset": "/home/users/zsy/mydata/budding_yeast/mutant_aware_pure_random_100000_210m_500s.npz",
+  "dataset_size": 5854558523,
+  "reference": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv",
+  "reference_sha256": "6f867e1ab53c489f42fac6475fea0da072c7d02a48aded27533467b303b6272a",
+  "seed": 42,
+  "n_real": 126,
+  "n_synth": 100000,
+  "n_train": 79998,
+  "n_val": 10001,
+  "n_test": 10001,
+  "synthetic_patterns": {
+    "Pattern_C: Exponential-Arrest (==0)": 64547,
+    "Pattern_B: Single-Division (==1)": 29124,
+    "Pattern_A: Multi-Division (>=2)": 6329
+  },
+  "real_patterns": {
+    "Pattern_C: Exponential-Arrest (==0)": 58,
+    "Pattern_B: Single-Division (==1)": 47,
+    "Pattern_A: Multi-Division (>=2)": 21
+  },
+  "parameter_duplicates": {
+    "synthetic_unique_parameter_vectors": 85061,
+    "validation_parameter_matches_training": 1633,
+    "test_parameter_matches_training": 1604,
+    "duplicate_scope": "parameter vectors only; equality of initial states must also be checked"
+  },
+  "reference_mse_top2_fraction": 0.7070056526569944,
+  "attractor_ic_probe": {
+    "wrong_initial_channels": 38,
+    "expected_first_six": [
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0
+    ],
+    "actual_first_six": [
+      1.0,
+      0.0,
+      2.0,
+      0.0,
+      3.0,
+      0.0
+    ]
+  },
+  "ori_consistency_probe": {
+    "scope": "post-hoc equation-consistency probe; oracle control is not a deployable model",
+    "original_mean_ori_mse": 37.09948141206161,
+    "predicted_driver_mean_ori_mse": 35.4675884270959,
+    "oracle_control_mean_ori_mse": 0.0001103113908337177,
+    "mutants_improved": 85
+  },
+  "replays": [
+    {
+      "checkpoint": "experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/checkpoints/best-epoch=91-val_loss_lhs=0.0348.ckpt",
+      "checkpoint_sha256": "028a2eee406d0f50cd3a640a513c0235e9bb9f609ddf79832e7704988aef4db3",
+      "config": "experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/config.json",
+      "norm": "log1p",
+      "strict_model_state_load": true,
+      "max_abs_difference_from_saved_metrics": {
+        "MAE": 0.0009345114231109619,
+        "MSE": 0.06893157958984375,
+        "Relative_L2": 0.0001938529312610765,
+        "Correlation": 0.00033658742904663086
+      },
+      "pooled_metrics": {
+        "Relative L2": 0.11974811553955078,
+        "Correlation": 0.9824914336204529,
+        "MAE": 0.05685078352689743,
+        "MSE": 1.0025317668914795
+      },
+      "coarse_pooled_metrics": {
+        "Relative L2": 0.14135505259037018,
+        "Correlation": 0.9769549369812012,
+        "MAE": 0.08968936651945114,
+        "MSE": 2.344341516494751
+      },
+      "refiner_scale_tanh_gamma": 0.019058139994740486,
+      "macro_metrics": {
+        "MAE": 0.056850779022733194,
+        "MSE": 1.002531608004141,
+        "Relative_L2": 0.07412615134417715,
+        "Correlation": 0.8605136705769433
+      }
+    },
+    {
+      "checkpoint": "experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/checkpoints/best-epoch=99-val_loss_lhs=0.0351.ckpt",
+      "checkpoint_sha256": "2c531f8d3fa682b75337b2e6452c30b7ef07922c7db313fc08cecf721a2a08fd",
+      "config": "experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/config.json",
+      "norm": "log1p",
+      "strict_model_state_load": true,
+      "max_abs_difference_from_saved_metrics": {
+        "MAE": 0.0003953874111176092,
+        "MSE": 0.109130859375,
+        "Relative_L2": 0.0005946159362792969,
+        "Correlation": 0.0002472400665283203
+      },
+      "pooled_metrics": {
+        "Relative L2": 0.1518075168132782,
+        "Correlation": 0.9722781777381897,
+        "MAE": 0.08702369779348373,
+        "MSE": 5.183859825134277
+      },
+      "coarse_pooled_metrics": {
+        "Relative L2": 0.1549447923898697,
+        "Correlation": 0.972383439540863,
+        "MAE": 0.09996944665908813,
+        "MSE": 5.666841983795166
+      },
+      "refiner_scale_tanh_gamma": 0.1734306961297989,
+      "macro_metrics": {
+        "MAE": 0.08702370608668952,
+        "MSE": 5.183859603276009,
+        "Relative_L2": 0.14269869843320476,
+        "Correlation": 0.846331350505352
+      }
+    }
+  ]
+}

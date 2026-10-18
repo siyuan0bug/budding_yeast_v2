@@ -1,0 +1,169 @@
+{
+  "scope": "diagnostic only; production training and sampling code unchanged",
+  "source": {
+    "checkpoint": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/checkpoints/best-epoch=91-val_loss_lhs=0.0348.ckpt",
+    "config": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/config.json",
+    "recorded_commit": "64f2608",
+    "checkpoint_loss_type": "triple_dynamic",
+    "checkpoint_epoch": 91,
+    "normalization_in_config": "log1p",
+    "loss_class_ast_equal_except_kwargs": {
+      "RelativeL2Loss": true,
+      "HybridMSERelLoss": true,
+      "TripleDynamicLoss": true
+    },
+    "checkpoint_callbacks": [
+      {
+        "monitor": "val_loss_lhs",
+        "best_score": 0.0348251610994339,
+        "best_model_path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/checkpoints/best-epoch=91-val_loss_lhs=0.0348.ckpt"
+      }
+    ],
+    "architecture_contract": {
+      "strict_model_state_load": true,
+      "coarse_model_class": "BioMechPathwayOnly",
+      "coarse_use_event": false,
+      "coarse_event_trigger_is_none": true,
+      "coarse_use_titration": false,
+      "coarse_use_pathway": true,
+      "all_model_weights_finite": true,
+      "graph_contract": {
+        "checkpoint_graph_bias_offdiagonal_nonzeros": 0,
+        "checkpoint_graph_bias_identity_max_difference": 0.0,
+        "configured_explicit_adj_matrix_path": null,
+        "default_relative_path": "budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy",
+        "default_path_exists_from_repo_root": false,
+        "actual_repo_graph": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy",
+        "actual_graph_offdiagonal_nonzeros": 218,
+        "note": "Identity structural bias does not remove learned dense QK attention; no frozen buffer is replaced"
+      }
+    },
+    "note": "This compares recorded-commit code, not an unavailable snapshot of uncommitted training files"
+  },
+  "comparison_sources": [
+    {
+      "checkpoint": "experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/checkpoints/best-epoch=99-val_loss_lhs=0.0351.ckpt",
+      "config": "experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/config.json",
+      "recorded_commit": "64f2608",
+      "checkpoint_loss_type": "hybrid_mse_rel",
+      "checkpoint_epoch": 99,
+      "normalization_in_config": "log1p",
+      "loss_class_ast_equal_except_kwargs": {
+        "RelativeL2Loss": true,
+        "HybridMSERelLoss": true,
+        "TripleDynamicLoss": true
+      },
+      "checkpoint_callbacks": [
+        {
+          "monitor": "val_loss_lhs",
+          "best_score": 0.03509890288114548,
+          "best_model_path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/checkpoints/best-epoch=99-val_loss_lhs=0.0351.ckpt"
+        }
+      ],
+      "architecture_contract": {
+        "strict_model_state_load": true,
+        "coarse_model_class": "BioMechPathwayOnly",
+        "coarse_use_event": false,
+        "coarse_event_trigger_is_none": true,
+        "coarse_use_titration": false,
+        "coarse_use_pathway": true,
+        "all_model_weights_finite": true,
+        "graph_contract": {
+          "checkpoint_graph_bias_offdiagonal_nonzeros": 0,
+          "checkpoint_graph_bias_identity_max_difference": 0.0,
+          "configured_explicit_adj_matrix_path": null,
+          "default_relative_path": "budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy",
+          "default_path_exists_from_repo_root": false,
+          "actual_repo_graph": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy",
+          "actual_graph_offdiagonal_nonzeros": 218,
+          "note": "Identity structural bias does not remove learned dense QK attention; no frozen buffer is replaced"
+        }
+      },
+      "note": "This compares recorded-commit code, not an unavailable snapshot of uncommitted training files"
+    }
+  ],
+  "loss_probes": {
+    "scope": "fixed synthetic fixtures only; no model optimization",
+    "dtw_core_variables": [
+      "MASS",
+      "CLN2",
+      "CLB2",
+      "SIC1",
+      "C5",
+      "F2",
+      "F5",
+      "SIC1P",
+      "C2P"
+    ],
+    "dtw_sampled_times": [
+      0,
+      20,
+      40,
+      60,
+      80,
+      100,
+      120,
+      140,
+      160,
+      180,
+      200,
+      220,
+      240,
+      260,
+      280,
+      300,
+      320,
+      340,
+      360,
+      380,
+      400,
+      420,
+      440,
+      460,
+      480
+    ],
+    "zero_target_self_dtw": -4.015459060668945,
+    "independent_recurrence_value_difference": 0.0,
+    "independent_recurrence_gradient_max_difference": 4.470348358154297e-08,
+    "relative_cap_probe": {
+      "uncapped_value": 44.72135543823242,
+      "capped_value": 10.0,
+      "uncapped_gradient_norm": 10.0,
+      "capped_gradient_norm": 0.0,
+      "note": "Only the relative term is capped, not the total training objective"
+    },
+    "exact_prediction_probe": {
+      "loss": -0.08297749608755112,
+      "autograd_norm": 0.009743766859173775,
+      "fixed_output_step_l2": 0.05,
+      "loss_after_fixed_output_step": -0.08023764193058014,
+      "mse_after_step": 1.2820528638712858e-07,
+      "note": "Nonzero subgradient is not proof of a nonoptimal full objective; this fixed step increases loss"
+    }
+  },
+  "sampling_support": {
+    "synthetic_train_size": 79998,
+    "varying_parameter_coordinates_std_gt_1e-6": 83,
+    "total_parameter_coordinates": 141,
+    "exactly_constant_training_coordinates": 58,
+    "real_mutants_with_constant_coordinate_mismatch_gt_1e-7": 0,
+    "synthetic_pattern_counts": {
+      "Pattern_C: Exponential-Arrest (==0)": 64547,
+      "Pattern_B: Single-Division (==1)": 29124,
+      "Pattern_A: Multi-Division (>=2)": 6329
+    },
+    "real_pattern_counts_for_posthoc_comparison_only": {
+      "Pattern_C: Exponential-Arrest (==0)": 58,
+      "Pattern_B: Single-Division (==1)": 47,
+      "Pattern_A: Multi-Division (>=2)": 21
+    },
+    "note": "Nominal mutation level is not a balanced dynamics class or a count of changed parameter coordinates"
+  },
+  "frozen_tail_support": {
+    "scope": "post-hoc error localization, not evidence that other loss terms ignore this tail",
+    "last_dtw_index": 480,
+    "last_dtw_time_min": 202.00400801603206,
+    "unobserved_tail_points": 19,
+    "mutants": 126
+  }
+}

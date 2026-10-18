@@ -1,0 +1,11 @@
+{
+  "scope": "post-hoc reproduction of dictionary/ODE canonicalization mismatch",
+  "candidate": {
+    "Vi20": 0.01,
+    "Vi20_active": 0.01,
+    "mdt": 90.0
+  },
+  "duplicate_filter_with_alias": false,
+  "duplicate_filter_without_alias": true,
+  "warning": "Do not turn this real-dictionary probe into a blind training-data selector"
+}

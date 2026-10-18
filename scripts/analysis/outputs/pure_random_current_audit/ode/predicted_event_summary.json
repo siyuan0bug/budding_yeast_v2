@@ -1,0 +1,31 @@
+{
+  "scope": "post-hoc threshold-crossing diagnostic, not a trained event classifier",
+  "predictions": "scripts/analysis/outputs/pure_random_current_audit/triple_dynamic_predictions.npz",
+  "mutants": 126,
+  "events": {
+    "1": {
+      "mutants_with_missing_events": 2,
+      "mutants_with_extra_events": 3,
+      "mutants_with_wrong_event_count": 5,
+      "mean_ordinal_time_mae_when_matched": 1.9055061981755785
+    },
+    "2": {
+      "mutants_with_missing_events": 3,
+      "mutants_with_extra_events": 5,
+      "mutants_with_wrong_event_count": 8,
+      "mean_ordinal_time_mae_when_matched": 7.873029314997707
+    },
+    "3": {
+      "mutants_with_missing_events": 3,
+      "mutants_with_extra_events": 3,
+      "mutants_with_wrong_event_count": 6,
+      "mean_ordinal_time_mae_when_matched": 1.37786995577221
+    },
+    "4": {
+      "mutants_with_missing_events": 5,
+      "mutants_with_extra_events": 3,
+      "mutants_with_wrong_event_count": 8,
+      "mean_ordinal_time_mae_when_matched": 1.016196875370978
+    }
+  }
+}

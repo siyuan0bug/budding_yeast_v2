@@ -1,0 +1,73 @@
+{
+  "scope": "post-hoc numerical convergence audit; no training dataset is produced",
+  "dataset": "/home/users/zsy/mydata/budding_yeast/mutant_aware_pure_random_100000_210m_500s.npz",
+  "reference": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv",
+  "tolerances": [
+    0.0001,
+    1e-06,
+    1e-08
+  ],
+  "mutants": 126,
+  "worker_timeout_seconds": 5.0,
+  "future_timeout_seconds": 35.0,
+  "by_tolerance": {
+    "1e-08": {
+      "ok": 126,
+      "pattern_changes": 0,
+      "truncated_horizon": 0,
+      "failed_solver_segments": 0,
+      "mean_mae_vs_stored": 0.00023811899520150486,
+      "max_mae_vs_stored": 0.0016038055749661184,
+      "mean_mae_vs_control": 0.0002381177745680412
+    },
+    "1e-06": {
+      "ok": 126,
+      "pattern_changes": 0,
+      "truncated_horizon": 0,
+      "failed_solver_segments": 0,
+      "mean_mae_vs_stored": 0.00022114604403819957,
+      "max_mae_vs_stored": 0.0014176904133809424,
+      "mean_mae_vs_control": 0.00022114474427629253
+    },
+    "0.0001": {
+      "ok": 126,
+      "pattern_changes": 0,
+      "truncated_horizon": 0,
+      "failed_solver_segments": 0,
+      "mean_mae_vs_stored": 1.8350560847514924e-08,
+      "max_mae_vs_stored": 1.7600378741769594e-07,
+      "mean_mae_vs_control": 0.0
+    }
+  },
+  "predicted_events": {
+    "scope": "post-hoc threshold-crossing diagnostic, not a trained event classifier",
+    "predictions": "scripts/analysis/outputs/pure_random_current_audit/triple_dynamic_predictions.npz",
+    "mutants": 126,
+    "events": {
+      "1": {
+        "mutants_with_missing_events": 2,
+        "mutants_with_extra_events": 3,
+        "mutants_with_wrong_event_count": 5,
+        "mean_ordinal_time_mae_when_matched": 1.9055061981755785
+      },
+      "2": {
+        "mutants_with_missing_events": 3,
+        "mutants_with_extra_events": 5,
+        "mutants_with_wrong_event_count": 8,
+        "mean_ordinal_time_mae_when_matched": 7.873029314997707
+      },
+      "3": {
+        "mutants_with_missing_events": 3,
+        "mutants_with_extra_events": 3,
+        "mutants_with_wrong_event_count": 6,
+        "mean_ordinal_time_mae_when_matched": 1.37786995577221
+      },
+      "4": {
+        "mutants_with_missing_events": 5,
+        "mutants_with_extra_events": 3,
+        "mutants_with_wrong_event_count": 8,
+        "mean_ordinal_time_mae_when_matched": 1.016196875370978
+      }
+    }
+  }
+}

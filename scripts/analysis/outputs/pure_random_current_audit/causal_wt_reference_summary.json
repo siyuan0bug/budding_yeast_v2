@@ -1,0 +1,5 @@
+{
+  "scope": "WT and synthetic normalization statistics only",
+  "physical_wt_reference_max_difference": 0.0,
+  "normalized_wt_minus_physical_reference_l2": 237.35104370117188
+}

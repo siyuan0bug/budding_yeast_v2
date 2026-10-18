@@ -2,6 +2,18 @@
 
 本文档系统介绍 `budding_yeast_v2` 框架中使用的数据集体系、生化多关系先验网络、全量数据归一化方案及其在 126 个真实生物突变体上的消融审计结论。
 
+> **2026-10-18 代码核验**：当前默认 `norm_type=log1p` 实际为
+> `Zscore(log1p(max(Y,0)))` 与参数 P 的线性 Z-score，并非 Min-Max；部分历史表的
+> `standard_zscore` 标签及 MSE 数值有误。原始 hybrid 运行的物理 MSE 为 5.18461。
+> 已确认的统计口径、实际训练集覆盖、AL 测试轨迹门控泄漏和复现限制，详见
+> [当前 bad-case 证据审计](PURE_RANDOM_BADCASE_AUDIT_2026-10-18.md)。
+> 完整输入与完整轨迹检查确认：合成 val/test 各有 1,633/1,604 条与 train 重合；
+> real 的 78、112、114 号也与 train 完全重合。不能称这批测试点全部 unseen。
+> 全部 126 条 real 轨迹在 rtol=1e-4/1e-6/1e-8 下均求解到 210 min，未发现失败段。
+> L1–L4 虽各有 25k 样本，L4 中多次分裂 Pattern A 只有 503 条，实际 train 中为 399 条；
+> 突变层级均分不等于动力学覆盖均衡。新计数见审计的 `training_contracts/` 输出。
+> 本次诊断不允许基于 real-mutant 规则、参数或轨迹构造训练邻域。
+
 ---
 
 ## 一、数据集体系概览 (Dataset Overview)
@@ -11,7 +23,7 @@
 | 数据集名称 | 样本规模 | 时长与步数 | 动力学参数生成机理 | 核心用途与评估维度 |
 | :--- | :--- | :--- | :--- | :--- |
 | **`REAL_MUTANTS`** | **126** | $210\text{ min}$, $500\text{ steps}$ | 严格对应 Chen et al. (2004) 真实酵母表型实验 | **金标准终极评估基准**（不可参与训练） |
-| **`mutant_aware_pure_random_100000_210m_500s.npz`** | $100,126$ | $210\text{ min}$, $500\text{ steps}$ | 纯随机均匀参数空间采样 + 126 突变体镜像扰动 | 当前全模型基准评测统一基线数据集 |
+| **`mutant_aware_pure_random_100000_210m_500s.npz`** | $100,126$ | $210\text{ min}$, $500\text{ steps}$ | 100k 基因/模式组合采样、模式相关幅度分布；另附 126 条测试规则的 ODE 轨迹，并非 126 突变体镜像扰动 | 当前全模型基准评测统一基线数据集；独立性限制见顶部审计 |
 | **`mass_100000_dataset_210min_500steps_dual_labels.npz`** | $100,126$ | $210\text{ min}$, $500\text{ steps}$ | 质量反馈自适应参数生成 + 表型双标签 | 经典双标签对比基线数据集 |
 | **`pool_1m_pure_random.npz`** | **1,000,000** | 仅参数 ($141$ 维) | 宽域非线性参数均匀随机采样（无时序） | **AL4PDE 主动学习百万候选池** |
 | **`bams_100000_210m_500s.npz`** | $100,000$ | $210\text{ min}$, $500\text{ steps}$ | 盲态流形相空间多样性采样 (BAMS) | 流形相空间表征消融 |
@@ -24,7 +36,7 @@
 
 | 引擎脚本 | 核心算法与采样机理 | 关键参数与功能定位 |
 |:---|:---|:---|
-| [generate_pure_random_dataset.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/generate_pure_random_dataset.py) | 141 维超立方体对数均匀连续采样 | 大规模基础纯随机基准集生成 |
+| [generate_pure_random_dataset.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/generate_pure_random_dataset.py) | 采样 1–4 个基因及可用模式，按模式修改 WT 参数；不是 141 维独立连续采样 | 大规模基础纯随机基准集生成；real 依赖与去重限制见审计 |
 | [generate_1m_pure_random_pool.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/generate_1m_pure_random_pool.py) | 100 万未仿真纯参数点 ($P, X_0$) 生成 | **AL4PDE 百万免预仿真候选池**（无 $Y$ 输出，防泄露） |
 | [bams_dataset_generator.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/bams_dataset_generator.py) | 盲态流形相空间多样性 (BAMS) 采样 | 相空间测度平衡采样 |
 | [gibbs_boltzmann_sampler.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/gibbs_boltzmann_sampler.py) | 基于能量梯度的 MCMC 吉布斯采样 | 鞍点与相变边缘参数富集 |

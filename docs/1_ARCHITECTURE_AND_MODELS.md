@@ -3,6 +3,14 @@
 > **版本**：v3.0 (2026-10)  
 > **核心定位**：出芽酵母细胞周期动力学代理模型的核心架构设计与模型全景字典。系统基于 **PyTorch Lightning** 框架，涵盖 40+ 经典/前沿基线（Baselines）与 30+ 专为细胞周期系统生物学定制的原创神经算子（Ours）。
 
+> **2026-10-18 checkpoint 核验**：参考 `BioRefinerPlus` 的粗预测是
+> `BioMechPathwayOnly`，未启用 NeuralEventTrigger；两个主力 checkpoint 的
+> `graph_bias` 均为单位矩阵，未载入预期的 218 条跨变量图连接。
+> 默认图路径从仓库根目录解析失败会静默回退。仍有可学习的稠密跨变量注意力，
+> 不能把此发现误读为完全没有跨变量建模。Attractor/CausalReach 的 IC 布局与
+> WT 表示空间缺陷及复现见 [当前证据审计](PURE_RANDOM_BADCASE_AUDIT_2026-10-18.md)。
+> 当前未修改模型或验证修复后的重训效果。
+
 ---
 
 ## 目录
@@ -167,8 +175,8 @@ def forward_ic_time(self, ic: torch.Tensor, params: torch.Tensor) -> torch.Tenso
 
 ### 3.1 BioRefiner 进化谱系
 1. **`BioRefinerPlus` (`biom_refiner_plus`, [models/ours/bio_refiner_plus.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/models/ours/bio_refiner_plus.py))**：
-   - **核心机制**：采用两阶段骨干网络——第一阶段通过参数感知超网络生成全局宏观包络；第二阶段通过**多关系生物图卷积（BioHeteroGraphConv）**与**通量门控细化器（FluxGateRefiner）**逐通道预测局部生化反应微调。
-   - **实测表现**：在 126 真实酵母突变体上取得 Real Rel L2 = **0.1518**，Real Corr = **0.9723**，断层领先所有基线。
+   - **实际机制**：Stage 1 为 `BioMechPathwayOnly`（谱/时域特征与可学习旁路路由）；Stage 2 为 `ModularStiffRefiner`（导数/曲率特征、时间金字塔和 `StoichiometricGraphAttention`）。动态多关系通量图属于其他显式派生模型，不能混称。
+   - **冻结结果**：hybrid 的 pooled Rel L2/Corr 为 **0.1518/0.9723**；triple_dynamic 的逐 mutant 平均为 **0.0741/0.8605**。口径不可混用，不能由这两项单独断言跨模型最优；详见当前审计。
 2. **`BioRefinerAttractor` & `BioRefinerAttractorPlus` ([models/ours/bio_refiner_attractor_plus.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/models/ours/bio_refiner_attractor_plus.py))**：
    - **攻关目标**：彻底解决不可逆阻滞突变体（Arrested Mutants）在晚期出现的 17 次虚假高频波浪伪振荡。
    - **数学原理**：在网络尾部引入非线性阻尼吸引子流形映射：

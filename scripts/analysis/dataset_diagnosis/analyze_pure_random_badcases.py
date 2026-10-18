@@ -18,6 +18,7 @@ without changing the scientific decision rule.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -33,9 +34,9 @@ DEFAULT_REFERENCE = (
     DEFAULT_EXPERIMENTS
     / "biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv"
 )
-_legacy_cov = ROOT / "data/dataset_analysis/real_mutants_synthetic_coverage.csv"
-_archived_cov = ROOT / "archive/dataset_analysis_reports/real_mutants_synthetic_coverage.csv"
-DEFAULT_COVERAGE = _legacy_cov if _legacy_cov.exists() else _archived_cov
+# Archived coverage tables were generated from MASS, not this pure-random NPZ.
+# Never silently join them by a shared numeric mutant ID.
+DEFAULT_COVERAGE = None
 
 
 def mutant_id(name: str) -> str:
@@ -51,12 +52,18 @@ def choose_one_run(paths: list[Path]) -> Path:
     and, within it, the shortest path.  The reference run is reported separately.
     """
     normal = [p for p in paths if "asinh_" not in str(p) and "旧版本" not in str(p)]
-    return sorted(normal or paths, key=lambda p: (len(str(p)), str(p)))[0]
+    return sorted(normal or paths, key=lambda p: (
+        "seed_42" not in p.parts, "hybrid_mse_rel_none" not in p.parts,
+        len(str(p)), str(p),
+    ))[0]
 
 
 def collect_model_metrics(experiments: Path) -> pd.DataFrame:
     records: list[pd.DataFrame] = []
+    seen_results = {}
     for model_dir in sorted(p for p in experiments.iterdir() if p.is_dir()):
+        if model_dir.name.startswith("旧版本"):
+            continue
         candidates = list(model_dir.glob("**/eval/per_mutant_metrics.csv"))
         if not candidates:
             continue
@@ -65,6 +72,14 @@ def collect_model_metrics(experiments: Path) -> pd.DataFrame:
         needed = {"Mutant", "MAE", "MSE", "Relative_L2", "Correlation"}
         if not needed.issubset(frame.columns):
             continue
+        signature = hashlib.sha256(
+            frame.sort_values("Mutant")[["Mutant", "MAE", "MSE", "Relative_L2", "Correlation"]]
+            .to_csv(index=False, float_format="%.12g").encode()
+        ).hexdigest()
+        if signature in seen_results:
+            print(f"Identical result excluded from cross-model counts: {model_dir.name} = {seen_results[signature]}")
+            continue
+        seen_results[signature] = model_dir.name
         frame = frame[[c for c in ["Mutant", "Pattern", "MAE", "MSE", "Relative_L2", "Correlation"] if c in frame]]
         frame["model"] = model_dir.name
         frame["metrics_path"] = str(path)
@@ -74,9 +89,11 @@ def collect_model_metrics(experiments: Path) -> pd.DataFrame:
     return pd.concat(records, ignore_index=True)
 
 
-def load_coverage(path: Path) -> pd.DataFrame:
-    if not path.exists():
+def load_coverage(path: Path | None) -> pd.DataFrame:
+    if path is None:
         return pd.DataFrame(columns=["id"])
+    if not path.exists():
+        raise FileNotFoundError(path)
     coverage = pd.read_csv(path)
     name_col = "Mutant_Name" if "Mutant_Name" in coverage else "Mutant"
     coverage["id"] = coverage[name_col].map(mutant_id)
@@ -93,9 +110,11 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE,
                         help="The one run used for the primary bad-case decision.")
-    parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE)
+    parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE,
+                        help="Optional post-hoc table from this exact NPZ; no archived table is used by default.")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "scripts/analysis/outputs/pure_random_badcase_diagnosis")
     parser.add_argument("--mae", type=float, default=0.15)
+    parser.add_argument("--mse", type=float, default=1.0)
     parser.add_argument("--rel-l2", type=float, default=0.25)
     parser.add_argument("--corr", type=float, default=0.75)
     args = parser.parse_args()
@@ -123,9 +142,13 @@ def main() -> None:
     all_models = collect_model_metrics(args.experiments)
     all_models["id"] = all_models["Mutant"].map(mutant_id)
     all_models["bad_mae"] = all_models["MAE"] > args.mae
+    all_models["bad_mse"] = all_models["MSE"] > args.mse
     all_models["bad_rel_l2"] = all_models["Relative_L2"] > args.rel_l2
     all_models["bad_corr"] = all_models["Correlation"] < args.corr
-    all_models["bad_any"] = all_models[["bad_mae", "bad_rel_l2", "bad_corr"]].any(axis=1)
+    all_models["bad_any"] = all_models[["bad_mae", "bad_mse", "bad_rel_l2", "bad_corr"]].any(axis=1)
+    all_models.groupby("model")[['MAE', 'MSE', 'Relative_L2', 'Correlation']].mean().to_csv(
+        args.output_dir / "model_macro_metrics.csv"
+    )
 
     cross = all_models.groupby("id", as_index=False).agg(
         models=("model", "nunique"),
@@ -141,9 +164,10 @@ def main() -> None:
         raise ValueError(f"Reference metrics missing required columns: {args.reference}")
     reference["id"] = reference["Mutant"].map(mutant_id)
     reference["bad_mae"] = reference["MAE"] > args.mae
+    reference["bad_mse"] = reference["MSE"] > args.mse
     reference["bad_rel_l2"] = reference["Relative_L2"] > args.rel_l2
     reference["bad_corr"] = reference["Correlation"] < args.corr
-    reference["bad_metric_count"] = reference[["bad_mae", "bad_rel_l2", "bad_corr"]].sum(axis=1)
+    reference["bad_metric_count"] = reference[["bad_mae", "bad_mse", "bad_rel_l2", "bad_corr"]].sum(axis=1)
     reference["bad_any"] = reference["bad_metric_count"] > 0
 
     coverage = load_coverage(args.coverage)
@@ -152,7 +176,7 @@ def main() -> None:
     report["coverage_risk"] = np.select(
         [report.get("Synth_Exact_Count", pd.Series(np.nan, index=report.index)).eq(0),
          report.get("Synth_Exact_Count", pd.Series(np.nan, index=report.index)).lt(10)],
-        ["zero exact genotype", "<10 exact genotypes"], default="not flagged",
+        ["zero exact genotype", "<10 exact genotypes"], default="not evaluated" if coverage.empty else "not flagged",
     )
     report = report.sort_values(
         ["persistent_cross_model_badcase", "bad_metric_count", "fraction_models_bad", "MAE"],
@@ -170,7 +194,8 @@ def main() -> None:
         f"Reference run: `{args.reference}`  ",
         f"Models included: {all_models['model'].nunique()}; real mutants: {len(report)}.",
         "",
-        f"Primary bad-case rule: MAE > {args.mae}, Relative L2 > {args.rel_l2}, or correlation < {args.corr}.",
+        f"Primary diagnostic rule: MAE > {args.mae}, MSE > {args.mse}, Relative L2 > {args.rel_l2}, or correlation < {args.corr}.",
+        "These are descriptive thresholds, not training or model-selection criteria. Identical result files are counted once.",
         f" It flags **{len(primary)}** mutants; **{len(persistent)}** are bad in at least half of the evaluated architectures.",
         "",
         "## Persistent joint bad cases",
@@ -186,8 +211,8 @@ def main() -> None:
         )
     markdown.extend([
         "",
-        "`Synth_Exact_Count` comes from the supplied coverage file; it is evidence about sampling coverage, not a model metric. "
-        "Recreate that table whenever the dataset generator or random seed changes.",
+        "Coverage is not imported from archived MASS reports. If `--coverage` is supplied, the caller must verify that it was generated from this exact NPZ. "
+        "Use `audit_pure_random_evidence.py` for direct train-split geometry evidence without a genotype-name parser.",
     ])
     (args.output_dir / "REPORT.md").write_text("\n".join(markdown) + "\n", encoding="utf-8")
     print(f"Wrote {args.output_dir / 'per_real_mutant_joint_diagnosis.csv'}")
