@@ -17,7 +17,10 @@ import torch.nn.functional as F
 import numpy as np
 
 from .bio_mechanistic_operator import BioMechPathwayOnly
-from .bio_hetero_causal_graph import BioMutationFluxEncoder, load_multirelational_graphs
+from .bio_hetero_causal_graph import BioMutationFluxEncoder
+from .graph_contracts import resolve_variable_graph, row_normalized_support, attach_variable_graph
+from .graph_contracts import fixed_graph_is_legacy
+from .relation_graph_contracts import register_relation_graph
 
 
 # =========================================================================
@@ -89,7 +92,7 @@ class TemporalPyramidBlock(nn.Module):
 class StoichiometricGraphAttention(nn.Module):
     """
     Graph-Guided Cross-Variable Attention across 39 Biochemical Species.
-    Injects yeast signed reaction adjacency topology as a structural bias in attention weights.
+    Injects unsigned ODE/event potential support as a soft attention affinity.
     """
     def __init__(self, channels=128, num_vars=39, head_dim=16, adj_matrix=None):
         super().__init__()
@@ -101,18 +104,9 @@ class StoichiometricGraphAttention(nn.Module):
         self.k_proj = nn.Linear(head_dim, head_dim)
         self.v_proj = nn.Linear(head_dim, head_dim)
 
-        if adj_matrix is None:
-            adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
-            if os.path.exists(adj_path):
-                adj_matrix = np.load(adj_path)
-            else:
-                adj_matrix = np.eye(num_vars)
-
-        adj_tensor = torch.tensor(adj_matrix, dtype=torch.float32).abs()
-        # Add self-loop and normalize
-        adj_tensor = adj_tensor + torch.eye(num_vars)
-        adj_norm = adj_tensor / adj_tensor.sum(dim=-1, keepdim=True).clamp(min=1.0)
-        self.register_buffer('graph_bias', adj_norm)
+        graph = resolve_variable_graph(adj_matrix, num_vars)
+        self.register_buffer('graph_bias', row_normalized_support(graph))
+        attach_variable_graph(self, graph, ('graph_bias',))
 
     def forward(self, h):
         # h: (B, channels, T)
@@ -135,21 +129,12 @@ class StoichiometricGraphAttention(nn.Module):
 class DynamicReactionFluxGraphAttention(StoichiometricGraphAttention):
     """
     Reaction Flux Guided Cross-Variable Attention across 39 Biochemical Species.
-    Dynamically modulates the 6 relational graphs (Complex, Kinase, Phosphatase,
-    Transcription, Ubiquitination, GK-Switch) based on sample-specific kinetic mutation fluxes.
+    Dynamically weights six ODE-term relation overlays and an untyped route.
+    These learned modulation weights are not measured physical reaction fluxes.
     """
     def __init__(self, channels=128, num_vars=39, head_dim=16, adj_matrix=None):
         super().__init__(channels=channels, num_vars=num_vars, head_dim=head_dim, adj_matrix=adj_matrix)
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        npz_path = os.path.join(current_dir, "../../data/yeast_multirelational_graphs.npz")
-        if os.path.exists(npz_path):
-            data = np.load(npz_path)
-            rel_graphs = torch.from_numpy(data['rel_graphs']).float()  # (6, 39, 39)
-        else:
-            rel_graphs = torch.zeros(6, 39, 39)
-            for r in range(6):
-                rel_graphs[r] = torch.eye(39)
-        self.register_buffer('rel_graphs', rel_graphs)
+        register_relation_graph(self, num_vars, variable_graph=adj_matrix)
 
     def forward(self, h, flux_w=None):
         if flux_w is None:
@@ -169,7 +154,10 @@ class DynamicReactionFluxGraphAttention(StoichiometricGraphAttention):
 
         # flux_w: (B, 6), rel_graphs: (6, 39, 39)
         dynamic_adj = torch.einsum('br,rvw->bvw', flux_w, self.rel_graphs.to(h.device))  # (B, 39, 39)
-        dynamic_adj = dynamic_adj + torch.eye(self.num_vars, device=h.device).unsqueeze(0)
+        dynamic_adj = dynamic_adj + flux_w.mean(-1)[:, None, None] * self.untyped_graph
+        eye = torch.eye(self.num_vars, device=h.device, dtype=dynamic_adj.dtype).unsqueeze(0)
+        # Preserve the historical +I convention only in explicit replay mode.
+        dynamic_adj = dynamic_adj + eye if fixed_graph_is_legacy(self, 'relations') else dynamic_adj * (1 - eye) + eye
         dynamic_norm = dynamic_adj / dynamic_adj.sum(dim=-1, keepdim=True).clamp(min=1.0)
 
         attn = F.softmax(attn_raw + 0.5 * dynamic_norm.unsqueeze(1), dim=-1)  # (B, T, 39, 39)
@@ -440,7 +428,7 @@ class BioRefinerGraphFlux(BioRefinerBase):
         self.register_buffer('gene_bipartite', gene_bipartite)
 
         self.stage2_refiner.graph_attn = DynamicReactionFluxGraphAttention(
-            channels=width, num_vars=num_vars
+            channels=width, num_vars=num_vars, adj_matrix=kwargs.get('adj_matrix')
         )
         self.flux_proj = nn.Sequential(
             nn.Linear(6 + 39, 64),
@@ -512,7 +500,7 @@ class BioRefinerMechanistic(BioRefinerBase):
         self.register_buffer('gene_bipartite', gene_bipartite)
 
         self.stage2_refiner.graph_attn = DynamicReactionFluxGraphAttention(
-            channels=width, num_vars=num_vars
+            channels=width, num_vars=num_vars, adj_matrix=kwargs.get('adj_matrix')
         )
         self.flux_proj = nn.Sequential(
             nn.Linear(6 + 39, 64),

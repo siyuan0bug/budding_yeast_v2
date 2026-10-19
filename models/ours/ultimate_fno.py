@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .graph_contracts import resolve_variable_graph, attach_variable_graph
 
 
 class SpectralConv1d(nn.Module):
@@ -26,10 +27,12 @@ class SparseTemporalMixer(nn.Module):
     def __init__(self, causal_matrix, cond_dim=43):
         super().__init__()
         self.num_vars = causal_matrix.shape[0]
+        graph = resolve_variable_graph(causal_matrix, self.num_vars)
+        matrix = graph.matrix
+        self.register_buffer('mask', (matrix != 0).float())
+        attach_variable_graph(self, graph, ('mask',))
 
-        self.register_buffer('mask', (causal_matrix != 0).float())
-
-        init_weight = causal_matrix.float() * 0.5 + torch.randn_like(causal_matrix.float()) * 0.05
+        init_weight = matrix * 0.5 + torch.randn_like(matrix) * 0.05
         self.static_weight = nn.Parameter(init_weight * self.mask)
 
         self.attn_net = nn.Sequential(
@@ -65,8 +68,9 @@ class SparseAttnFNOBlock(nn.Module):
 
 
 class UltimateFNO(nn.Module):
-    def __init__(self, causal_matrix, param_dim=42, modes=24):
+    def __init__(self, causal_matrix=None, param_dim=42, modes=24):
         super().__init__()
+        causal_matrix = resolve_variable_graph(causal_matrix, 39 if causal_matrix is None else causal_matrix.shape[0])
         self.num_vars = causal_matrix.shape[0]
         self.cond_dim = param_dim + 1
 

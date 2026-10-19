@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bio-MultiRelational Biochemical Graph Builder
-=============================================
-Strictly extracts the 6 biochemical relational graphs, 4 functional circuit motifs,
-and 27-gene bipartite incidence matrix from Chen (2004) Table 1 & Appendix B.
+LEGACY hand-written biochemical priors (historical-model compatibility only).
 
-Output:
-  budding_yeast_v2/data/yeast_multirelational_graphs.npz
+These six relations are NOT the complete direct dependency graph of the current
+mutant_aware.py ODE. Functions remain numerically unchanged for historical
+exports and circuit/module metadata. Production relation topology now comes
+from data/yeast_graph.py and data/yeast_relations.py, including HANO.
+Legacy CLI exports require explicit opt-in and a NEW output file; existing graph
+assets cannot be overwritten. Circuit masks and the module/species incidence
+are distinct metadata, not duplicate state-state adjacency matrices.
 """
 
-import os
 import numpy as np
 
 # 39 Biochemical Variable Definitions
@@ -222,26 +223,41 @@ def build_gene_bipartite_incidence():
 
     return B_gene
 
-def main():
+def main(argv=None):
+    import argparse
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--legacy-export', action='store_true',
+                        help='Explicitly export the frozen historical priors, NOT the ODE topology')
+    parser.add_argument('--output', type=Path, help='A NEW .npz file; existing files are never overwritten')
+    args = parser.parse_args(argv)
+    if not args.legacy_export or args.output is None:
+        parser.error('Legacy exports are frozen by default. For source-derived topology use '
+                     'scripts/analysis/dataset_diagnosis/audit_yeast_graph.py; '
+                     'historical reproduction requires --legacy-export --output NEW_FILE.npz')
+    if args.output.suffix.lower() != '.npz':
+        parser.error('--output must be a new .npz file')
+
     rel_graphs = build_relational_graphs()
     circuit_motifs = build_circuit_motifs()
     gene_bipartite = build_gene_bipartite_incidence()
 
-    output_dir = os.path.dirname(os.path.abspath(__file__))
-    out_path = os.path.join(output_dir, "yeast_multirelational_graphs.npz")
-
-    np.savez_compressed(
-        out_path,
-        rel_graphs=rel_graphs,           # (6, 39, 39)
-        circuit_motifs=circuit_motifs,   # (4, 39)
-        gene_bipartite=gene_bipartite,   # (27, 39)
-        relation_names=[
-            "complex", "kinase", "phosphatase",
-            "transcription", "ubiquitination", "gk_switch"
-        ],
-        circuit_names=["START", "SPINDLE", "MEN", "RESET"],
-    )
-    print(f"✅ Successfully built and saved: {out_path}")
+    # A file handle avoids numpy appending suffixes; exclusive creation prevents
+    # accidentally replacing the ignored binary used by historical checkpoints.
+    with args.output.open('xb') as stream:
+        np.savez_compressed(
+            stream,
+            rel_graphs=rel_graphs,           # (6, 39, 39)
+            circuit_motifs=circuit_motifs,   # (4, 39)
+            gene_bipartite=gene_bipartite,   # (27, 39)
+            relation_names=[
+                "complex", "kinase", "phosphatase",
+                "transcription", "ubiquitination", "gk_switch"
+            ],
+            circuit_names=["START", "SPINDLE", "MEN", "RESET"],
+        )
+    print(f"Legacy priors exported (not authoritative ODE topology): {args.output.resolve()}")
     print(f"   - Relational Graphs Shape  : {rel_graphs.shape} (Total non-zero edges: {np.count_nonzero(rel_graphs)})")
     print(f"   - Circuit Motifs Shape     : {circuit_motifs.shape}")
     print(f"   - Gene-to-Protein Bipartite: {gene_bipartite.shape}")

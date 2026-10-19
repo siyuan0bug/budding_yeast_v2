@@ -117,10 +117,7 @@ class PhysicsConstrainedBiochemicalOperator(nn.Module):
         self.manifold_proj = DifferentiableConservationManifoldLayer(num_vars=num_vars)
 
         # Buffers
-        rel_g, c_motifs, g_bipartite = load_multirelational_graphs()
-        self.register_buffer('rel_graphs', rel_g)
-        self.register_buffer('circuit_motifs', c_motifs)
-        self.register_buffer('gene_bipartite', g_bipartite)
+        load_multirelational_graphs().register(self, num_vars)
 
     def forward(self, x, p):
         """
@@ -143,7 +140,7 @@ class PhysicsConstrainedBiochemicalOperator(nn.Module):
 
         # 3. Dynamic Reaction Flux residual hierarchy
         for block in self.blocks:
-            h = block(h, p, self.rel_graphs, flux_w)
+            h = block(h, p, self.rel_graphs, flux_w, self.untyped_graph)
 
         # 4. Raw Output
         raw_out = self.head(h) # (B, 39, T)

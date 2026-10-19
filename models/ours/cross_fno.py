@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .graph_contracts import resolve_variable_graph, attach_variable_graph
 
 
 class SpectralConv1d(nn.Module):
@@ -42,11 +43,10 @@ class NIPSYeastBlock(nn.Module):
 
         self.w = nn.Conv1d(num_vars * width, num_vars * width, 1)
 
-        if adj_matrix is not None:
-            self.register_buffer('adj_matrix', torch.tensor(adj_matrix, dtype=torch.float32))
-            self.physics_weights = nn.Parameter(torch.ones(num_vars, num_vars) * 0.1)
-        else:
-            self.adj_matrix = None
+        graph = resolve_variable_graph(adj_matrix, num_vars)
+        self.register_buffer('adj_matrix', graph.matrix.clone())
+        self.physics_weights = nn.Parameter(torch.ones(num_vars, num_vars) * 0.1)
+        attach_variable_graph(self, graph, ('adj_matrix',), optional_parameters=('physics_weights',))
 
     def forward(self, x, shift):
         B, V, W, T = x.shape

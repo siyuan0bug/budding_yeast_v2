@@ -35,6 +35,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .bio_mechanistic_operator import BioMechPathwayOnly
+from .input_contracts import ParameterInputTransform
 from .bio_refiner_plus import (
     FiLMBlock1d,
     TemporalPyramidBlock,
@@ -313,6 +314,7 @@ class CausalMutantAdapter(nn.Module):
             else:
                 p_wt_tensor = F.pad(p_wt_tensor, (0, param_dim - len(p_wt_tensor)))
         self.register_buffer('p_wt', p_wt_tensor)
+        self.parameter_transform = ParameterInputTransform(param_dim)
 
         # 2. Build 27x27 directed regulatory adjacency and signed matrices
         adj = torch.zeros(self.num_modules, self.num_modules, dtype=torch.float32)
@@ -376,6 +378,9 @@ class CausalMutantAdapter(nn.Module):
         nn.init.zeros_(self.fusion_mlp[-1].weight)
         nn.init.zeros_(self.fusion_mlp[-1].bias)
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.parameter_transform.set_parameter_stats(p_mean, p_std, norm_type)
+
     def forward(self, p: torch.Tensor) -> torch.Tensor:
         """
         Forward causal parameter adaptation.
@@ -389,12 +394,8 @@ class CausalMutantAdapter(nn.Module):
         device = p.device
         dtype = p.dtype
 
-        p_wt_ref = self.p_wt.to(device=device, dtype=dtype).unsqueeze(0)  # (1, P)
-        eps = 1e-5
-
         # 1. Dual Linear & Logarithmic Intervention Residuals
-        delta_p = p - p_wt_ref  # (B, P)
-        log_res = torch.sign(delta_p) * torch.log1p(torch.abs(delta_p) / (torch.abs(p_wt_ref) + eps))  # (B, P)
+        delta_p, log_res = self.parameter_transform.intervention_features(p, self.p_wt)
 
         # 2. Modular Sparse Projections
         gene_embeddings = []
@@ -502,6 +503,9 @@ class BioRefinerCausalBase(nn.Module):
 
         # Learnable gating scale (initialized to 0.1)
         self.gamma = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.causal_adapter.set_parameter_stats(p_mean, p_std, norm_type)
 
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         """Central finite differences for 1st-order temporal derivative."""

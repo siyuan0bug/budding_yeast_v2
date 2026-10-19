@@ -1,5 +1,21 @@
 # 数据集全景、生物图先验与归一化规范 (Datasets, Biological Graphs & Normalization)
 
+> **2026-10-19 后续授权：pure-random RNG 已修复**。局部 seed 统一控制幅度、随机等位基因、
+> 冲突重抽及救援，显式 RNG 的冲突遍历顺序不再依赖 Python 哈希种子。
+> 共享 helper 旧调用保持兼容；没有重新生成正式 NPZ，corr 定义与重复分组未改。
+> 详见 [RNG 修复及 corr 的评估风险](PURE_RANDOM_RNG_FIX_2026-10-19.md)。
+
+> **2026-10-19 后续授权：train-only 拟合已启用**。新训练先切分，仅使用合成 train
+> 计算 Y/P 均值、标准差及 `asinh_scale.s_c`，冻结后用于所有留出集。默认变换仍是 log1p。
+> 旧 checkpoint 保留自己的历史统计量/拟合范围，不能用新统计量解释旧权重。
+> 该阶段未改重复样本分组、随机数管理和 corr 定义；RNG 后续变更见上方说明。
+> 详见 [train-only 修复与解释](TRAIN_ONLY_NORMALIZATION_2026-10-19.md)。
+
+> **2026-10-19 运行修复**：四种归一化的编码/解码统一；新 checkpoint 保存完整预处理和源数据/切分指纹，
+> 评估恢复统计量并拒绝不一致输入，旧 checkpoint 会读取 DataModule 中的 norm_type 并明确警告其契约不完整。
+> 求解器失败或未覆盖完整时长不再外推为有效标签。该先前阶段按用户要求**不改切分、不改 all-synthetic 拟合范围**，
+> 不改采样 seed、指标定义、104 号输入或通用系统入口。见 [运行契约修复](RUNTIME_CONTRACT_FIX_2026-10-19.md)。
+
 本文档系统介绍 `budding_yeast_v2` 框架中使用的数据集体系、生化多关系先验网络、全量数据归一化方案及其在 126 个真实生物突变体上的消融审计结论。
 
 > **2026-10-18 代码核验**：当前默认 `norm_type=log1p` 实际为
@@ -13,6 +29,17 @@
 > L1–L4 虽各有 25k 样本，L4 中多次分裂 Pattern A 只有 503 条，实际 train 中为 399 条；
 > 突变层级均分不等于动力学覆盖均衡。新计数见审计的 `training_contracts/` 输出。
 > 本次诊断不允许基于 real-mutant 规则、参数或轨迹构造训练邻域。
+
+> **同日后续修复**：因果 WT 特征现使用与 P 输入相匹配的变换，支持 log1p/linear、
+> asinh_z、asinh_scale；统计量经训练/独立评估入口注入并在新 checkpoint 中持久化。
+> 未改变本数据模块的统计量拟合拆分，也未修改采样、图或 ODE；
+> 见 [IC/WT 修复与迁移说明](IC_WT_CONTRACT_FIX_2026-10-18.md)。
+
+> **同日图来源统一（第一阶段）**：新增 `data/yeast_graph.py`，仅解析
+> `mutant_aware.py` 的 ODE/事件源码生成潜在结构，连续非自环边 218 条，事件新增
+> 8 条，合并 226 条。不固定正负号，不用测试 mutant 参数或轨迹。
+> 旧图资产与生产模型尚未迁移，旧构图 CLI 已加入显式历史导出/拒绝覆盖保护；
+> 见 [图来源契约与阶段边界](YEAST_GRAPH_SOURCE_CONTRACT_2026-10-18.md)。
 
 ---
 
@@ -49,9 +76,10 @@
 | [mass_wt_blind_sampler.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/mass_wt_blind_sampler.py) | 野生型固定点不动点代数反演采样 | 100% 盲态（无任何突变体先验）空间采样 |
 | [mirror_pure_random_ko_interval.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/mirror_pure_random_ko_interval.py) | 敲除微小连续区间 $[0, 10^{-4}]$ 采样器 | 探究平滑敲除在神经算子中的连续性 |
 | [al_pool_manager.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/al_pool_manager.py) | 内存映射 (Memory-mapped) 动态候选池管理器 | 支持千万级参数池低显存高吞吐流式访问 |
-| [build_bio_multirelational_graphs.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/build_bio_multirelational_graphs.py) | 39 节点生化因果图与拓扑张量构建 | 输出激活、抑制、络合等多关系矩阵 |
+| [yeast_graph.py](../data/yeast_graph.py) | 当前 ODE/事件源码的统一潜在依赖构图 | 矩阵由同一份来源记录派生，不编码固定正负号 |
+| [build_bio_multirelational_graphs.py](../data/build_bio_multirelational_graphs.py) | 历史六关系/circuit/module 元数据构图 | 兼容函数冻结保留，CLI 仅允许显式导出到新文件 |
 | [yeast_datamodule.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/yeast_datamodule.py) | PyTorch Lightning 统一高效数据管道 | 负责多进程加载、在线切片与归一化 |
-| [yeast_multirelational_graphs.npz](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/yeast_multirelational_graphs.npz) | 预编译生物先验异构图结构张量 | 提供给 `BioRefinerPlus` 等图算子使用 |
+| [yeast_multirelational_graphs.npz](../data/yeast_multirelational_graphs.npz) | 旧多关系与模块映射资产 | 供部分历史异构图模型使用；普通 BioRefinerPlus 不使用六关系通量图 |
 
 ---
 
@@ -250,54 +278,71 @@
 
 ## 八、酵母生化多关系先验网络 (Biological Multirelational Graphs)
 
-在细胞周期动力学中，39 个蛋白质与生化复合物之间存在已知的严谨生化反应机理。框架在 [data/build_bio_multirelational_graphs.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/build_bio_multirelational_graphs.py) 中构建了生物学先验图结构：
+权威潜在变量拓扑入口为 [data/yeast_graph.py](../data/yeast_graph.py)，只解析当前
+`mutant_aware.py` 的方程与事件，不执行数据生成、不读取真实 mutant 表。
+同一批不可变来源记录按需生成 `continuous`、`event`、`hybrid` 等视图，统一
+`A[target,source]`，区分真实自身依赖与神经网络人工自环，不强加永久激活/抑制符号。
 
-```
-39 Nodes (Yeast Cyclins, Kinases, Complexes)
-├── yeast_boolean_adjacency_matrix.npy   (39x39 无向连通拓扑)
-├── yeast_signed_adjacency_matrix.npy    (39x39 带符号激活/抑制矩阵: +1 激活, -1 抑制)
-└── yeast_multirelational_graphs.npz     (多关系异构张量: 激活, 抑制, 络合, 磷酸化, 泛素化降解)
-```
+当前连续非自环支持为 218 条；事件 guard→reset 投影有 12 条非自环边，与连续图
+重合 4 条，所以混合视图为 226 条。这只是结构并集，不是全部有限时间响应或
+跨事件灵敏度图。历史 boolean 图是有向支持，不是先前文档声称的无向图。
 
-图神经网络与混合模型（如 `BioMRefinerEventHybrid`, `HGNN`, `GNN-FNO`）通过 `data/yeast_datamodule.py` 自动加载图张量，用于空间拓扑消息传递与生物图注意力权重约束。
+旧 `signed.npy`、`boolean.npy`、`multirelational_graphs.npz` 保留供兼容，不再作为
+三套新拓扑分别扩展。旧 NPZ 中的模块映射与 circuit mask 不是重复的变量邻接。
+第二阶段已将单一 39×39 变量图模型切到同源图，默认 hybrid，并直接由模型拥有
+矩阵；DataModule 加载成功不再被当作已注入模型的证据。旧 checkpoint 默认刷新
+固定变量图，历史复现需明确选择 `graph_load_policy=checkpoint`；六关系分支和
+27 模块图未替换。没有重训或泛化改善证据。构图 API 见
+[统一图来源契约](YEAST_GRAPH_SOURCE_CONTRACT_2026-10-18.md)，迁移范围/调用见
+[模型图迁移](GRAPH_MODEL_MIGRATION_2026-10-18.md)。
+
+**2026-10-19 更新**：上述“六关系/27 模块未替换”为第二阶段状态。
+现在 `data/yeast_relations.py` 从同源反应项生成六类注释覆盖层，未覆盖依赖用 untyped
+补充，总并集严格等于所选源码潜在结构。六类去重有 217 条连续非自环边，untyped
+为 continuous 1 条 / hybrid 9 条；没有生成新的独立二进制拓扑文件。
+全部生产关系图消费者已迁移，DynamicPlus 的模块方向已修复，soft attention 保留。
+注释规则、模型适配及限制见 [后续修复](GRAPH_RELATION_MODULE_FIX_2026-10-19.md)。
 
 ---
 
-## 九、归一化算法综合审计与最优架构方案
+## 九、当前归一化实现与拟合边界
 
-在深度算子网络中，归一化不仅是数值缩放，它直接决定了 **FiLM 条件层调制增益、Hessian 矩阵条件数与反向传播梯度的稳定性**。
+权威实现为 `data/normalization.py`。记 Z 为逐通道/逐参数 Z-score：
 
-### 1. 为什么历史方案会在突变体上崩溃？
-```
-                 [参数输入空间]                           [模型内部表现]                     [突变体评测结果]
-旧版线性:  120x 过表达 -> Z = +65 ~ +600   ====>  FiLM 激活剧烈饱和，梯度爆炸   ====>  15号、44号等过表达突变体崩溃
-新版Log10: 完全敲除 0.0 -> Z = -7.0 ~ -23.8 ====>  三敲除模长暴涨至 15 ~ 76     ====>  19号、76号等多重敲除突变体崩溃
-统一asinh: 敲除 ~ -1.8, 120x ~ +3.9         ====>  全量模长稳固在 5 ~ 12         ====>  两类 Badcase 同时彻底修复
-```
+| norm_type | 变量 Y | 参数 P |
+|---|---|---|
+| log1p（默认） | Z(log1p(max(Y,0))) | Z(P) |
+| linear | Z(Y) | Z(P) |
+| asinh_z | Z(log1p(max(Y,0))) | asinh(Z(P)) |
+| asinh_scale | Z(asinh(max(Y,0)/(2*s_c))) | Z(log10(max(P,1e-8))) |
 
-- **旧版线性 Z 分数**：强启动子过表达（120~1500 倍）导致 $Z = +65 \sim +600$，单样本梯度是正常样本的数千倍，冲毁优化器动量；
-- **Log10 截断方案**：完全敲除 $P=0$ 引入 $\log_{10}(10^{-8})$，导致 $Z = -7.0 \sim -23.8$。三重敲除突变体参数模长冲至 76.11，强行使网络 FiLM 通道静默。
+`mean_y/std_y` 形状 `(1,39,1)`；`p_mean/p_std` 形状 `(1,141)`。
+log1p/linear 的标准差加 `1e-6`（Y 在各模式都加）；非线性参数模式的恒定坐标
+沿用 `std<=1e-5` 的处理。新训练先按原规则切分，均值/标准差仅在**合成 train** 上拟合。
+asinh_scale 的 s_c 使用固定 train 索引顺序的前最多 20,000 条，计算逐通道 90% 分位数，下限 0.01。
+合成 val/test 与 real 均不参与拟合，也不各自计算一套统计量；变换公式与拆分索引没有变化。
+已有版本 1 载荷的 `all_synthetic_legacy` 原样恢复；无完整载荷的旧权重在 eval 中按历史范围重建并警告。
+新权重标记 `train_synthetic`，新默认运行/层级签名带 `trainfit1`；旧 HPO study 不与新协议混用。
+这些措施不消除已有 NPZ 的等价样本跨拆分重合，亦不修改 AL 初始子集选取。
 
-### 2. 统一双曲反正弦标准化（Unified `asinh(Z)`）
-**数学公式：**
-$$Z_p = \frac{P - \mu_p}{\sigma_p + \epsilon}, \quad P_{\text{norm}} = \text{asinh}(Z_p) = \ln\left(Z_p + \sqrt{Z_p^2 + 1}\right)$$
-- **全量 100,126 样本审计**：所有 1410 万个参数坐标严格落在 **$[-3.10, +4.00]$**，离群点比例为 **$0.000\%$**，最大向量模长由 Log10 的 76.11 降至 **12.99**；
-- **严格单调可微**：完全敲除 $P=0$ 平滑映射到 $-1.8$，微量弱效突变（$0.0005$）保留清晰可辨的梯度台阶。
+默认变量逆变换为 `max(expm1(z*std_y+mean_y),0)`，指数前沿用 `[-10,15]` 数值保护。
+参数逆变换为 `p_norm*p_std+p_mean`。HPO、HANO、物理损失和 al4pde 现在使用这些相同定义。
+旧文档把 asinh 描述为已经“彻底修复全部坏例”、把默认描述为 Min-Max 或线性 Y Z-score，
+均不应作为当前实现或受控因果证据；具体证据限制见 badcase 审计。
 
 ---
 
 ## 十、真实突变体上的归一化方案消融基准 (`BioRefinerPlus`)
 
-我们在统一数据集 `mutant_aware_pure_random_100000_210m_500s` 上，对 `BioRefinerPlus` 模型进行了 3 种状态变量 $Y$ 归一化方案的严格实测评测（评估 126 个真实生物突变体）：
+以下读取统一数据集 `mutant_aware_pure_random_100000_210m_500s` 上 `BioRefinerPlus/hybrid_mse_rel` 的三个历史存档，均为 `real_mutants/all_39_vars`（pooled 口径）。它们是归一化组合，不是只改变 Y 的严格单因素试验；本轮没有重训。
 
 | 归一化方案 (Normalization Scheme) | Real Mutant Rel $L_2$ $\downarrow$ | Pearson Corr $\uparrow$ | Real Mutant MAE $\downarrow$ | Real Mutant MSE $\downarrow$ | 综合评价 |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **标准 Z-Score (`standard_zscore`)** | **0.1518** | **0.9723** | **0.0869** | **0.0631** | **综合指标最优，最稳健 baseline** |
-| **Asinh Z-Score (`asinh_zscore`)** | 0.1713 | 0.9655 | 0.1018 | 0.0842 | 表现稳健，强非线性尺度压缩 |
-| **Asinh Scale (`asinh_scale`)** | 0.2054 | 0.9576 | 0.0922 | 0.0886 | $\sinh$ 双向指数反变换使微小扰动放大 |
+| **log1p（不是线性 Y Z-score）** | **0.151820** | **0.972276** | **0.086912** | 5.184606 | 此组前三项最好，MSE 不是最好 |
+| **asinh_z** | 0.171317 | 0.965456 | 0.101784 | 5.511863 | Y 同样 log1p，P 改为 asinh(Z) |
+| **asinh_scale** | 0.205412 | 0.957554 | 0.092190 | **2.424230** | 此组 MSE 最低，不代表其他指标也最好 |
 
 > [!TIP]
-> **最佳实践建议**：
-> - **参数端 ($P$)**：全局推荐且默认采用 `asinh(Z)` 变换。
-> - **状态变量端 ($Y$)**：默认推荐 `standard_zscore`，其反归一化物理保真度最高。
+> **当前默认不变**：参数端 Z(P)，变量端 Z(log1p(Y))。不要把以上一组结果推广为所有模型/损失都最优；
+> 新训练的性能需要另行验证，旧结果文件、数据集和权重未被重写。
 

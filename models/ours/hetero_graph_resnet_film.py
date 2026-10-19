@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .bio_hetero_causal_graph import load_multirelational_graphs, BioMutationFluxEncoder
+from .relation_graph_contracts import untyped_message
 
 
 class HeteroGraphMessagePassing(nn.Module):
@@ -32,7 +33,7 @@ class HeteroGraphMessagePassing(nn.Module):
         self.norm = nn.GroupNorm(1, width)
         self.act = nn.SiLU()
 
-    def forward(self, x, rel_graphs, flux_weights):
+    def forward(self, x, rel_graphs, flux_weights, untyped_graph=None):
         """
         x: (B, width, T)
         rel_graphs: (6, 39, 39)
@@ -52,6 +53,8 @@ class HeteroGraphMessagePassing(nn.Module):
             # A_r @ x_w across 39 variables
             prop = torch.einsum('nm,btmc->btnc', A_r, x_w)
             out_vars = out_vars + w_r * prop
+        if untyped_graph is not None:
+            out_vars = out_vars + untyped_message(x_vars, self.rel_weights, flux_weights, untyped_graph)
 
         out_flat = out_vars.reshape(B, T, self.num_vars * self.d_var)
         out = self.from_vars(out_flat).permute(0, 2, 1) # (B, W, T)
@@ -123,7 +126,7 @@ class HeteroGraphResNetBlock(nn.Module):
         # Multi-relational graph propagation
         self.graph_mp = HeteroGraphMessagePassing(width=width, num_vars=num_vars, d_var=d_var)
 
-    def forward(self, x, p, rel_graphs, flux_weights):
+    def forward(self, x, p, rel_graphs, flux_weights, untyped_graph=None):
         """
         x: (B, width, T)
         p: (B, 141)
@@ -145,7 +148,7 @@ class HeteroGraphResNetBlock(nn.Module):
         h = self.conv2(h)
 
         # 3. Multi-relational graph message passing
-        h_graph = self.graph_mp(h, rel_graphs, flux_weights)
+        h_graph = self.graph_mp(h, rel_graphs, flux_weights, untyped_graph)
 
         return self.act(res + h + h_graph)
 
@@ -186,10 +189,7 @@ class HeteroGraphResNetFiLM(nn.Module):
         )
 
         # Buffers
-        rel_g, c_motifs, g_bipartite = load_multirelational_graphs()
-        self.register_buffer('rel_graphs', rel_g)           # (6, 39, 39)
-        self.register_buffer('circuit_motifs', c_motifs)   # (4, 39)
-        self.register_buffer('gene_bipartite', g_bipartite) # (27, 39)
+        load_multirelational_graphs().register(self, num_vars)
 
     def forward(self, x, p):
         """
@@ -212,7 +212,7 @@ class HeteroGraphResNetFiLM(nn.Module):
 
         # 3. HeteroGraph ResNet Blocks
         for block in self.blocks:
-            h = block(h, p, self.rel_graphs, flux_w)
+            h = block(h, p, self.rel_graphs, flux_w, self.untyped_graph)
 
         # 4. Circuit Motif Attention
         h_attn = self.circuit_attn(h, self.circuit_motifs)

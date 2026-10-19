@@ -109,10 +109,9 @@ class HeteroGraphChannelHyperFNO(nn.Module):
         )
 
         # Buffers
-        rel_g, c_motifs, g_bipartite = load_multirelational_graphs()
-        self.register_buffer('rel_graphs', rel_g)
-        self.register_buffer('circuit_motifs', c_motifs)
-        self.register_buffer('gene_bipartite', g_bipartite)
+        load_multirelational_graphs().register(self, num_vars)
+        # This architecture stores relation priors but does not consume them in forward.
+        self._source_relations_used_in_forward = False
 
     def forward(self, x, p):
         """

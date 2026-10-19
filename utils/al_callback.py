@@ -18,6 +18,7 @@ import numpy as np
 import time
 import pytorch_lightning as pl
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError
+from contextlib import closing
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -50,6 +51,8 @@ from budding_yeast_v2.data.mass_dataset_generator import (
 )
 # v2.6: 全 al4pde 策略统一使用 random-only 采样器 (无 rescue motif 定向采样, 保留 Level 分层)
 from budding_yeast_v2.data.mass_random_sampler import sample_mass_random
+from budding_yeast_v2.data.normalization import normalize_y, normalize_p
+from budding_yeast_v2.data.simulation_guards import bounded_ordered_map
 
 # MASS 默认参数向量 (与 mass_dataset_generator.generate_mass_dataset 完全一致)
 # 注: 与 lhs_v1_origin 默认值仅 ef6n3 不同 (0.3 vs 0.0), 候选池统一以 MASS 默认值为准
@@ -1716,21 +1719,9 @@ class ActiveLearningCallback(pl.Callback):
             p_mean = dm.p_mean.to(P_tensor.device)
             p_std = dm.p_std.to(P_tensor.device)
 
-            if getattr(dm, 'norm_type', 'log1p') == 'asinh_z':
-                z = (P_tensor - p_mean) / p_std
-                P_norm = torch.asinh(z)
-            else:
-                P_norm = (P_tensor - p_mean) / p_std
-            P_norm = torch.nan_to_num(P_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-
-            if getattr(dm, 'norm_type', 'log1p') in ('log1p', 'asinh_z'):
-                Y_ic_trans = torch.log1p(torch.clamp(Y_ic_tensor, min=0.0))
-            else:
-                Y_ic_trans = Y_ic_tensor
-            mean_y_ic = mean_y.squeeze(0).squeeze(-1).to(Y_ic_tensor.device)
-            std_y_ic = std_y.squeeze(0).squeeze(-1).to(Y_ic_tensor.device)
-            Y_ic_norm = (Y_ic_trans - mean_y_ic) / std_y_ic
-            Y_ic_norm = torch.nan_to_num(Y_ic_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+            nt = getattr(dm, 'norm_type', 'log1p')
+            P_norm = normalize_p(P_tensor, p_mean, p_std, nt)
+            Y_ic_norm = normalize_y(Y_ic_tensor, mean_y, std_y, nt, getattr(dm, 's_c', None))
 
             T_STEPS = 500
             t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS)
@@ -1928,14 +1919,11 @@ class ActiveLearningCallback(pl.Callback):
         p_std = dm.p_std     # (1, 141)
 
         # 归一化 P
-        P_norm = (P_tensor - p_mean) / p_std
-        P_norm = torch.nan_to_num(P_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+        nt = getattr(dm, 'norm_type', 'log1p')
+        P_norm = normalize_p(P_tensor, p_mean, p_std, nt)
 
         # 归一化 Y_IC
-        mean_y_ic = mean_y.squeeze(0).squeeze(-1)  # (39,)
-        std_y_ic = std_y.squeeze(0).squeeze(-1)    # (39,)
-        Y_ic_norm = (Y_ic_tensor - mean_y_ic) / std_y_ic
-        Y_ic_norm = torch.nan_to_num(Y_ic_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+        Y_ic_norm = normalize_y(Y_ic_tensor, mean_y, std_y, nt, getattr(dm, 's_c', None))
 
         # 构造 t_grid (共享, 不占额外内存)
         T_STEPS = 500
@@ -3583,9 +3571,11 @@ class ActiveLearningCallback(pl.Callback):
                 tasks.append((str(sel_names[i]), ovr))
 
             sim_results = [None] * n_sel
-            with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor:
+            with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor, closing(
+                bounded_ordered_map(executor, _solve_single_mass_task_wrapper, tasks)
+            ) as ordered_results:
                 done = 0
-                for idx, res in enumerate(executor.map(_solve_single_mass_task_wrapper, tasks, chunksize=50)):
+                for idx, res in enumerate(ordered_results):
                     sim_results[idx] = res
                     done += 1
                     if done % max(1, n_sel // 10) == 0 or done == n_sel:
@@ -3651,8 +3641,10 @@ class ActiveLearningCallback(pl.Callback):
                     ovr = batch_ovrs[i] if batch_ovrs is not None else {k: v for k, v in zip(PARAM_KEYS, batch_P_real[i].tolist())}
                     tasks.append((str(batch_names[i]), ovr))
 
-                with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor:
-                    for i, res in enumerate(executor.map(_solve_single_mass_task_wrapper, tasks, chunksize=50)):
+                with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor, closing(
+                    bounded_ordered_map(executor, _solve_single_mass_task_wrapper, tasks)
+                ) as ordered_results:
+                    for i, res in enumerate(ordered_results):
                         pool_cand_idx = batch_candidates[i]
                         evaluated_idx_list.append(pool_cand_idx)
 
@@ -3724,28 +3716,18 @@ class ActiveLearningCallback(pl.Callback):
         std_y = dm.std_y.cpu()    # (1, 39, 1)
         p_mean = dm.p_mean.cpu()  # (1, 141)
         p_std = dm.p_std.cpu()    # (1, 141)
-        p_std_safe = torch.where(p_std > 1e-5, p_std, torch.ones_like(p_std))
 
         Y_list = []
         for y_real in valid_Y_real:
             y_t = torch.tensor(y_real, dtype=torch.float32)  # (39, 500)
-            if norm_type in ('log1p', 'asinh_z'):
-                y_trans = torch.log1p(torch.clamp(y_t, min=0.0))
-            else:
-                y_trans = y_t
-            y_norm = (y_trans - mean_y.squeeze(0)) / std_y.squeeze(0)
-            y_norm = torch.nan_to_num(y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+            y_norm = normalize_y(y_t.unsqueeze(0), mean_y, std_y, norm_type,
+                                 getattr(dm, 's_c', None)).squeeze(0)
             Y_list.append(y_norm)
 
         P_list = []
         for p_real in valid_P_real:
             p_t = torch.tensor(p_real, dtype=torch.float32).unsqueeze(0)  # (1, 141)
-            if norm_type == 'asinh_z':
-                z = (p_t - p_mean) / p_std_safe
-                p_norm = torch.asinh(z).squeeze(0)
-            else:
-                p_norm = ((p_t - p_mean) / p_std_safe).squeeze(0)
-            p_norm = torch.nan_to_num(p_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+            p_norm = normalize_p(p_t, p_mean, p_std, norm_type).squeeze(0)
             P_list.append(p_norm)
 
         n_evaluated = len(evaluated_indices)

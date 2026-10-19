@@ -152,7 +152,7 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 ### 4.1 统一 Forward 接口契约
 所有模型在 [models/yeast_lit_module.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/models/yeast_lit_module.py) 中由 `forward_ic_time(x, p)` 统一调度：
 - `ic_time_grid: (B, 39, 2, 500)`，包含初始浓度与时间网格。
-- `params: (B, 141)`，Min-Max 标准化后的动力学参数。
+- `params: (B, 141)`，默认是原始动力学参数逐参数 Z-score，**不是 Min-Max**。
 - 返回预测张量：`pred_norm: (B, 39, 500)`。
 
 ### 4.2 40+ 基线模型体系 (`models/baselines/`)
@@ -194,7 +194,7 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 ## 六、主动学习 (Active Learning) 体系 (`utils/al_callback.py`)
 
 ### 6.1 1M 免预仿真纯参数空间候选池架构
-在现代 AL4PDE 体系中，候选池由 [generate_1m_pure_random_pool.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/generate_1m_pure_random_pool.py) 生成 100 万组纯参数组合（仅包含参数 $P$ 与初始条件 $X$，**无预计算轨迹 $Y$，100% 杜绝数据泄露**）。
+在现代 AL4PDE 体系中，候选池由 [generate_1m_pure_random_pool.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/generate_1m_pure_random_pool.py) 生成 100 万组纯参数组合（仅包含参数 $P$ 与初始条件 $X$，无预计算轨迹 $Y$）。这不等于严格盲态：当前 real-envelope 筛选仍保留，用户在 2026-10-19 明确要求本轮只修工程链路、不改筛选规则。
 由 [al_pool_manager.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/al_pool_manager.py) 进行内存映射管理，主动学习触发时由模型前向预测并打分，仅对 Top-K 选中的高价值样本调用多进程 ODE 求解器进行实时在线标注。
 
 ### 6.2 10 大生产级 AL4PDE 策略速查
@@ -216,15 +216,25 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 ## 七、数据生成、归一化与生物网络图谱 (`data/`)
 
 ### 7.1 归一化规范与最新实测证据
-- **轨迹 $Y$ 归一化**：**全局必须使用跨时间与样本的独立 Z-Score 归一化**（`mean_y` 与 `std_y` 形状 `(1, 39, 1)`）。
-- **参数 $P$ 归一化**：**全局使用 Min-Max 归一化**映射至 $[0, 1]$（保留参数物理边界与敲除零点）。
+- **当前默认 `norm_type=log1p`**：$Y$ 先 `log1p(max(Y,0))`，再逐变量跨样本/时间 Z-score；$P$ 为原始参数逐坐标 Z-score，**不是 Min-Max，也不是参数取 log**。
+- 所有工程路径共用 `data/normalization.py`。`asinh_z/asinh_scale/linear` 为显式选项，禁止在消费者内部写死另一种逆变换。
+- **2026-10-19 用户后续授权 train-only**：新训练先按原规则切分，仅在合成 train 拟合 Y/P 均值、标准差与 `asinh_scale.s_c`；统一冻结用于 val/test/real 和 AL 入库。新 checkpoint 标记 `train_synthetic`。旧载荷保留 `all_synthetic_legacy`，无完整载荷的旧权重仅按历史范围重建，禁止默配新统计量。重复样本分组和指标口径仍未修改；pure-random 生成 RNG 的后续修复见 7.2。详见 [train-only 修复](docs/TRAIN_ONLY_NORMALIZATION_2026-10-19.md)。
 - **最新实测证据（2026年9月基准）**：
   在 `mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/` 下的三种归一化对比实测证明：
-  - **Standard Z-Score**：Real Rel L2 = **0.1518**, Real Corr = **0.9723**, Real MAE = **0.0869**（**综合断层领先最优**）。
+  - **log1p + Y/P Z-score**：Real Rel L2 = **0.1518**, Real Corr = **0.9723**, Real MAE = **0.0869**（这组三项最好，但 MSE 不是最好）。
   - **Asinh Scale**：Real Rel L2 = 0.2054, Real Corr = 0.9576。
   - **Asinh Z-Score**：Real Rel L2 = 0.1713, Real Corr = 0.9655。
+  这是历史同组存档，不是本轮重训结果。物理 MSE 分别为 log1p 5.18461、asinh_z 5.51186、asinh_scale 2.42423。
+  checkpoint/启动/自回归/求解保护等当前契约见 [运行链路修复](docs/RUNTIME_CONTRACT_FIX_2026-10-19.md)。
 
 ### 7.2 数据集生成引擎清单
+**2026-10-19 RNG 后续修复**：`generate_pure_random_dataset.py` 的局部 `RandomState(seed)`
+现显式传入幅度采样、随机等位基因处理、冲突重抽和碰撞救援；显式 RNG 的冲突键按固定顺序遍历。
+新 NPZ 记录 `sampling_seed` / `sampling_rng_contract=pure_random_single_stream_v1`。
+共享辅助函数省略 rng 时仅为兼容旧调用方而保留全局行为；新/迁移的生成器应显式传入同一 rng，
+不能据此宣称其他生成器也已完成迁移。ODE、采样范围/概率权重、real 筛选及旧数据未修改。
+详见 [RNG 修复与 corr 风险说明](docs/PURE_RANDOM_RNG_FIX_2026-10-19.md)。
+
 `data/` 下的所有数据生成与采样器已全部得到保护与留存：
 - `generate_1m_pure_random_pool.py`：1M 纯随机参数候选池生成器。
 - `gibbs_sobol_sampler.py` & `gibbs_boltzmann_sampler.py`：加扰 Sobol 与能量分布准随机采样。
@@ -233,7 +243,13 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 - `reachability_check.py`：可达性与零训练探针引擎（支持任意目录执行，默认输出至 `data/reachability/`）。
 
 ### 7.3 多关系生物因果拓扑图
-文件 `data/yeast_multirelational_graphs.npz` 定义了出芽酵母 39 个核心分子之间的物理生化相互作用拓扑（包括转录激活、磷酸化/去磷酸化、蛋白质复合体形成、泛素化降解等多关系有向图矩阵）。
+当前权威潜在结构由 `data/yeast_graph.py` 从 `mutant_aware.py` 的 ODE/事件源码派生，
+统一 `A[target,source]`。关系图由 `data/yeast_relations.py` 的反应项注释覆盖层与
+untyped 补充组成，不从旧 NPZ 读取连边；默认 hybrid 为 226 条非自环边。
+旧 `data/yeast_multirelational_graphs.npz` 保留供历史复现和 circuit/module 元数据，
+不能称为完整 ODE 图。DynamicPlus 模块方向已修复，soft attention 保留。
+固定图默认 current 刷新，历史图复现显式使用 checkpoint 策略。完整范围与限制见
+[docs/GRAPH_RELATION_MODULE_FIX_2026-10-19.md](docs/GRAPH_RELATION_MODULE_FIX_2026-10-19.md)。
 
 ---
 
@@ -244,7 +260,7 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 2. **ODE BDF 积分器三层超时保护**：
    在调用 `solve_ivp(method='BDF')` 仿真复杂突变体时，病态参数可能导致底层 Fortran 循环挂起。必须保证：
    - 内置 `SIGALRM` 5秒硬超时中断；
-   - Python `ProcessPoolExecutor` future 级 35 秒超时兜底；
+   - Python 父进程 35 秒无完成结果时终止自有 worker 并中止生成（不是对已完成 future 调用 timeout）；
    - `try...except` 捕获异常返回 `None`。
 3. **日志输出与实验管理**：
    所有实验日志唯一写入各自的 `experiments/.../train.log`，不再在根目录生成 `logs/` 或 `logs_v3/` 软链接。

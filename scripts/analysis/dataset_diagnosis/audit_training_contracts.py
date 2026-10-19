@@ -142,12 +142,14 @@ def source_provenance(checkpoint):
         matching[name] = selected[0] == selected[1]
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     from budding_yeast_v2.models.ours.bio_refiner_plus import BioRefinerPlus
+    from budding_yeast_v2.models.ours.graph_contracts import set_graph_load_policy
     hp = ckpt["hyper_parameters"]
     if hp["model_name"] != "biom_refiner_plus":
         raise ValueError("Architecture-contract check supports the reference BioRefinerPlus only")
     model = BioRefinerPlus(num_vars=hp["num_vars"], param_dim=hp["param_dim"],
                            modes=hp["modes"], width=hp["width"], n_blocks=hp["n_blocks"])
     state = {k.removeprefix("model."): v for k, v in ckpt["state_dict"].items() if k.startswith("model.")}
+    set_graph_load_policy(model, 'checkpoint')  # Audit the saved graph, not the migrated default.
     model.load_state_dict(state, strict=True)
     architecture = {"strict_model_state_load": True,
                     "coarse_model_class": type(model.stage1_coarse).__name__,

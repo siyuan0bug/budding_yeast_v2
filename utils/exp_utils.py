@@ -82,6 +82,20 @@ def generate_hparams_signature(
     # 1. 邻接矩阵拓扑图
     if kwargs.get("use_adj") or kwargs.get("use_adj_matrix"):
         parts.append("adj")
+    graph_view = kwargs.get("graph_view")
+    if graph_view:
+        # Keep migrated graph runs separate from historical identity/signed runs.
+        parts.append("gcustom1" if kwargs.get("graph_override") else f"gsrc1-{graph_view}")
+    if kwargs.get('relation_graph_version'):
+        parts.append(f"rterms{kwargs['relation_graph_version']}")
+    if kwargs.get('module_graph_version'):
+        parts.append(f"mdir{kwargs['module_graph_version']}")
+    if kwargs.get('constructor_contract_version'):
+        parts.append(f"ctor{kwargs['constructor_contract_version']}")
+    if kwargs.get('runtime_contract_version'):
+        parts.append(f"runtime{kwargs['runtime_contract_version']}")
+    if kwargs.get('normalization_fit_scope') == 'train_synthetic':
+        parts.append('trainfit1')
 
     # 2. 自回归预测
     if kwargs.get("rollout_type") == "autoregressive":
@@ -195,7 +209,8 @@ def setup_wandb_logger(
         model_name=model_name, extra_tag=hparam_tag,
         rollout_type=getattr(args, "rollout_type", "one_time"),
         level=getattr(args, "level", 3),
-        wavelet=getattr(args, "wavelet", "haar")
+        wavelet=getattr(args, "wavelet", "haar"),
+        normalization_fit_scope=getattr(args, 'normalization_fit_scope', None),
     )
 
     # 1. 构建 W&B Group 路径 (按 模型/损失策略/超参 归集)

@@ -35,6 +35,7 @@ except ImportError:
 
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
+from budding_yeast_v2.data.preprocessing_contract import TRAIN_FIT_SCOPE
 from budding_yeast_v2.utils.metrics import calculate_metrics
 
 
@@ -85,6 +86,33 @@ def sample_model_aware_hparams(trial: optuna.Trial, model_name: str) -> Dict[str
     return hparams
 
 
+def evaluate_real_metrics(model, datamodule, device):
+    """Physical-space real-mutant objective (test-guided HPO is intentional)."""
+    model.bind_datamodule_stats(datamodule)
+    all_preds, all_targets = [], []
+    with torch.no_grad():
+        for batch in datamodule.test_dataset_real:
+            x, p, y = [b.unsqueeze(0).to(device) for b in batch]
+            all_preds.append(datamodule.denormalize_y(model.forward_ic_time(x, p), device).cpu())
+            all_targets.append(datamodule.denormalize_y(y, device).cpu())
+    return calculate_metrics(torch.cat(all_preds, dim=0), torch.cat(all_targets, dim=0))
+
+
+def bind_objective_contract(study):
+    """Keep physical MAE and its train-only preprocessing protocol consistent."""
+    version = 'real_physical_mae_v1'
+    recorded = study.user_attrs.get('objective_contract')
+    if recorded not in (None, version) or (recorded is None and len(study.trials) > 0):
+        raise ValueError('This study contains unverified/legacy objective scores. '
+                         'Use a NEW study_name/storage; do not mix old scores with physical MAE.')
+    scope = study.user_attrs.get('normalization_fit_scope')
+    if scope not in (None, TRAIN_FIT_SCOPE) or (scope is None and len(study.trials) > 0):
+        raise ValueError('This study predates train-only normalization or uses a different fit_scope. '
+                         'Use a NEW study_name/storage; do not mix preprocessing protocols.')
+    study.set_user_attr('objective_contract', version)
+    study.set_user_attr('normalization_fit_scope', TRAIN_FIT_SCOPE)
+
+
 def make_objective(args):
     """返回 objective 闭包"""
 
@@ -92,10 +120,14 @@ def make_objective(args):
         # 1. 采样模型感知超参
         hp = sample_model_aware_hparams(trial, args.model)
         trial.set_user_attr("max_epochs", hp["max_epochs"])
+        trial.set_user_attr('normalization_fit_scope', TRAIN_FIT_SCOPE)
 
         # 2. 构建模型
         model = YeastLitModule(
             model_name=args.model,
+            adj_matrix_path=args.adj_matrix_path,
+            graph_view=args.graph_view,
+            graph_load_policy=args.graph_load_policy,
             num_vars=39,
             param_dim=141,
             modes=hp.get("modes", 32),
@@ -111,17 +143,19 @@ def make_objective(args):
             ode_method=args.ode_method,
             ode_rtol=args.ode_rtol,
             ode_atol=args.ode_atol,
+            norm_type=getattr(args, 'norm_type', 'log1p'),
         )
 
         # 3. 构建 DataModule
         dataset_path = args.dataset_name if os.path.isabs(args.dataset_name) else os.path.join(args.data_dir, args.dataset_name)
         datamodule = YeastDataModule(
             dataset_path=dataset_path,
-            adj_matrix_path=args.adj_matrix_path if args.adj_matrix_path else "mydata/yeast_signed_adjacency_matrix.npy",
             batch_size_synth=hp["batch_size"],
             val_batch_size=256,
             num_workers=args.num_workers,
-            use_adj_matrix=(args.adj_matrix_path is not None),
+            use_adj_matrix=False,
+            norm_type=getattr(args, 'norm_type', 'log1p'),
+            fit_scope=TRAIN_FIT_SCOPE,
         )
 
         # 4. Checkpoint 与剪枝回调 (隔离每个 trial 的 ckpt)
@@ -187,21 +221,7 @@ def make_objective(args):
             best_model.eval()
 
             datamodule.setup("test")
-            mean_y = datamodule.mean_y.to(device)
-            std_y = datamodule.std_y.to(device)
-
-            all_preds, all_targets = [], []
-            with torch.no_grad():
-                for batch in datamodule.test_dataset_real:
-                    x, p, y = [b.unsqueeze(0).to(device) for b in batch]
-                    pred_denorm = (best_model.forward_ic_time(x, p) * std_y + mean_y).cpu()
-                    target_denorm = (y * std_y + mean_y).cpu()
-                    all_preds.append(pred_denorm)
-                    all_targets.append(target_denorm)
-
-            all_preds = torch.cat(all_preds, dim=0)
-            all_targets = torch.cat(all_targets, dim=0)
-            metrics = calculate_metrics(all_preds, all_targets)
+            metrics = evaluate_real_metrics(best_model, datamodule, device)
             real_mae = float(metrics["MAE"])
             real_l2 = float(metrics["Relative L2"])
             real_corr = float(metrics["Correlation"])
@@ -284,6 +304,9 @@ def main():
     parser.add_argument("--dataset_name", type=str, required=True)
     parser.add_argument("--data_dir", type=str, default="/home/users/zsy/mydata/budding_yeast")
     parser.add_argument("--adj_matrix_path", type=str, default=None)
+    parser.add_argument("--graph_view", choices=["continuous", "hybrid"], default="hybrid")
+    parser.add_argument("--graph_load_policy", choices=["current", "checkpoint"], default="current")
+    parser.add_argument("--norm_type", choices=['log1p', 'linear', 'asinh_z', 'asinh_scale'], default='log1p')
 
     # 架构与 ODE
     parser.add_argument("--d_lambda", type=int, default=32)
@@ -360,6 +383,7 @@ def main():
 
     if study is None:
         raise RuntimeError(f"Worker {args.worker_id} 无法连接或创建 Optuna Study: {args.study_name}")
+    bind_objective_contract(study)
 
     print(f"🚀 [Worker {args.worker_id}] 启动超参搜索 | Study: {args.study_name} | 目标 Trials: {args.n_trials}")
     objective = make_objective(args)

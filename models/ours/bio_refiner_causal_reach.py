@@ -27,6 +27,7 @@ import torch.nn.functional as F
 
 from .bio_mechanistic_operator import BioMechPathwayOnly
 from .bio_refiner_plus import TemporalPyramidBlock, StoichiometricGraphAttention
+from .input_contracts import ParameterInputTransform, extract_initial_state
 from .bio_refiner_causal import (
     MODULE_NAMES,
     MODULE_PARAM_INDICES,
@@ -62,6 +63,7 @@ class CausalReachabilityGate(nn.Module):
             else:
                 p_wt_tensor = F.pad(p_wt_tensor, (0, param_dim - len(p_wt_tensor)))
         self.register_buffer('p_wt', p_wt_tensor)
+        self.parameter_transform = ParameterInputTransform(param_dim)
 
         # 基因模块索引映射
         self.name_to_idx = {name: i for i, name in enumerate(MODULE_NAMES)}
@@ -99,6 +101,9 @@ class CausalReachabilityGate(nn.Module):
             nn.Sigmoid()
         )
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.parameter_transform.set_parameter_stats(p_mean, p_std, norm_type)
+
     def forward(self, p: torch.Tensor) -> torch.Tensor:
         """
         p: (B, 141)
@@ -106,11 +111,9 @@ class CausalReachabilityGate(nn.Module):
             capacity: (B, 39, 1) 动态振幅容量
         """
         B = p.shape[0]
-        p_ref = self.p_wt.unsqueeze(0)
-        
-        # 提取相对扰动与对数残差
-        delta_p = p - p_ref
-        log_res = torch.sign(delta_p) * torch.log1p(torch.abs(delta_p) / (torch.abs(p_ref) + 1e-5))
+        # Mechanistic differences use physical units; learned global conditioning
+        # below still receives p in its original normalized representation.
+        delta_p, log_res = self.parameter_transform.intervention_features(p, self.p_wt)
 
         # 初始模块嵌入
         module_embeds = []
@@ -214,6 +217,9 @@ class BioRefinerCausalReach(nn.Module):
         )
         self.gamma = nn.Parameter(torch.tensor(0.1))
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.reachability_gate.set_parameter_stats(p_mean, p_std, norm_type)
+
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         d = torch.zeros_like(y)
         d[:, :, 1:-1] = (y[:, :, 2:] - y[:, :, :-2]) * 0.5
@@ -263,7 +269,7 @@ class BioRefinerCausalReach(nn.Module):
         # 4. 因果容量包络调制:
         # 当上游通路关闭 capacity -> 0 时，不仅细化残差 delta_y 被清零，
         # y_coarse 的偏离也被收敛至初值稳态 x_0
-        x_0 = x_in[:, :self.num_vars, 0:1]  # (B, 39, 1)
+        x_0 = extract_initial_state(x, self.num_vars)  # (B, 39, 1)
         y_osc = y_coarse + torch.tanh(self.gamma) * delta_y
         y_final = x_0 + capacity * (y_osc - x_0)
 

@@ -27,6 +27,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .input_contracts import ParameterInputTransform
 
 from .bio_refiner_plus import StoichiometricGraphAttention, TemporalPyramidBlock
 from .bio_refiner_causal import (
@@ -276,6 +277,7 @@ class TimeVaryingCausalAdapter(nn.Module):
         self.num_nodes = len(MODULE_NAMES)
 
         self.register_buffer('p_wt', torch.tensor(WT_VALUES_141, dtype=torch.float32))
+        self.parameter_transform = ParameterInputTransform(param_dim)
 
         node_to_idx = {name: i for i, name in enumerate(MODULE_NAMES)}
         adj_mask = torch.zeros((self.num_nodes, self.num_nodes), dtype=torch.float32)
@@ -347,11 +349,13 @@ class TimeVaryingCausalAdapter(nn.Module):
                     M[g_idx, v_idx] = 1.0 / len(gene_to_vars[g_name])
         return M
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.parameter_transform.set_parameter_stats(p_mean, p_std, norm_type)
+
     def forward(self, p: torch.Tensor, y_coarse: torch.Tensor) -> torch.Tensor:
         B, num_vars, T = y_coarse.shape
-        p_wt_batch = self.p_wt.unsqueeze(0).expand(B, -1)
-        diff = p - p_wt_batch
-        log_ratio = torch.log(p.clamp(min=1e-6)) - torch.log(p_wt_batch.clamp(min=1e-6))
+        diff, log_ratio = self.parameter_transform.intervention_features(
+            p, self.p_wt, eps=1e-6, logarithm="ratio")
 
         gene_embeddings = []
         for i, gene_name in enumerate(MODULE_NAMES):
@@ -566,6 +570,9 @@ class BioRefinerLatchCausalPlus(nn.Module):
         )
 
         self.gamma = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.dynamic_causal_adapter.set_parameter_stats(p_mean, p_std, norm_type)
 
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         dy = torch.zeros_like(y)

@@ -5,13 +5,19 @@ from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
 import re
 from .dataset_utils import load_yeast_dataset_universal
+from .yeast_graph import build_yeast_graph
+from .normalization import (check_norm_type, transform_y, normalize_y, normalize_p,
+                            denormalize_y, denormalize_p)
+from .preprocessing_contract import (dataset_contract, make_preprocessing_state,
+                                     validate_preprocessing_state, assert_compatible,
+                                     check_fit_scope, TRAIN_FIT_SCOPE)
 
 
 class YeastDataModule(pl.LightningDataModule):
     def __init__(
         self,
         dataset_path='mydata/mass_100000_dataset_210min_500steps_dual_labels.npz',
-        adj_matrix_path='mydata/yeast_signed_adjacency_matrix.npy',
+        adj_matrix_path=None,
         batch_size_synth=32,
         batch_size_real=8,
         val_batch_size=32,
@@ -19,9 +25,12 @@ class YeastDataModule(pl.LightningDataModule):
         seed=42,
         use_adj_matrix=True,
         norm_type='log1p',
+        graph_view='hybrid',
+        preprocessing_state=None,
+        fit_scope=None,
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['preprocessing_state'])
 
         self.dataset_path = dataset_path
         self.adj_matrix_path = adj_matrix_path
@@ -31,7 +40,21 @@ class YeastDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.seed = seed
         self.use_adj_matrix = use_adj_matrix
-        self.norm_type = norm_type
+        self.norm_type = check_norm_type(norm_type)
+        self._expected_preprocessing = (
+            validate_preprocessing_state(preprocessing_state) if preprocessing_state is not None else None
+        )
+        if self._expected_preprocessing is not None and self._expected_preprocessing['norm_type'] != norm_type:
+            raise ValueError('DataModule normalization contradicts checkpoint preprocessing')
+        saved_scope = (self._expected_preprocessing['fit_scope']
+                       if self._expected_preprocessing is not None else None)
+        if fit_scope is not None:
+            check_fit_scope(fit_scope)
+        if saved_scope is not None and fit_scope is not None and fit_scope != saved_scope:
+            raise ValueError('DataModule fit_scope contradicts checkpoint preprocessing')
+        self.fit_scope = check_fit_scope(saved_scope or fit_scope or TRAIN_FIT_SCOPE)
+        self.hparams.fit_scope = self.fit_scope
+        self.graph_view = graph_view
         
         # 🌟 新增：动态解析物理时间 t_max
         match = re.search(r'(\d+)min', dataset_path)
@@ -62,14 +85,21 @@ class YeastDataModule(pl.LightningDataModule):
 
         self.num_params = num_params
         self.T_STEPS = raw_data.shape[2]
+        self._dataset_contract = dataset_contract(
+            raw_data, param_conds, mutant_names, pattern_labels, self.dataset_path, self.t_max
+        )
+        if (self._expected_preprocessing is not None
+                and self._expected_preprocessing.get('dataset') != self._dataset_contract):
+            raise ValueError('Checkpoint preprocessing mismatch: dataset; refusing silent refit/reinterpretation')
 
         if self.use_adj_matrix:
-            try:
-                self.adj_matrix = np.load(self.adj_matrix_path)
-                print(f"Successfully loaded {self.adj_matrix.shape[0]}x{self.adj_matrix.shape[1]} ODE physical topology matrix!")
-            except FileNotFoundError:
-                print("Warning: yeast_signed_adjacency_matrix.npy not found, using pure data-driven mode.")
-                self.adj_matrix = None
+            # Compatibility exposure only: production models own their graph.
+            self.adj_matrix = (
+                np.load(self.adj_matrix_path, allow_pickle=False) if self.adj_matrix_path is not None
+                else build_yeast_graph().adjacency(self.graph_view, self_loops='all').astype(np.float32)
+            )
+            if self.adj_matrix.shape != (39, 39) or not np.isfinite(self.adj_matrix).all():
+                raise ValueError('Expected a finite 39x39 target/source variable graph')
 
         Y = torch.tensor(raw_data, dtype=torch.float32)
         Params = torch.tensor(param_conds, dtype=torch.float32)
@@ -85,7 +115,8 @@ class YeastDataModule(pl.LightningDataModule):
         #  - 非 LHS 数据集 (MASS / WB-MASS / 任意未来自定义生成数据集):
         #    自动按真实突变体特征 (如 1_WT_Glc, 15_cln3Δ...) 区分真实测试集与合成样本，
         #    跳过家族分层, 仅按 Pattern 宏观划分。两类数据集都严格将 real mutants
-        #    全部划入测试集 (test_real), 避免数据泄露; 归一化统计量只用合成样本。
+        #    全部划入测试集 (test_real); 新训练的归一化统计量只用合成训练拆分。
+        #    这不保证等价输入跨拆分隔离，重复样本分组策略尚未修改。
         # ================================================================
         has_lhs = any('_LHS_' in str(name) for name in mutant_names)
         self.is_mass_dataset = not has_lhs
@@ -189,72 +220,37 @@ class YeastDataModule(pl.LightningDataModule):
               f"训练集: {len(train_idx_synth)} | 验证集: {len(val_idx_synth)} | "
               f"合成测试集: {len(test_idx_synth)} | 真实测试集: {len(test_idx_real)}")
 
-        # 归一化统计量计算：支持 log1p (默认: 参数线性 Z-score + 变量稳健 log1p), asinh_z, asinh_scale, 与 linear
-        self.norm_type = getattr(self, 'norm_type', 'log1p')
-        if self.norm_type == 'asinh_z':
-            # 1. 变量变换: 稳健 log1p + 通道 Z-score
-            # 10万样本全量评测证实 log1p 相对扰动放大率仅 4.71% (远低于 asinh 的 9.39%)，且完全杜绝 sinh 双向指数发散风险
-            Y_trans = torch.log1p(torch.clamp(Y, min=0.0))
-            self.mean_y = Y_trans[synth_indices].mean(dim=(0, 2), keepdim=True)
-            self.std_y = Y_trans[synth_indices].std(dim=(0, 2), keepdim=True) + 1e-6
-            Y_norm = (Y_trans - self.mean_y) / self.std_y
-            Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-
-            # 2. 参数变换: 统一双曲反正弦标准化 asinh(Z)
-            # 消除硬零点对数奇点与多突变模长爆炸问题，最大模长从 76.11 压缩到 12.99
-            self.p_mean = Params[synth_indices].mean(dim=0, keepdim=True)
-            self.p_std = Params[synth_indices].std(dim=0, keepdim=True)
-            is_varying = self.p_std > 1e-5
-            p_std_safe = torch.where(is_varying, self.p_std, torch.ones_like(self.p_std))
-            z = (Params - self.p_mean) / p_std_safe
-            Params_norm = torch.where(is_varying, torch.asinh(z), torch.zeros_like(Params))
-            Params_norm = torch.nan_to_num(Params_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-        elif self.norm_type == 'asinh_scale':
-            # 1. 变量变换: s_c 为合成样本每个通道的 90% 分位数 (下限 0.01)
-            y_synth_np = Y[synth_indices].numpy()
-            sub_n = min(len(synth_indices), 20000)
-            s_c_np = np.quantile(np.maximum(y_synth_np[:sub_n], 0.0), 0.90, axis=(0, 2), keepdims=True)
-            s_c_np = np.maximum(s_c_np, 0.01)
-            self.s_c = torch.tensor(s_c_np, dtype=torch.float32, device=Y.device)
-            Y_trans = torch.asinh(torch.clamp(Y, min=0.0) / (2.0 * self.s_c))
-
-            self.mean_y = Y_trans[synth_indices].mean(dim=(0, 2), keepdim=True)
-            self.std_y = Y_trans[synth_indices].std(dim=(0, 2), keepdim=True) + 1e-6
-            Y_norm = (Y_trans - self.mean_y) / self.std_y
-            Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-
-            # 2. 参数变换: 统一 log10 变换并设定敲除生理截断下界 1e-8
-            P_trans = torch.log10(torch.clamp(Params, min=1e-8))
-            self.p_mean = P_trans[synth_indices].mean(dim=0, keepdim=True)
-            self.p_std = P_trans[synth_indices].std(dim=0, keepdim=True)
-
-            # 非突变参数 (std < 1e-5) 严格赋值为恒定 0.0; 可变突变参数执行标准 Z-score
-            is_varying = self.p_std > 1e-5
-            p_std_safe = torch.where(is_varying, self.p_std, torch.ones_like(self.p_std))
-            Params_norm = torch.where(is_varying, (P_trans - self.p_mean) / p_std_safe, torch.zeros_like(P_trans))
-            Params_norm = torch.nan_to_num(Params_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-        elif self.norm_type == 'log1p':
-            Y_trans = torch.log1p(torch.clamp(Y, min=0.0))
-            self.mean_y = Y_trans[synth_indices].mean(dim=(0, 2), keepdim=True)
-            self.std_y = Y_trans[synth_indices].std(dim=(0, 2), keepdim=True) + 1e-6
-            Y_norm = (Y_trans - self.mean_y) / self.std_y
-            Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-
-            self.p_mean = Params[synth_indices].mean(dim=0, keepdim=True)
-            self.p_std = Params[synth_indices].std(dim=0, keepdim=True) + 1e-6
-            Params_norm = (Params - self.p_mean) / self.p_std
-            Params_norm = torch.nan_to_num(Params_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+        # Split first, fit on source-file synthetic TRAIN only, then freeze the
+        # same transform for every split/AL round. Legacy replay is explicit;
+        # a saved payload always restores its original tensors and policy.
+        fit_indices = train_idx_synth if self.fit_scope == TRAIN_FIT_SCOPE else synth_indices
+        if not fit_indices:
+            raise ValueError('No synthetic rows available for normalization fitting')
+        if self._expected_preprocessing is not None:
+            state = validate_preprocessing_state(self._expected_preprocessing, num_vars, Params.shape[1])
+            for key in ('mean_y', 'std_y', 'p_mean', 'p_std', 's_c'):
+                value = state.get(key)
+                setattr(self, key, value.clone() if isinstance(value, torch.Tensor) else None)
         else:
-            Y_trans = Y
-            self.mean_y = Y_trans[synth_indices].mean(dim=(0, 2), keepdim=True)
-            self.std_y = Y_trans[synth_indices].std(dim=(0, 2), keepdim=True) + 1e-6
-            Y_norm = (Y_trans - self.mean_y) / self.std_y
-            Y_norm = torch.nan_to_num(Y_norm, nan=0.0, posinf=10.0, neginf=-10.0)
-
-            self.p_mean = Params[synth_indices].mean(dim=0, keepdim=True)
-            self.p_std = Params[synth_indices].std(dim=0, keepdim=True) + 1e-6
-            Params_norm = (Params - self.p_mean) / self.p_std
-            Params_norm = torch.nan_to_num(Params_norm, nan=0.0, posinf=10.0, neginf=-10.0)
+            if self.norm_type == 'asinh_scale':
+                sub_n = min(len(fit_indices), 20000)
+                s_c_np = np.quantile(np.maximum(Y[fit_indices[:sub_n]].numpy(), 0.0),
+                                     0.90, axis=(0, 2), keepdims=True)
+                self.s_c = torch.tensor(np.maximum(s_c_np, 0.01), dtype=torch.float32)
+            Y_trans = transform_y(Y[fit_indices], self.norm_type, self.s_c)
+            self.mean_y = Y_trans.mean(dim=(0, 2), keepdim=True)
+            self.std_y = Y_trans.std(dim=(0, 2), keepdim=True) + 1e-6
+            P_fit = Params[fit_indices]
+            P_trans = torch.log10(P_fit.clamp(min=1e-8)) if self.norm_type == 'asinh_scale' else P_fit
+            self.p_mean = P_trans.mean(dim=0, keepdim=True)
+            self.p_std = P_trans.std(dim=0, keepdim=True)
+            if self.norm_type in ('log1p', 'linear'):
+                self.p_std = self.p_std + 1e-6
+            del Y_trans
+        print(f'📐 Normalization: {self.norm_type}; fit_scope={self.fit_scope}; '
+              f'{"restored checkpoint statistics" if self._expected_preprocessing is not None else f"fit rows={len(fit_indices)}"}')
+        Y_norm = self.normalize_y(Y)
+        Params_norm = self.normalize_p(Params)
 
         IC = Y_norm[:, :, 0:1].expand(-1, -1, T_STEPS)
         t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS).expand(num_mutants, num_vars, T_STEPS)
@@ -342,6 +338,15 @@ class YeastDataModule(pl.LightningDataModule):
         self._val_idx_synth = val_idx_synth
         self._test_idx_synth = test_idx_synth
         self._test_idx_real = test_idx_real
+        # Freeze the source-file split for preprocessing replay. AL may later
+        # change the effective training indices, but not normalization fit data
+        # or the held-out source split. This is not an AL-pool resume snapshot.
+        self._preprocessing_split = {
+            'seed': self.seed, 'train': list(train_idx_synth), 'val': list(val_idx_synth),
+            'test': list(test_idx_synth), 'real': list(test_idx_real),
+        }
+        if self._expected_preprocessing is not None:
+            assert_compatible(self._expected_preprocessing, self.preprocessing_state())
         self._setup_done = True
 
     def train_dataloader(self):
@@ -385,55 +390,16 @@ class YeastDataModule(pl.LightningDataModule):
         self._train_idx_synth = value
 
     def denormalize_y(self, y_norm, device=None):
-        """
-        Denormalizes y_norm back to physical concentration space (B, V, T).
-        Supports both 'log1p' and 'linear' normalization modes.
-        """
-        if device is not None:
-            mean_y = self.mean_y.to(device)
-            std_y = self.std_y.to(device)
-        else:
-            mean_y = self.mean_y
-            std_y = self.std_y
-
-        y_shifted = y_norm * std_y + mean_y
-        norm_type = getattr(self, 'norm_type', 'log1p')
-        if norm_type == 'asinh_scale':
-            s_c = self.s_c.to(device) if device is not None and hasattr(self, 's_c') and self.s_c is not None else getattr(self, 's_c', None)
-            if s_c is None:
-                s_c = 1.0
-            y_clamped = torch.clamp(y_shifted, min=-10.0, max=10.0)
-            y_real = torch.clamp(2.0 * s_c * torch.sinh(y_clamped), min=0.0)
-            return y_real
-        elif norm_type in ('log1p', 'asinh_z'):
-            # Numerical safeguard against extreme logits before expm1
-            y_clamped = torch.clamp(y_shifted, min=-10.0, max=15.0)
-            y_real = torch.clamp(torch.expm1(y_clamped), min=0.0)
-            return y_real
-        else:
-            return y_shifted
+        return denormalize_y(y_norm, self.mean_y, self.std_y, self.norm_type, self.s_c)
 
     def denormalize_p(self, p_norm, device=None):
-        """
-        Denormalizes p_norm back to physical parameter space.
-        """
-        if device is not None:
-            p_mean = self.p_mean.to(device)
-            p_std = self.p_std.to(device)
-        else:
-            p_mean = self.p_mean
-            p_std = self.p_std
+        return denormalize_p(p_norm, self.p_mean, self.p_std, self.norm_type)
 
-        norm_type = getattr(self, 'norm_type', 'log1p')
-        if norm_type == 'asinh_scale':
-            is_varying = (p_std > 1e-5)
-            p_trans = torch.where(is_varying, p_norm * p_std + p_mean, p_mean)
-            p_real = torch.clamp(10.0 ** torch.clamp(p_trans, min=-8.0, max=6.0), min=0.0)
-            return p_real
-        elif norm_type == 'asinh_z':
-            is_varying = (p_std > 1e-5)
-            p_std_safe = torch.where(is_varying, p_std, torch.ones_like(p_std))
-            p_real = torch.where(is_varying, torch.sinh(p_norm) * p_std_safe + p_mean, p_mean)
-            return torch.clamp(p_real, min=0.0)
-        else:
-            return p_norm * p_std + p_mean
+    def normalize_y(self, y):
+        return normalize_y(y, self.mean_y, self.std_y, self.norm_type, self.s_c)
+
+    def normalize_p(self, p):
+        return normalize_p(p, self.p_mean, self.p_std, self.norm_type)
+
+    def preprocessing_state(self):
+        return make_preprocessing_state(self)

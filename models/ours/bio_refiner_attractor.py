@@ -31,6 +31,7 @@ import torch.nn.functional as F
 
 from .bio_mechanistic_operator import BioMechPathwayOnly
 from .bio_refiner_plus import TemporalPyramidBlock, StoichiometricGraphAttention
+from .input_contracts import extract_initial_state
 
 
 class EquilibriumRelaxationStream(nn.Module):
@@ -62,7 +63,7 @@ class EquilibriumRelaxationStream(nn.Module):
 
     def forward(self, x_in: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
         """
-        x_in: (B, 78, T) 包含变量初值与时间网格
+        x_in: 原始 (B,V,2,T)、IC-only (B,V,T)，或交错展平 (B,2V,T)
         p: (B, 141) 动力学参数
         Returns:
             y_plat: (B, 39, T) 纯净物理平原稳态
@@ -71,7 +72,7 @@ class EquilibriumRelaxationStream(nn.Module):
         T = x_in.shape[-1]
         
         # 提取初始浓度 x_0: (B, 39, 1)
-        x_0 = x_in[:, :self.num_vars, 0:1]
+        x_0 = extract_initial_state(x_in, self.num_vars)
         
         # 提取时间网格 t: [0, 1] 归一化网格
         t_grid = torch.linspace(0.0, 1.0, T, device=p.device, dtype=p.dtype).view(1, 1, T).expand(B, -1, -1)
@@ -82,7 +83,8 @@ class EquilibriumRelaxationStream(nn.Module):
         
         # 指数弛豫方程: Y(t) = Y* + (x_0 - Y*) * exp(-lambda * t)
         decay = torch.exp(-lam * t_grid * 5.0)  # (B, 39, T)
-        y_plat = y_eq + (x_0 - y_eq) * decay
+        # Algebraically identical relaxation, with exact x_0 at t=0.
+        y_plat = x_0 + (y_eq - x_0) * (1.0 - decay)
         return y_plat
 
 
@@ -200,7 +202,9 @@ class BioRefinerAttractor(nn.Module):
         p_oscillatory = 1.0 - p_arrest
 
         # 2. 生成稳态平原流 (无振荡纯净物理松弛)
-        y_plat = self.plateau_stream(x_in, p)  # (B, 39, T)
+        # Use original x: flattened 4D inputs interleave IC/time, whereas the
+        # legacy 3D branch concatenates blocks. Never infer ICs from that mix.
+        y_plat = self.plateau_stream(x, p)  # (B, 39, T)
 
         # 3. 生成振荡极限环流 (Stage 1 + Stage 2)
         y_coarse = self.stage1_coarse(x, p)  # (B, 39, T)

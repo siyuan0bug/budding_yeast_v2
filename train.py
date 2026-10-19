@@ -15,6 +15,7 @@ else:
 
 import time
 import argparse
+import json
 import torch
 import numpy as np
 import pytorch_lightning as pl
@@ -25,8 +26,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import wandb
 
-from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
+from budding_yeast_v2.models.yeast_lit_module import (
+    YeastLitModule, SINGLE_VARIABLE_GRAPH_MODELS, RELATION_GRAPH_MODELS,
+    MODULE_DIRECTION_REPAIRED_MODELS,
+    GENERIC_BASELINE_MODELS,
+)
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
+from budding_yeast_v2.data.preprocessing_contract import TRAIN_FIT_SCOPE
 from budding_yeast_v2.utils.metrics import calculate_metrics
 from budding_yeast_v2.utils.curve_logger import TrainingCurveCallback, extract_and_plot_from_log
 
@@ -151,6 +157,8 @@ def main():
     parser.add_argument('--loss_type', type=str, default='physics_informed')
     parser.add_argument('--dataset_name', type=str, required=True)
     parser.add_argument('--adj_matrix_path', type=str, default=None)
+    parser.add_argument('--graph_view', choices=['continuous', 'hybrid'], default='hybrid')
+    parser.add_argument('--graph_load_policy', choices=['current', 'checkpoint'], default='current')
     parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
     parser.add_argument('--save_dir', type=str, default='./train_result')
     
@@ -290,6 +298,7 @@ def main():
                         help='启用分层语义化目录结构 (experiments/dataset/model/...)')
 
     args = parser.parse_args()
+    args.normalization_fit_scope = TRAIN_FIT_SCOPE
 
     pl.seed_everything(args.seed, workers=True)
 
@@ -303,7 +312,7 @@ def main():
     )
 
     # 确定实际实验输出目录
-    run_name = args.name or f"{args.model}_{args.loss_type}_seed{args.seed}"
+    run_name = args.name or f"{args.model}_{args.loss_type}_seed{args.seed}_trainfit1"
     if args.exp_dir:
         actual_exp_dir = os.path.abspath(args.exp_dir)
     elif args.use_hierarchical_dir:
@@ -313,9 +322,17 @@ def main():
             epochs=args.max_epochs,
             model_name=args.model, extra_tag=args.hparam_tag, rollout_type=args.rollout_type,
             wavelet=args.wavelet,
-            use_adj=(args.adj_matrix_path is not None),
+            use_adj=(args.model in SINGLE_VARIABLE_GRAPH_MODELS | RELATION_GRAPH_MODELS),
+            graph_view=args.graph_view if args.model in SINGLE_VARIABLE_GRAPH_MODELS | RELATION_GRAPH_MODELS else None,
+            graph_override=(args.adj_matrix_path is not None),
+            relation_graph_version=1 if args.model in RELATION_GRAPH_MODELS else None,
+            module_graph_version=1 if args.model in MODULE_DIRECTION_REPAIRED_MODELS else None,
+            constructor_contract_version=1 if args.model in GENERIC_BASELINE_MODELS else None,
+            runtime_contract_version=1 if (args.model.startswith('hano') or args.rollout_type == 'autoregressive'
+                                           or args.loss_type in ('pinn_residual','pino','hybrid_pino_colloc','hybrid_all')) else None,
             warmup=args.warmup_epochs,
-            norm_type=args.norm_type
+            norm_type=args.norm_type,
+            normalization_fit_scope=args.normalization_fit_scope,
         )
         actual_exp_dir = build_experiment_dir(
             exp_root=args.exp_root, dataset_tag=ds_tag, model_name=args.model,
@@ -337,6 +354,9 @@ def main():
         """构造一个全新随机初始化的模型 (v2.3 al4pde 外层重训: 每轮冷启动)。"""
         return YeastLitModule(
             model_name=args.model,
+            adj_matrix_path=args.adj_matrix_path,
+            graph_view=args.graph_view,
+            graph_load_policy=args.graph_load_policy,
             wavelet=args.wavelet,
             num_vars=39,
             param_dim=141,
@@ -371,15 +391,17 @@ def main():
         )
 
     model = build_fresh_model()
+    with open(os.path.join(actual_exp_dir, 'graph_provenance.json'), 'w') as f:
+        json.dump(model.graph_report(), f, indent=2)
 
     datamodule = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
-        adj_matrix_path=args.adj_matrix_path if args.adj_matrix_path else 'mydata/yeast_signed_adjacency_matrix.npy',
         batch_size_synth=args.batch_size,
         val_batch_size=args.val_batch_size,
         num_workers=args.num_workers,
-        use_adj_matrix=(args.adj_matrix_path is not None),
+        use_adj_matrix=False,  # Model owns its graph; DataModule does not inject one.
         norm_type=args.norm_type,
+        fit_scope=args.normalization_fit_scope,
     )
 
     # W&B Logger 结构化接入
@@ -491,7 +513,7 @@ def main():
 
             # 更新性能演化表 al_performance_curve.csv 和 al_rounds_summary.json
             curve_csv_path = os.path.join(eval_base_dir, 'al_performance_curve.csv')
-            import csv, json
+            import csv
             with open(curve_csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=list(al_curve_records[0].keys()))
                 writer.writeheader()
@@ -511,7 +533,7 @@ def main():
 
         import shutil
         last_eval_dir = os.path.join(eval_base_dir, f"round_{NUM_AL_ROUNDS-1}_train{n_train}")
-        for item in ['global_metrics_denorm.json', 'per_mutant_metrics.csv', 'per_synth_test_metrics.csv', 'real_mutants', 'synth_test']:
+        for item in ['global_metrics_denorm.json', 'graph_provenance.json', 'per_mutant_metrics.csv', 'per_synth_test_metrics.csv', 'real_mutants', 'synth_test']:
             src = os.path.join(last_eval_dir, item)
             dst = os.path.join(eval_base_dir, item)
             if os.path.exists(src):

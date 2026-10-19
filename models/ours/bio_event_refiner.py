@@ -111,6 +111,10 @@ class BioEventHybridRefiner(nn.Module):
 
         self.gamma = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type='log1p'):
+        """Forward the shared input contract to the embedded causal adapter."""
+        self.dynamic_causal_adapter.set_parameter_stats(p_mean, p_std, norm_type)
+
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         dy = torch.zeros_like(y)
         dy[:, :, 1:-1] = (y[:, :, 2:] - y[:, :, :-2]) * 0.5

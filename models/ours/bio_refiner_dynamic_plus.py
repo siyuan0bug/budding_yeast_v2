@@ -25,8 +25,12 @@ from typing import Dict, List, Optional, Tuple, Union
 import math
 import numpy as np
 import torch
+import json
+from hashlib import sha256
+from .graph_contracts import attach_fixed_graph
 import torch.nn as nn
 import torch.nn.functional as F
+from .input_contracts import ParameterInputTransform
 
 from .bio_refiner_plus import StoichiometricGraphAttention, TemporalPyramidBlock
 from .bio_refiner_causal import (
@@ -203,6 +207,7 @@ class TimeVaryingDynamicAdapter(nn.Module):
         self.num_nodes = len(MODULE_NAMES)
 
         self.register_buffer('p_wt', torch.tensor(WT_VALUES_141, dtype=torch.float32))
+        self.parameter_transform = ParameterInputTransform(param_dim)
 
         node_to_idx = {name: i for i, name in enumerate(MODULE_NAMES)}
         adj = np.zeros((self.num_nodes, self.num_nodes), dtype=np.float32)
@@ -210,10 +215,15 @@ class TimeVaryingDynamicAdapter(nn.Module):
         for src, dst, s in MODULE_REGULATORY_EDGES:
             if src in node_to_idx and dst in node_to_idx:
                 u, v = node_to_idx[src], node_to_idx[dst]
-                adj[u, v] = 1.0
-                sign[u, v] = 1.0 if s == '+' else -1.0
+                adj[v, u] = 1.0  # row receives, column sends
+                sign[v, u] = 1.0 if s == '+' else -1.0
         self.register_buffer('adj_mask', torch.from_numpy(adj))
         self.register_buffer('sign_adj', torch.from_numpy(sign))
+        digest = sha256(json.dumps((MODULE_NAMES, MODULE_REGULATORY_EDGES, 'target_source'),
+                                  separators=(',', ':')).encode()).hexdigest()
+        # This is a manually defined module prior, not an ODE state graph.
+        metadata = torch.tensor([1, 2, 0, *bytes.fromhex(digest)], dtype=torch.uint8)
+        attach_fixed_graph(self, 'module', metadata, ('adj_mask', 'sign_adj'))
 
         # 基因级静态突变嵌入投影
         self.module_projections = nn.ModuleList()
@@ -272,11 +282,13 @@ class TimeVaryingDynamicAdapter(nn.Module):
                     M[g_idx, v_idx] = 1.0 / len(gene_to_vars[g_name])
         return M
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.parameter_transform.set_parameter_stats(p_mean, p_std, norm_type)
+
     def forward(self, p: torch.Tensor, y_coarse: torch.Tensor) -> torch.Tensor:
         B, num_vars, T = y_coarse.shape
-        p_wt_batch = self.p_wt.unsqueeze(0).expand(B, -1)
-        diff = p - p_wt_batch
-        log_ratio = torch.log(p.clamp(min=1e-6)) - torch.log(p_wt_batch.clamp(min=1e-6))
+        diff, log_ratio = self.parameter_transform.intervention_features(
+            p, self.p_wt, eps=1e-6, logarithm="ratio")
 
         gene_embeddings = []
         for i, gene_name in enumerate(MODULE_NAMES):
@@ -511,6 +523,9 @@ class BioRefinerDynamicPlus(nn.Module):
         )
 
         self.gamma = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.dynamic_adapter.set_parameter_stats(p_mean, p_std, norm_type)
 
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         dy = torch.zeros_like(y)

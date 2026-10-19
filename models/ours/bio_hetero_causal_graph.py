@@ -3,8 +3,7 @@
 """
 BioHeteroCausalGraphNet (Biochemical Multi-Relational Causal Graph Neural Operator)
 =================================================================================
-Strictly implements the 6 biochemical relational graphs (Complex, Kinase, Phosphatase,
-Transcription, Ubiquitination, GK-Switch), 4 functional circuit motif attentions
+Uses 6 ODE-term relation overlays plus untyped source support, 4 circuit motif attentions
 (START, SPINDLE, MEN, RESET), dynamic mutation flux modulation, and algebraic conservation laws.
 Memory complexity: O(B * width * T), strictly optimized for large batch sizes (512/1024).
 """
@@ -14,6 +13,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .relation_graph_contracts import RelationBundle, untyped_message
 
 # 39 Variable Definitions
 (nMASS, nCLN2, nCLB2, nCLB5, nSIC1, nCDC6, nC2, nC5, nF2, nF5,
@@ -23,20 +23,25 @@ import torch.nn.functional as F
 
 
 def load_multirelational_graphs(device='cpu'):
-    """Helper to load or construct the multirelational graphs and circuit motifs."""
+    """Return a bundle whose register() builds ODE-backed topology.
+
+    The old NPZ supplies ONLY circuit/module metadata, never graph edges.
+    """
     current_dir = os.path.dirname(os.path.abspath(__file__))
     npz_path = os.path.join(current_dir, "../../data/yeast_multirelational_graphs.npz")
     if os.path.exists(npz_path):
-        data = np.load(npz_path)
-        rel_graphs = torch.from_numpy(data['rel_graphs']).float().to(device)         # (6, 39, 39)
-        circuit_motifs = torch.from_numpy(data['circuit_motifs']).float().to(device) # (4, 39)
-        gene_bipartite = torch.from_numpy(data['gene_bipartite']).float().to(device) # (27, 39)
+        with np.load(npz_path, allow_pickle=False) as data:
+            circuit_motifs = torch.tensor(data['circuit_motifs'], dtype=torch.float32, device=device)
+            gene_bipartite = torch.tensor(data['gene_bipartite'], dtype=torch.float32, device=device)
     else:
-        rel_graphs = torch.zeros(6, 39, 39, device=device)
-        for r in range(6): rel_graphs[r] = torch.eye(39, device=device)
-        circuit_motifs = torch.ones(4, 39, device=device)
-        gene_bipartite = torch.zeros(27, 39, device=device)
-    return rel_graphs, circuit_motifs, gene_bipartite
+        from budding_yeast_v2.data.build_bio_multirelational_graphs import (
+            build_circuit_motifs, build_gene_bipartite_incidence)
+        circuit_motifs = torch.tensor(build_circuit_motifs(), dtype=torch.float32, device=device)
+        gene_bipartite = torch.tensor(build_gene_bipartite_incidence(), dtype=torch.float32, device=device)
+    for value, shape in ((circuit_motifs, (4, 39)), (gene_bipartite, (27, 39))):
+        if value.shape != shape or not torch.isfinite(value).all():
+            raise ValueError('Invalid circuit/module metadata')
+    return RelationBundle(circuit_motifs, gene_bipartite, device)
 
 
 class BioMutationFluxEncoder(nn.Module):
@@ -65,7 +70,8 @@ class BioMutationFluxEncoder(nn.Module):
 class MultiRelationalGraphConvBlock(nn.Module):
     """
     Performs 6-relation message passing over the 39 state variables.
-    H' = sum_{r=1..6} w_r * A_r * H * W_r + H
+    H' = sum_r w_r*A_r*H*W_r + mean(w)*A_untyped*H*mean(W) + H.
+    Relation labels are annotations; no fixed physical derivative sign is implied.
     """
     def __init__(self, width=64, num_vars=39, d_var=16, num_relations=6):
         super().__init__()
@@ -81,7 +87,7 @@ class MultiRelationalGraphConvBlock(nn.Module):
         self.norm = nn.GroupNorm(1, width)
         self.act = nn.SiLU()
 
-    def forward(self, x, rel_graphs, flux_weights):
+    def forward(self, x, rel_graphs, flux_weights, untyped_graph=None):
         """
         x: (B, width, T)
         rel_graphs: (6, 39, 39)
@@ -98,6 +104,8 @@ class MultiRelationalGraphConvBlock(nn.Module):
             x_w = torch.matmul(x_vars, self.rel_weights[r])
             prop = torch.einsum('nm,btmc->btnc', A_r, x_w)
             out_vars = out_vars + w_r * prop
+        if untyped_graph is not None:
+            out_vars = out_vars + untyped_message(x_vars, self.rel_weights, flux_weights, untyped_graph)
 
         out_flat = out_vars.reshape(B, T, self.num_vars * self.d_var)
         out = self.from_vars(out_flat).permute(0, 2, 1) # (B, W, T)
@@ -196,10 +204,7 @@ class BioHeteroCausalGraphNet(nn.Module):
         )
 
         # Buffers
-        rel_g, c_motifs, g_bipartite = load_multirelational_graphs()
-        self.register_buffer('rel_graphs', rel_g)           # (6, 39, 39)
-        self.register_buffer('circuit_motifs', c_motifs)   # (4, 39)
-        self.register_buffer('gene_bipartite', g_bipartite) # (27, 39)
+        load_multirelational_graphs().register(self, num_vars)
 
     def forward(self, x, p):
         """
@@ -222,7 +227,7 @@ class BioHeteroCausalGraphNet(nn.Module):
 
         # 3. Multi-Relational Graph Message Passing
         for block in self.graph_blocks:
-            h = block(h, self.rel_graphs, flux_w)
+            h = block(h, self.rel_graphs, flux_w, self.untyped_graph)
 
         # 4. Circuit Motif Attention
         h = self.circuit_attn(h, self.circuit_motifs)

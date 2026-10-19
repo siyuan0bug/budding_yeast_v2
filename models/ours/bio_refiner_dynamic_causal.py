@@ -25,6 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .input_contracts import ParameterInputTransform
 
 from .bio_mechanistic_operator import BioMechPathwayOnly
 from .bio_refiner_plus import (
@@ -193,6 +194,7 @@ class TimeVaryingCausalAdapter(nn.Module):
 
         # 注册野生型 WT 基准参数
         self.register_buffer('p_wt', torch.tensor(WT_VALUES_141, dtype=torch.float32))
+        self.parameter_transform = ParameterInputTransform(param_dim)
 
         # 构建因果有向图邻接矩阵与符号矩阵
         node_to_idx = {name: i for i, name in enumerate(MODULE_NAMES)}
@@ -245,6 +247,9 @@ class TimeVaryingCausalAdapter(nn.Module):
         # 零残差平滑门控标量
         self.alpha = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.parameter_transform.set_parameter_stats(p_mean, p_std, norm_type)
+
     def forward(self, p: torch.Tensor, y_coarse: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -258,9 +263,7 @@ class TimeVaryingCausalAdapter(nn.Module):
         device = p.device
 
         # A. 提取静态基因突变嵌入 e_mut: (B, 27, d_gene)
-        delta_p = p - self.p_wt.to(device)
-        eps = 1e-6
-        log_res = torch.sign(delta_p) * torch.log1p(torch.abs(delta_p) / (torch.abs(self.p_wt.to(device)) + eps))
+        delta_p, log_res = self.parameter_transform.intervention_features(p, self.p_wt, eps=1e-6)
 
         e_list = []
         for g_idx, gene_name in enumerate(MODULE_NAMES):
@@ -474,6 +477,9 @@ class BioRefinerDynamicCausalPlus(nn.Module):
 
         # 门控残差缩放因子
         self.gamma = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.dynamic_causal_adapter.set_parameter_stats(p_mean, p_std, norm_type)
 
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         dy = torch.zeros_like(y)

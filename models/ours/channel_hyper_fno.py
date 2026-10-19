@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .graph_contracts import resolve_variable_graph, attach_variable_graph
 
 
 class DynamicProjection(nn.Module):
@@ -44,11 +45,10 @@ class ChannelAttention(nn.Module):
             nn.Linear(64, num_vars * num_vars)
         )
 
-        if adj_matrix is not None:
-            self.register_buffer('adj_matrix', torch.tensor(adj_matrix, dtype=torch.float32))
-            self.adj_weight = nn.Parameter(torch.ones(num_vars, num_vars) * 0.1)
-        else:
-            self.adj_matrix = None
+        graph = resolve_variable_graph(adj_matrix, num_vars)
+        self.register_buffer('adj_matrix', graph.matrix.clone())
+        self.adj_weight = nn.Parameter(torch.ones(num_vars, num_vars) * 0.1)
+        attach_variable_graph(self, graph, ('adj_matrix',), optional_parameters=('adj_weight',))
 
         self.norm = nn.GroupNorm(1, width)
 

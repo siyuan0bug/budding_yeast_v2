@@ -216,6 +216,13 @@ def analyze_mass_pattern(mc):
     elif v == 1: return "Pattern_B: Single-Division (==1)"
     return "Pattern_C: Exponential-Arrest (==0)"
 
+try:
+    from .simulation_guards import bounded_simulation, validate_segment, bounded_completed
+except ImportError:  # standalone data script
+    from simulation_guards import bounded_simulation, validate_segment, bounded_completed
+
+
+@bounded_simulation
 def simulate_mutant(name, ovr, tf=210, ns=500):
     """Simulate a mutant cell trajectory over tf min with exact numerical protections"""
     p = get_default_params(); y0 = initial_conds()
@@ -253,6 +260,7 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
             lc += 1
             sol = solve_ivp(eqns, [t0, tf], y0, args=(p,), method='BDF', 
                             events=[event1, event2, event3, event4], rtol=1e-4, atol=1e-6)
+            validate_segment(sol, t0, tf, len(y0))
             tr.extend(sol.t[1:]); yr.extend(sol.y.T[1:])
             if sol.status == 1:
                 t0, y0 = sol.t[-1], sol.y[:, -1].copy()
@@ -276,9 +284,12 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
         return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
 
     tr, yr = np.array(tr), np.array(yr).T
-    if len(tr) < 2: return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
-    interp = interp1d(tr, yr, kind='linear', axis=1, fill_value="extrapolate")
+    if (len(tr) < 2 or tr[-1] < tf or not np.isfinite(yr).all() or (np.diff(tr) <= 0).any()):
+        return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
+    interp = interp1d(tr, yr, kind='linear', axis=1, bounds_error=True)
     yu = interp(np.linspace(0, tf, ns))
+    if not np.isfinite(yu).all():
+        return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
     
     max_m = np.max(yu[nMASS])
     if tf <= 210 and max_m > 10.0:
@@ -1258,11 +1269,11 @@ def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.25, 0.35, 0.25, 0.
             executor.submit(simulate_mutant, name, all_tasks[name], 210, 500): name
             for name in ordered_names
         }
-        for idx, future in enumerate(concurrent.futures.as_completed(future_to_name)):
+        for idx, future in enumerate(bounded_completed(executor, future_to_name)):
             name = future_to_name[future]
             is_synth = "_L" in name
             try:
-                m_name, y_uniform, m_bio_label, m_pattern_label = future.result(timeout=20.0)
+                m_name, y_uniform, m_bio_label, m_pattern_label = future.result()
                 if y_uniform is not None:
                     all_results[m_name] = y_uniform
                     bio_labels_dict[m_name] = m_bio_label

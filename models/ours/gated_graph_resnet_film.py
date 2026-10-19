@@ -1,5 +1,6 @@
 import os
 import torch
+from .graph_contracts import resolve_variable_graph, attach_variable_graph
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -93,19 +94,13 @@ class GatedSignedGraphCausalAttention(nn.Module):
         self.width = width
         self.d_attn = d_attn
 
-        # 1. 注册带符号生物拓扑矩阵 (39 x 39)
-        if adj_matrix is not None:
-            if isinstance(adj_matrix, np.ndarray):
-                adj_tensor = torch.tensor(adj_matrix, dtype=torch.float32)
-            else:
-                adj_tensor = adj_matrix.clone().detach().float()
-            self.register_buffer('adj_signed', adj_tensor)
-            self.register_buffer('adj_act', torch.clamp(adj_tensor, min=0.0))
-            self.register_buffer('adj_inh', torch.clamp(-adj_tensor, min=0.0))
-        else:
-            self.register_buffer('adj_signed', torch.eye(num_vars))
-            self.register_buffer('adj_act', torch.eye(num_vars))
-            self.register_buffer('adj_inh', torch.zeros(num_vars, num_vars))
+        # Unsigned source support; old signed buffer names are ABI only.
+        graph = resolve_variable_graph(adj_matrix, num_vars)
+        adj_tensor = graph.matrix.clone()
+        self.register_buffer('adj_signed', adj_tensor)
+        self.register_buffer('adj_act', torch.clamp(adj_tensor, min=0.0))
+        self.register_buffer('adj_inh', torch.clamp(-adj_tensor, min=0.0))
+        attach_variable_graph(self, graph, ('adj_signed', 'adj_act', 'adj_inh'))
 
         # 2. 可学习带符号通路权重
         self.w_act = nn.Parameter(torch.ones(num_vars, num_vars) * 0.5)

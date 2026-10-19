@@ -194,6 +194,7 @@ def load_trajectory_stats(path, real, synth, cache_path, need_full):
 def replay_checkpoint(ckpt_path, names, p, synth, real, truth, mean, std, out_dir, batch_size):
     import torch
     from budding_yeast_v2.models.ours.bio_refiner_plus import BioRefinerPlus
+    from budding_yeast_v2.models.ours.graph_contracts import set_graph_load_policy
     from budding_yeast_v2.utils.metrics import calculate_metrics
 
     torch.set_num_threads(4)
@@ -209,6 +210,7 @@ def replay_checkpoint(ckpt_path, names, p, synth, real, truth, mean, std, out_di
     model = BioRefinerPlus(num_vars=hp.get("num_vars", 39), param_dim=hp.get("param_dim", 141),
                            width=hp["width"], modes=hp["modes"], n_blocks=hp.get("n_blocks", 4))
     state = {k.removeprefix("model."): v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")}
+    set_graph_load_policy(model, 'checkpoint')  # Frozen replay must preserve historical graph buffers.
     model.load_state_dict(state, strict=True)
     model.eval()
     physical_p = torch.as_tensor(p, dtype=torch.float32)
@@ -367,20 +369,29 @@ def audit_causal_reference(p, synth, param_names, output_dir):
     import torch
     from budding_yeast_v2.data.mutant_aware import get_default_params
     from budding_yeast_v2.models.ours.bio_refiner_causal import WT_VALUES_141
+    from budding_yeast_v2.models.ours.input_contracts import ParameterInputTransform
 
     physical = get_default_params()
     physical.update(init_CDH1T=1., init_CDH1=.9304992, init_BUB2=.2)
     wt = torch.tensor([physical[k] for k in param_names], dtype=torch.float32)
     ref = torch.tensor(WT_VALUES_141, dtype=torch.float32)
     values = torch.tensor(p[synth], dtype=torch.float32)
-    normalized = (wt - values.mean(0)) / (values.std(0) + 1e-6)
+    mean, std = values.mean(0), values.std(0) + 1e-6
+    normalized = (wt - mean) / std
+    transform = ParameterInputTransform(len(param_names))
+    transform.set_parameter_stats(mean, std, norm_type="log1p")
+    delta, log_res = transform.intervention_features(normalized[None], ref)
     table = pd.DataFrame({"parameter": param_names, "physical_wt": wt.numpy(),
                           "gate_reference": ref.numpy(), "normalized_wt_input": normalized.numpy(),
-                          "implemented_delta_for_wt": (normalized - ref).numpy()})
+                          "legacy_mixed_unit_delta_for_wt": (normalized - ref).numpy(),
+                          "implemented_delta_for_wt": delta[0].numpy(),
+                          "implemented_log_res_for_wt": log_res[0].numpy()})
     table.to_csv(output_dir / "causal_wt_reference_probe.csv", index=False)
     result = {"scope": "WT and synthetic normalization statistics only",
               "physical_wt_reference_max_difference": float((wt - ref).abs().max()),
-              "normalized_wt_minus_physical_reference_l2": float(torch.linalg.vector_norm(normalized - ref))}
+              "legacy_normalized_wt_minus_physical_reference_l2": float(torch.linalg.vector_norm(normalized - ref)),
+              "implemented_wt_delta_l2": float(torch.linalg.vector_norm(delta)),
+              "implemented_wt_log_res_l2": float(torch.linalg.vector_norm(log_res))}
     (output_dir / "causal_wt_reference_summary.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 

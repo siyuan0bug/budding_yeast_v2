@@ -46,6 +46,9 @@ if _current_dir not in sys.path:
     sys.path.insert(0, _current_dir)
 
 import mutant_aware as ma
+from simulation_guards import bounded_completed
+
+SAMPLING_RNG_CONTRACT = 'pure_random_single_stream_v1'
 
 
 def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_max=1e-4):
@@ -54,6 +57,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
     - Level k in {1, 2, 3, 4} dictates exactly k mutated genes.
     - Genes are chosen uniformly at random without replacement.
     - Modes are chosen uniformly at random from the gene's available modes.
+    - All downstream random draws use this same caller-owned rng.
     """
     p_wt = ma.get_default_params()
     p_wt.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
@@ -74,7 +78,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
     for g, m in pairs:
         expanded.append((g, m))
         gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', {})
-        if g in ma.COMPOSITE_ELIGIBLE and rng.rand() < 0.25:
+        if g in ma.COMPOSITE_ELIGIBLE and rng.random() < 0.25:
             synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
             struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
             if m in synth and struc:
@@ -84,7 +88,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
     pairs = expanded
 
     # Resolve parameter collision conflicts
-    pairs = ma._resolve_conflicts(pairs)
+    pairs = ma._resolve_conflicts(pairs, rng=rng)
     if not pairs:
         return sample_pure_random_mutant(level, rng, enable_ko_interval=enable_ko_interval, ko_interval_max=ko_interval_max)
 
@@ -101,7 +105,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
             if enable_ko_interval:
                 # Sample within [0, ko_interval_max] strictly bounded <= 1e-4
                 temp_ovr = {}
-                ma.apply_gene_mutation(g_name, 'KO', 0.0, p_wt, p_mut, temp_ovr)
+                ma.apply_gene_mutation(g_name, 'KO', 0.0, p_wt, p_mut, temp_ovr, rng=rng)
                 for k in temp_ovr:
                     if k in ('init_CDH1', 'init_Tem1', 'init_Cdc15'):
                         continue
@@ -121,12 +125,12 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
                     ovr['init_Cdc15'] = float(rng.uniform(0.0, t_val))
                     p_mut['init_Cdc15'] = ovr['init_Cdc15']
             else:
-                ma.apply_gene_mutation(g_name, 'KO', 0.0, p_wt, p_mut, ovr)
+                ma.apply_gene_mutation(g_name, 'KO', 0.0, p_wt, p_mut, ovr, rng=rng)
         elif m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
-            alpha = ma.sample_scaling_factor(m_chosen, g_name)
-            ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
+            alpha = ma.sample_scaling_factor(m_chosen, g_name, rng=rng)
+            ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, rng=rng)
         else:
-            ma.apply_gene_mutation(g_name, m_chosen, 1.0, p_wt, p_mut, ovr)
+            ma.apply_gene_mutation(g_name, m_chosen, 1.0, p_wt, p_mut, ovr, rng=rng)
 
     # Carbon source handling: aligned with native physiological distribution
     if has_gal_oe:
@@ -167,6 +171,7 @@ def generate_pure_random_dataset(num_samples=100000,
 
     print("\n" + "=" * 85)
     print(f" PURE RANDOM DATASET GENERATOR (Target: {num_samples} samples, Seed: {seed})")
+    print(f" Sampling RNG Contract: {SAMPLING_RNG_CONTRACT}")
     print(f" Output Target File: {dataset_path}")
     print(f" Level Quotas (25/25/25/25): {level_ratios}")
     print(f" Collision Rescue Switch: {'ENABLED' if enable_collision_rescue else 'DISABLED'}")
@@ -219,7 +224,7 @@ def generate_pure_random_dataset(num_samples=100000,
             if ma.is_duplicate_real_mutant(ovr, p_wt_default):
                 if enable_collision_rescue:
                     # 碰撞拯救：70% 概率连续微衰减 (DAmP/ts/pLOF)，30% 概率碳源漂移 (Gal/Raff)
-                    rescued_ovr, rescued_desc = ma.rescue_collision_candidate(ovr, desc_str, p_wt_default)
+                    rescued_ovr, rescued_desc = ma.rescue_collision_candidate(ovr, desc_str, p_wt_default, rng=rng)
                     if rescued_ovr is not None and not ma.is_duplicate_real_mutant(rescued_ovr, p_wt_default):
                         ovr = rescued_ovr
                         desc_str = rescued_desc
@@ -264,11 +269,11 @@ def generate_pure_random_dataset(num_samples=100000,
             executor.submit(ma.simulate_mutant, name, all_tasks[name], 210, 500): name
             for name in ordered_names
         }
-        for idx, future in enumerate(concurrent.futures.as_completed(future_to_name)):
+        for idx, future in enumerate(bounded_completed(executor, future_to_name, stall_timeout=35.0)):
             name = future_to_name[future]
             is_synth = "_L" in name
             try:
-                m_name, y_uniform, m_bio_label, m_pattern_label = future.result(timeout=25.0)
+                m_name, y_uniform, m_bio_label, m_pattern_label = future.result()
                 if y_uniform is not None:
                     all_results[m_name] = y_uniform
                     bio_labels_dict[m_name] = m_bio_label
@@ -340,7 +345,9 @@ def generate_pure_random_dataset(num_samples=100000,
                         param_names=np.array(param_keys),
                         mutant_names=np.array(final_names),
                         labels=all_bio_labels,
-                        pattern_labels=all_pattern_labels)
+                        pattern_labels=all_pattern_labels,
+                        sampling_seed=np.int64(seed),
+                        sampling_rng_contract=np.array(SAMPLING_RNG_CONTRACT))
 
     total_valid = len(final_names)
     print("=" * 85)

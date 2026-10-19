@@ -1,5 +1,6 @@
 import os
 import torch
+from .graph_contracts import resolve_variable_graph, attach_variable_graph
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -93,27 +94,16 @@ class MultiHopSignedGraphDiffusionAttention(nn.Module):
         self.width = width
         self.d_attn = d_attn
 
-        # 1. 构造与注册 1阶、2阶、3阶带符号图矩阵
-        if adj_matrix is not None:
-            if isinstance(adj_matrix, np.ndarray):
-                adj_tensor = torch.tensor(adj_matrix, dtype=torch.float32)
-            else:
-                adj_tensor = adj_matrix.clone().detach().float()
-            
-            # 1-hop
-            A1 = adj_tensor
-            # 2-hop (矩阵乘法并谱半径归一化)
-            A2 = torch.matmul(adj_tensor, adj_tensor) / max(1.0, torch.norm(adj_tensor).item())
-            # 3-hop
-            A3 = torch.matmul(A2, adj_tensor) / max(1.0, torch.norm(adj_tensor).item())
-
-            self.register_buffer('adj_1', A1)
-            self.register_buffer('adj_2', A2)
-            self.register_buffer('adj_3', A3)
-        else:
-            self.register_buffer('adj_1', torch.eye(num_vars))
-            self.register_buffer('adj_2', torch.eye(num_vars))
-            self.register_buffer('adj_3', torch.eye(num_vars))
+        # One source graph, with deterministic derived multi-hop affinities.
+        graph = resolve_variable_graph(adj_matrix, num_vars)
+        A1 = graph.matrix.clone()
+        scale = max(1.0, torch.norm(A1).item())
+        A2 = torch.matmul(A1, A1) / scale
+        A3 = torch.matmul(A2, A1) / scale
+        self.register_buffer('adj_1', A1)
+        self.register_buffer('adj_2', A2)
+        self.register_buffer('adj_3', A3)
+        attach_variable_graph(self, graph, ('adj_1', 'adj_2', 'adj_3'))
 
         # 2. 可学习多阶通路权重
         self.w_hop1 = nn.Parameter(torch.ones(num_vars, num_vars) * 0.5)

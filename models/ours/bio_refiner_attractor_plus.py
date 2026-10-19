@@ -33,6 +33,7 @@ from .bio_mechanistic_operator import BioMechPathwayOnly
 from .bio_refiner_plus import TemporalPyramidBlock, StoichiometricGraphAttention
 from .bio_refiner_attractor import EquilibriumRelaxationStream
 from .bio_refiner_causal_reach import CausalReachabilityGate
+from .input_contracts import extract_initial_state
 
 
 class BioRefinerAttractorPlus(nn.Module):
@@ -113,6 +114,9 @@ class BioRefinerAttractorPlus(nn.Module):
         )
         self.gamma = nn.Parameter(torch.tensor(0.1))
 
+    def set_parameter_stats(self, p_mean=None, p_std=None, norm_type="log1p"):
+        self.reachability_gate.set_parameter_stats(p_mean, p_std, norm_type)
+
     def _compute_1st_derivative(self, y: torch.Tensor) -> torch.Tensor:
         d = torch.zeros_like(y)
         d[:, :, 1:-1] = (y[:, :, 2:] - y[:, :, :-2]) * 0.5
@@ -150,7 +154,7 @@ class BioRefinerAttractorPlus(nn.Module):
         capacity = self.reachability_gate(p)               # (B, 39, 1)
 
         # 2. 稳态平原流
-        y_plat = self.plateau_stream(x_in, p)  # (B, 39, T)
+        y_plat = self.plateau_stream(x, p)  # (B, 39, T)
 
         # 3. 振荡极限环流 (受容量调制)
         y_coarse = self.stage1_coarse(x, p)  # (B, 39, T)
@@ -164,7 +168,7 @@ class BioRefinerAttractorPlus(nn.Module):
         h = self.graph_attn(h)
         delta_y = self.head(h)
 
-        x_0 = x_in[:, :self.num_vars, 0:1]
+        x_0 = extract_initial_state(x, self.num_vars)
         y_osc_unconstrained = y_coarse + torch.tanh(self.gamma) * delta_y
         y_osc = x_0 + capacity * (y_osc_unconstrained - x_0)
 

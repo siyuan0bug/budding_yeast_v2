@@ -68,6 +68,10 @@ Matches single .npz file structure and field types of lhs_v1_origin.py:
 
 import numpy as np
 import math, os, sys, time, warnings, signal
+try:
+    from .simulation_guards import bounded_simulation, validate_segment, bounded_completed
+except ImportError:  # support python data/mutant_aware.py
+    from simulation_guards import bounded_simulation, validate_segment, bounded_completed
 import concurrent.futures
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
@@ -268,6 +272,7 @@ def analyze_mass_pattern(mc):
     elif v == 1: return "Pattern_B: Single-Division (==1)"
     return "Pattern_C: Exponential-Arrest (==0)"
 
+@bounded_simulation
 def simulate_mutant(name, ovr, tf=210, ns=500):
     """Simulate a mutant cell trajectory over tf min with exact numerical protections"""
     p = get_default_params(); y0 = initial_conds()
@@ -307,6 +312,7 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
             lc += 1
             sol = solve_ivp(eqns, [t0, tf], y0, args=(p,), method='BDF', 
                             events=[event1, event2, event3, event4], rtol=1e-4, atol=1e-6)
+            validate_segment(sol, t0, tf, len(y0))
             tr.extend(sol.t[1:]); yr.extend(sol.y.T[1:])
             if sol.status == 1:
                 t0, y0 = sol.t[-1], sol.y[:, -1].copy()
@@ -330,9 +336,13 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
         return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
 
     tr, yr = np.array(tr), np.array(yr).T
-    if len(tr) < 2: return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
-    interp = interp1d(tr, yr, kind='linear', axis=1, fill_value="extrapolate")
+    if (len(tr) < 2 or tr[-1] < tf or not np.isfinite(yr).all() or (np.diff(tr) <= 0).any()):
+        return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
+    # Never synthesize an unintegrated tail by extrapolation.
+    interp = interp1d(tr, yr, kind='linear', axis=1, bounds_error=True)
     yu = interp(np.linspace(0, tf, ns))
+    if not np.isfinite(yu).all():
+        return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
     
     max_m = np.max(yu[nMASS])
     if tf <= 210 and max_m > 10.0:
@@ -629,42 +639,44 @@ for g in BINDING_GROUPS.values():
 # Part 4: Section 2.3.1 Continuous Biophysical Distribution Samplers
 # ==============================================================================
 
-def sample_scaling_factor(mode, g_name=None):
+def sample_scaling_factor(mode, g_name=None, *, rng=None):
+    """Use the caller's stream; omitted rng preserves legacy global sampling."""
+    rng = np.random if rng is None else rng
     if mode == 'GAL-OE':
         if g_name == 'CDC20':
-            return 10.0 ** float(np.random.uniform(np.log10(0.50), np.log10(12.0)))
+            return 10.0 ** float(rng.uniform(np.log10(0.50), np.log10(12.0)))
         elif g_name == 'CLB2':
-            return 10.0 ** float(np.random.uniform(np.log10(0.002), np.log10(1.50)))
+            return 10.0 ** float(rng.uniform(np.log10(0.002), np.log10(1.50)))
         elif g_name == 'SIC1':
-            return 10.0 ** float(np.random.uniform(np.log10(0.03), np.log10(0.36)))
+            return 10.0 ** float(rng.uniform(np.log10(0.03), np.log10(0.36)))
         elif g_name == 'CDC6':
-            return 10.0 ** float(np.random.uniform(np.log10(0.10), np.log10(0.60)))
+            return 10.0 ** float(rng.uniform(np.log10(0.10), np.log10(0.60)))
         elif g_name == 'CLB5':
-            return 10.0 ** float(np.random.uniform(np.log10(0.004), np.log10(0.030)))
+            return 10.0 ** float(rng.uniform(np.log10(0.004), np.log10(0.030)))
         elif g_name == 'PDS1':
-            return 10.0 ** float(np.random.uniform(np.log10(0.02), np.log10(0.25)))
+            return 10.0 ** float(rng.uniform(np.log10(0.02), np.log10(0.25)))
         elif g_name == 'CLN2':
             # all 7 real GAL-CLN2 constructs: ksn2p=0.12; floor = anchor/2
             # (0.03 = anchor/4 is implausibly weak for a GAL1 construct)
-            return 10.0 ** float(np.random.uniform(np.log10(0.06), np.log10(0.30)))
+            return 10.0 ** float(rng.uniform(np.log10(0.06), np.log10(0.30)))
         elif g_name == 'CLN3':
-            return 10.0 ** float(np.random.uniform(np.log10(1.0), np.log10(5.0)))
+            return 10.0 ** float(rng.uniform(np.log10(1.0), np.log10(5.0)))
         elif g_name == 'TEM1':
-            return 10.0 ** float(np.random.uniform(np.log10(2.0), np.log10(8.0)))
+            return 10.0 ** float(rng.uniform(np.log10(2.0), np.log10(8.0)))
         elif g_name == 'CDC15':
-            return 10.0 ** float(np.random.uniform(np.log10(3.0), np.log10(20.0)))
+            return 10.0 ** float(rng.uniform(np.log10(3.0), np.log10(20.0)))
         elif g_name == 'ESP1':
-            return 10.0 ** float(np.random.uniform(np.log10(1.5), np.log10(6.0)))
+            return 10.0 ** float(rng.uniform(np.log10(1.5), np.log10(6.0)))
         elif g_name == 'CDC14':
-            return 10.0 ** float(np.random.uniform(np.log10(0.30), np.log10(1.20)))
+            return 10.0 ** float(rng.uniform(np.log10(0.30), np.log10(1.20)))
         elif g_name == 'NET1':
-            return 10.0 ** float(np.random.uniform(np.log10(0.15), np.log10(0.60)))
+            return 10.0 ** float(rng.uniform(np.log10(0.15), np.log10(0.60)))
         elif g_name in ['PPX', 'CDC5', 'CDC5_Proxy']:
-            return 10.0 ** float(np.random.uniform(np.log10(0.20), np.log10(0.60)))
+            return 10.0 ** float(rng.uniform(np.log10(0.20), np.log10(0.60)))
         elif g_name == 'SWI5':
-            return 10.0 ** float(np.random.uniform(np.log10(0.02), np.log10(0.10)))
+            return 10.0 ** float(rng.uniform(np.log10(0.02), np.log10(0.10)))
         else:
-            log_alpha = np.random.uniform(np.log10(2.0), np.log10(30.0))
+            log_alpha = rng.uniform(np.log10(2.0), np.log10(30.0))
             return 10.0 ** float(log_alpha)
     elif mode == 'MC':
         # Chen 2004 Methods p.3848: "multiply ... by an integer, depending on
@@ -676,10 +688,10 @@ def sample_scaling_factor(mode, g_name=None):
         # E-Mech); real MC anchors top out at 25x (#122 CDC20 15.0/0.6).
         ns = np.arange(2, 31)
         w = 1.0 / ns
-        return float(np.random.choice(ns, p=w / w.sum()))
+        return float(rng.choice(ns, p=w / w.sum()))
     elif mode == 'ts':
         if g_name == 'CDC14':
-            return float(np.random.uniform(0.05, 0.35))
+            return float(rng.uniform(0.05, 0.35))
         if g_name in ('TEM1', 'ESP1'):
             # v5.1 anchor envelope (spec §5.4 T3 / §11.4, v2.3 declared
             # E-Anchor exception, same epistemic status as the GAL bands):
@@ -693,14 +705,14 @@ def sample_scaling_factor(mode, g_name=None):
             # Envelope LogU[anchor/4, anchor*2] (GAL band convention): anchor
             # is an interior point (P(f=anchor)=0), full-dim dedup still
             # blocks the real composites (#81/#84/#88-91 all carry partners).
-            return 10.0 ** float(np.random.uniform(np.log10(0.0005), np.log10(0.004)))
+            return 10.0 ** float(rng.uniform(np.log10(0.0005), np.log10(0.004)))
         if g_name == 'NET1':
             # v5.1 anchor envelope: net1-ts / tab6-1 anchors kasrent 200->10,
             # kasrentp 1.0->0.05 (f=0.05, 69th percentile of the Beta arm).
             # Envelope LogU[0.0125, 0.10] = [anchor/4, anchor*2] concentrates
             # the conditional mean (0.042) near the anchor and cuts the
             # conditional spread (kasrent in [2.5, 20] instead of (0, 40]).
-            return 10.0 ** float(np.random.uniform(np.log10(0.0125), np.log10(0.10)))
+            return 10.0 ** float(rng.uniform(np.log10(0.0125), np.log10(0.10)))
         if g_name in ('CDC20', 'CDC15', 'APC_Core'):
             # v5.2 boundary-anchor buffer (spec §5.4 T3, same rule as PDS1-db
             # D2): paper ts anchors for these alleles are exact zeros
@@ -712,14 +724,14 @@ def sample_scaling_factor(mode, g_name=None):
             # is why base beat ma on the cdc20-ts family). f ~ U[0, 0.01] =
             # declared <=1% thermal-inactivation residual buffer; f=0 boundary
             # anchor unreachable (P=0), conditional mean 0.005 x WT.
-            return float(np.random.uniform(0.0, 0.01))
-        u = np.random.beta(a=0.5, b=2.0)
+            return float(rng.uniform(0.0, 0.01))
+        u = rng.beta(a=0.5, b=2.0)
         return float(0.20 * u)
     elif mode == 'DAmP':
-        val = np.random.normal(loc=0.20, scale=0.05)
+        val = rng.normal(loc=0.20, scale=0.05)
         return float(np.clip(val, 0.05, 0.40))
     elif mode == 'pLOF':
-        return float(np.random.uniform(0.10, 0.50))
+        return float(rng.uniform(0.10, 0.50))
     elif mode == 'db':
         if g_name == 'CLB2':
             # v5.2.1 / v2.3-calib (spec §5.4 D1, E-Anchor): real anchor kdb2pp=0.034
@@ -729,7 +741,7 @@ def sample_scaling_factor(mode, g_name=None):
             # Since apply_gene_mutation sets kdb2pp = p_wt['kdb2pp'] * alpha (0.4 * alpha),
             # alpha must be sampled from [0.0085/0.4, 0.068/0.4] = U[0.02125, 0.170].
             # Real anchor alpha=0.085 sits at the 42.86% percentile (interior, P=0, dedup-safe).
-            return float(np.random.uniform(0.02125, 0.170))
+            return float(rng.uniform(0.02125, 0.170))
         elif g_name == 'PDS1':
             # v5.1 (spec §5.4 D2, v2.3): residual band tightened U[0,0.05] ->
             # U[0, 0.01]. Pds1 has no KEN-box, so D-box deletion removes the
@@ -737,14 +749,14 @@ def sample_scaling_factor(mode, g_name=None):
             # paper anchor, boundary point); <=1% residual = declared
             # modelling buffer for unknown degradation-signal redundancy.
             # Conditional mean Vdpds 0.011 vs real anchor 0.010 (was 0.015).
-            return float(np.random.uniform(0.0, 0.01))
+            return float(rng.uniform(0.0, 0.01))
         elif g_name in ('CLB5', 'SIC1', 'PPX', 'CDC5_Proxy'):
             # v5.2: exact-zero db alleles -> <=1% residual buffer (same D2
             # rule as PDS1). The fixed f=0 collapsed L1 CLB5[db] onto real
             # #68 CLB5-dbΔ (84% dedup interception at Glc) and left the
             # low-residual kd*pp axis with only 3 carbon-condition support
             # points per allele. Boundary anchors stay unreachable (P=0).
-            return float(np.random.uniform(0.0, 0.01))
+            return float(rng.uniform(0.0, 0.01))
         else:
             return 0.0
     return 1.0
@@ -797,11 +809,13 @@ def is_duplicate_real_mutant(ovr_candidate, p_wt_default):
 
     return False
 
-def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
+def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
     """
     Explicit, dedicated parameter modification engine per (Gene, Mode) pair
     matching Section 7 of Mutant-Aware Sampling Scheme v1.
+    Stochastic allele branches use the supplied rng (legacy global if omitted).
     """
+    rng = np.random if rng is None else rng
     # 1. GAL-OE (Galactose Overexpression: GAL1 promoter drives basal synthesis)
     if m_chosen == 'GAL-OE':
         if g_name == 'CLN2':
@@ -902,8 +916,8 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
             #   collapsed onto real #99 cdc14-ts at Glc -> 50% x 75% dedup
             #   interception of the L1 CDC14[ts] cell), catalytic rates WT
             # Mode B (50% prob): Semi-permissive temp (30-34°C) catalytic attenuation: ks14 = WT, 4 catalytic rates scaled by alpha in [0.05, 0.35]
-            if np.random.rand() < 0.50:
-                ovr['ks14'] = p_wt['ks14'] * np.random.uniform(0.0, 0.01)
+            if rng.random() < 0.50:
+                ovr['ks14'] = p_wt['ks14'] * rng.uniform(0.0, 0.01)
             else:
                 ovr['ks14'] = p_wt['ks14']
                 ovr['kppc1'] = p_wt['kppc1'] * alpha
@@ -1038,7 +1052,7 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         # U[0,0.01] x WT replaces the exact 0.0 (fixed zero collapsed L1
         # CDC20[APC-A] / APC_Core[APC-A] onto #115, 72-79% dedup
         # interception; the L2 analogs of #116/#117 were likewise blocked)
-        ovr['ka20pp'] = p_wt['ka20pp'] * np.random.uniform(0.0, 0.01)
+        ovr['ka20pp'] = p_wt['ka20pp'] * rng.uniform(0.0, 0.01)
     elif m_chosen == 'TAB6-1':
         # v5.2: tab6-1 IS the net1-ts allele (real #97 'net1-ts' and #108
         # 'TAB6-1' share the anchors kasrent 200->10, kasrentp 1.0->0.05,
@@ -1046,7 +1060,7 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         # of #108 (dedup collapse, 75% interception) and blocked the L2
         # analogs of #109/#110. Reuse the NET1 ts anchor envelope
         # LogU[anchor/4, anchor*2] (f interior, dedup-safe).
-        f = 10.0 ** float(np.random.uniform(np.log10(0.0125), np.log10(0.10)))
+        f = 10.0 ** float(rng.uniform(np.log10(0.0125), np.log10(0.10)))
         ovr['kasrent'] = p_wt['kasrent'] * f; ovr['kasrentp'] = p_wt['kasrentp'] * f
     elif m_chosen == 'scc1-RR':
         ovr['kasesp'] = 0.0
@@ -1056,7 +1070,7 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         ovr['ksf6p'] = 0.0; ovr['ksf6pp'] = 0.0; ovr['ksf6ppp'] = 0.0
     elif m_chosen == 'perturb' and g_name == 'ORI_BUD_SPN':
         for k in ['ksori', 'ksbud', 'ksspn']:
-            scale = float(np.clip(np.random.normal(1.0, 0.20), 0.1, 3.0))
+            scale = float(np.clip(rng.normal(1.0, 0.20), 0.1, 3.0))
             ovr[k] = p_wt[k] * scale
     elif m_chosen == 'cdc24Δ':
         ovr['ksbud'] = 0.0
@@ -1068,7 +1082,7 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
         # Glc = standard lab medium (dominant); Gal/Raff = GAL-workflow media
         # v5.2: weights aligned with the R5 carbon rule (was 0.70/0.15/0.15,
         # inconsistent with the main-branch 0.75/0.18/0.07)
-        ovr['mdt'] = float(np.random.choice([90.0, 150.0, 160.0], p=[0.75, 0.18, 0.07]))
+        ovr['mdt'] = float(rng.choice([90.0, 150.0, 160.0], p=[0.75, 0.18, 0.07]))
 
 # ==============================================================================
 # Part 5.5: Structure-aware skeleton (inlined from mass_wt_blind_sampler v1.6,
@@ -1551,25 +1565,26 @@ def next_L1_cell():
     _L1_IDX['i'] += 1
     return cell
 
-def _sample_mode(gene):
+def _sample_mode(gene, *, rng=None):
+    rng = np.random if rng is None else rng
     modes = list(GROUP_BY_NAME[gene]['modes'].keys())
     if MODE_FREQ == 's5':   # Ablation A: Table-S5-fitted mode weights (leaks by design)
         w = np.array([GROUP_BY_NAME[gene]['modes'][m] for m in modes], dtype=float)
-        return str(np.random.choice(modes, p=w / w.sum()))
+        return str(rng.choice(modes, p=w / w.sum()))
     if MODE_FREQ == 'role':  # Ablation B: role-aware affinity weights (Tier 2/3)
         aff = ROLE_AFFINITY.get(GENE_ROLE.get(gene, 'event'), None)
         if aff is not None:
             w = np.array([aff.get(MODE_CLASS.get(m, 'event'), 1.0)
                           for m in modes], dtype=float)
-            return str(np.random.choice(modes, p=w / w.sum()))
+            return str(rng.choice(modes, p=w / w.sum()))
         # event-role genes (or unmapped): flat, same RNG call as the flat arm
     if MODE_FREQ == 'class':  # v5.1 main arm: mode-class quotas (R1)
         w = np.array([MODE_CLASS_QUOTA.get(MODE_CLASS.get(m, 'event'), 1.0)
                       for m in modes], dtype=float)
-        return str(np.random.choice(modes, p=w / w.sum()))
-    return str(np.random.choice(modes))   # flattened uniform (anti-leak, §3.1.4)
+        return str(rng.choice(modes, p=w / w.sum()))
+    return str(rng.choice(modes))   # flattened uniform (anti-leak, §3.1.4)
 
-def _resolve_conflicts(pairs):
+def _resolve_conflicts(pairs, *, rng=None):
     """Same-parameter dual-mode ban + cross-gene overlap ban (§3.1.6).
     On collision between pair i and pair j: resample i's mode; if NO mode of
     gene_i can avoid the collision (e.g. CDH1 KO/CA both touch kscdh, which
@@ -1577,6 +1592,8 @@ def _resolve_conflicts(pairs):
     side has a clean mode, drop pair i. After any drop the whole list is
     re-checked — a drop can expose a second, previously masked conflict
     (found by smoke test A2, 2026-09-06). Output is always conflict-free."""
+    # Explicit streams also fix set traversal order across PYTHONHASHSEEDs.
+    # Keep the omitted-rng path unchanged for existing sampler callers.
     pairs = list(pairs)
     rounds = 30
     while len(pairs) > 1:
@@ -1584,7 +1601,7 @@ def _resolve_conflicts(pairs):
         conflict = None
         for i, (g, m) in enumerate(pairs):
             ts = touch_set(g, m)
-            for pk in ts:
+            for pk in (sorted(ts) if rng is not None else ts):
                 if pk in touched:
                     conflict = (i, touched[pk])
                     break
@@ -1603,9 +1620,9 @@ def _resolve_conflicts(pairs):
         j_ok = any(not (touch_set(gj, mm) & _other_keys(j))
                    for mm in GROUP_BY_NAME[gj]['modes'])
         if rounds > 0 and i_ok:
-            pairs[i] = (gi, _sample_mode(gi)); rounds -= 1
+            pairs[i] = (gi, _sample_mode(gi, rng=rng)); rounds -= 1
         elif rounds > 0 and j_ok:
-            pairs[j] = (gj, _sample_mode(gj)); rounds -= 1
+            pairs[j] = (gj, _sample_mode(gj, rng=rng)); rounds -= 1
         else:
             # neither side can redraw clean (or redraw budget spent): drop
             # pair i and re-check the remaining list (loop continues)
@@ -1740,12 +1757,14 @@ def sample_mass_mutant(level=1):
     desc_str = "+".join(mut_descriptions)
     return ovr, desc_str
 
-def rescue_collision_candidate(ovr, desc_str, p_wt):
+def rescue_collision_candidate(ovr, desc_str, p_wt, *, rng=None):
     """
     Rescues a candidate sample that hit a 100% collision with D_real.
     Branch 1 (70%): Glucose preservation with continuous mode switch (DAmP / ts / pLOF).
     Branch 2 (30%): Carbon shift to Galactose (150) or Raffinose (160).
+    Forward the caller's rng to all nested scaling/mutation draws.
     """
+    rng = np.random if rng is None else rng
     tokens = desc_str.split('+')
     parsed = []
     for tok in tokens:
@@ -1764,25 +1783,25 @@ def rescue_collision_candidate(ovr, desc_str, p_wt):
     new_ovr = {}
 
     # 70% chance: Mode continuous switch on Glucose
-    if np.random.rand() < 0.70:
+    if rng.random() < 0.70:
         ko_genes = [g for g, m in parsed if m == 'KO' and g in GROUP_BY_NAME]
         if ko_genes:
-            target_g = str(np.random.choice(ko_genes))
+            target_g = str(rng.choice(ko_genes))
             avail = [m for m in ['DAmP', 'ts', 'pLOF'] if m in GROUP_BY_NAME[target_g]['modes']]
             if avail:
-                target_m = str(np.random.choice(avail))
+                target_m = str(rng.choice(avail))
                 new_pairs = [(g, target_m if g == target_g else m) for g, m in parsed]
                 new_desc = []
                 for g_name, m_chosen in new_pairs:
                     new_desc.append(f"{g_name}[{m_chosen}]")
-                    alpha = sample_scaling_factor(m_chosen, g_name) \
+                    alpha = sample_scaling_factor(m_chosen, g_name, rng=rng) \
                         if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
-                    apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, new_ovr)
+                    apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, new_ovr, rng=rng)
                 new_ovr['mdt'] = ovr.get('mdt', 90.0)
                 return new_ovr, "+".join(new_desc)
 
     # 30% chance or fallback: Carbon Shift (Gal 150 or Raff 160)
-    shift_mdt = float(np.random.choice([150.0, 160.0]))
+    shift_mdt = float(rng.choice([150.0, 160.0]))
     shifted_ovr = dict(ovr)
     shifted_ovr['mdt'] = shift_mdt
     return shifted_ovr, desc_str + f"_MDT[{int(shift_mdt)}]"
@@ -1909,11 +1928,11 @@ def generate_mass_dataset(n_synthetic=100000, level_ratios=[0.25, 0.35, 0.25, 0.
             executor.submit(simulate_mutant, name, all_tasks[name], 210, 500): name
             for name in ordered_names
         }
-        for idx, future in enumerate(concurrent.futures.as_completed(future_to_name)):
+        for idx, future in enumerate(bounded_completed(executor, future_to_name)):
             name = future_to_name[future]
             is_synth = "_L" in name
             try:
-                m_name, y_uniform, m_bio_label, m_pattern_label = future.result(timeout=20.0)
+                m_name, y_uniform, m_bio_label, m_pattern_label = future.result()
                 if y_uniform is not None:
                     all_results[m_name] = y_uniform
                     bio_labels_dict[m_name] = m_bio_label

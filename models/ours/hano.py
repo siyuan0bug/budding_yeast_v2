@@ -43,6 +43,8 @@ HANO: Hybrid-Automaton Neural Operator (混合自动机神经算子)
 import math
 import numpy as np
 import torch
+from .relation_graph_contracts import register_relation_graph
+from budding_yeast_v2.data.normalization import normalize_y, denormalize_y, denormalize_p, check_norm_type
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -445,8 +447,8 @@ class FiLMConvBlock(nn.Module):
 class MultiRelGraphAttention(nn.Module):
     """
     多重关系图导向的跨变量注意力。
-    6 类生化关系 (复合物/磷酸化/去磷酸化/转录激活/泛素化/GK开关) 的
-    邻接矩阵以可学习关系权重融合, 作为注意力偏置注入。
+    ODE 反应项派生的 6 类关系覆盖层，加未分类依赖，作为软注意力偏置。
+    分类是显式机制注解，不是永久导数符号或唯一的生物学识别。
     """
     def __init__(self, channels=128, num_vars=39, head_dim=16, rel_graphs=None):
         super().__init__()
@@ -458,16 +460,7 @@ class MultiRelGraphAttention(nn.Module):
         self.k_proj = nn.Linear(head_dim, head_dim)
         self.v_proj = nn.Linear(head_dim, head_dim)
 
-        if rel_graphs is None:
-            try:
-                from budding_yeast_v2.data.build_bio_multirelational_graphs import (
-                    build_relational_graphs)
-                rel_graphs = build_relational_graphs()
-            except Exception:
-                rel_graphs = np.stack([np.eye(num_vars, dtype=np.float32)] * 6)
-        rel = torch.tensor(np.asarray(rel_graphs), dtype=torch.float32)  # (6, 39, 39)
-        rel = rel / rel.sum(dim=-1, keepdim=True).clamp(min=1.0)
-        self.register_buffer('rel_graphs', rel)          # (6, 39, 39)
+        register_relation_graph(self, num_vars, normalized=True, rel_graphs=rel_graphs)
         self.rel_weights = nn.Parameter(torch.zeros(6))   # 可学习关系融合权重
 
     def forward(self, h):
@@ -481,6 +474,7 @@ class MultiRelGraphAttention(nn.Module):
         w = F.softmax(self.rel_weights, dim=0)
         bias = torch.einsum('r,rv->v', w, self.rel_graphs.reshape(6, -1)
                             ).reshape(self.num_vars, self.num_vars)
+        bias = bias + w.mean() * self.untyped_graph
         attn = F.softmax(attn_raw + bias.unsqueeze(0).unsqueeze(0), dim=-1)
         out = torch.matmul(attn, V).reshape(B, T, self.num_vars * self.head_dim)
         return h + self.from_vars(out).permute(0, 2, 1)
@@ -621,6 +615,8 @@ class HANO(nn.Module):
         self.register_buffer('p_mean', torch.zeros(1, param_dim))
         self.register_buffer('p_std', torch.ones(1, param_dim))
         self.register_buffer('t_max', torch.tensor(210.0))
+        self.register_buffer('s_c', torch.ones(1, num_vars, 1), persistent=False)
+        self.norm_type = 'log1p'  # persisted by YeastLitModule's preprocessing payload
 
         # ---- 化学计量矩阵 ----
         if use_flux:
@@ -664,33 +660,31 @@ class HANO(nn.Module):
             self.gamma = nn.Parameter(torch.tensor(0.0))
 
     # ---------- 统计量注入 (lit module setup() 调用) ----------
-    def set_stats(self, mean_y, std_y, p_mean, p_std, t_max=210.0):
+    def set_stats(self, mean_y, std_y, p_mean, p_std, t_max=210.0, *, norm_type='log1p', s_c=None):
+        check_norm_type(norm_type)
+        if norm_type == 'asinh_scale' and s_c is None:
+            raise ValueError('asinh_scale HANO requires s_c')
         dev = self.mean_y.device
         self.mean_y.copy_(mean_y.reshape(1, -1, 1).to(dev))
         self.std_y.copy_(std_y.reshape(1, -1, 1).to(dev))
         self.p_mean.copy_(p_mean.reshape(1, -1).to(dev))
         self.p_std.copy_(p_std.reshape(1, -1).to(dev))
         self.t_max.fill_(float(t_max))
+        self.norm_type = norm_type
+        self.s_c.copy_(torch.ones_like(self.s_c) if s_c is None else s_c.reshape_as(self.s_c).to(dev))
 
     # ---------- 归一化工具 ----------
     def _denorm_y(self, y_norm):
         """log1p 归一化空间 -> 真实空间 (与 datamodule.denormalize_y 一致).
         支持 (B, 39) 与 (B, 39, T)."""
-        if y_norm.dim() == 2:
-            y_log = y_norm * self.std_y.squeeze(-1).squeeze(0) + self.mean_y.squeeze(-1).squeeze(0)
-        else:
-            y_log = y_norm * self.std_y + self.mean_y
-        return torch.clamp(torch.expm1(torch.clamp(y_log, min=-10.0, max=15.0)), min=0.0)
+        return denormalize_y(y_norm, self.mean_y, self.std_y, self.norm_type, self.s_c)
 
     def _norm_y(self, y_real):
         """真实空间 -> log1p 归一化空间. 支持 (B, 39) 与 (B, 39, T)."""
-        y_log = torch.log1p(torch.clamp(y_real, min=0.0))
-        if y_log.dim() == 2:
-            return (y_log - self.mean_y.squeeze(-1).squeeze(0)) / self.std_y.squeeze(-1).squeeze(0)
-        return (y_log - self.mean_y) / self.std_y
+        return normalize_y(y_real, self.mean_y, self.std_y, self.norm_type, self.s_c)
 
     def _denorm_p(self, p_norm):
-        return p_norm * self.p_std + self.p_mean  # (B, 141)
+        return denormalize_p(p_norm, self.p_mean, self.p_std, self.norm_type)
 
     # ---------- 事件标签提取 (真实空间, 从目标轨迹) ----------
     def compute_event_labels(self, y_norm):

@@ -1,5 +1,10 @@
 # 损失函数库与生物物理约束规范 (Loss Functions & Physics Constraints)
 
+> **2026-10-19 修复**：PINOLoss、HybridPINOCollocationLoss、HybridAllLoss 显式接收并转发
+> `norm_type/s_c`，解决训练启动 TypeError；四类物理损失的解码与 DataModule/HANO 共用同一变换。
+> asinh_scale 缺少 s_c 时直接报错，不再把 asinh 后的数当浓度。未重写损失公式、权重或评估指标。
+> checkpoint 同时恢复物理损失使用的预处理。见 [运行契约修复](RUNTIME_CONTRACT_FIX_2026-10-19.md)。
+
 本文档系统梳理了 `budding_yeast_v2` 神经算子框架中实现的 **17 种损失函数**、生物物理约束（ODE 残差与事件跳跃）、39 通道全量微观梯度自适应平衡（GradNorm）以及课程学习权重衰减策略。
 
 > **2026-10-18 实现核验**：训练 loss 默认在 `Zscore(log1p(Y))` 空间计算，

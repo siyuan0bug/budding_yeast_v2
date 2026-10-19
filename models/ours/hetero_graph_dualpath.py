@@ -103,10 +103,7 @@ class HeteroGraphDualPathNet(nn.Module):
         )
 
         # Buffers
-        rel_g, c_motifs, g_bipartite = load_multirelational_graphs()
-        self.register_buffer('rel_graphs', rel_g)
-        self.register_buffer('circuit_motifs', c_motifs)
-        self.register_buffer('gene_bipartite', g_bipartite)
+        load_multirelational_graphs().register(self, num_vars)
 
     def forward(self, x, p):
         """
@@ -131,7 +128,7 @@ class HeteroGraphDualPathNet(nn.Module):
         # 3. Dual-Stream Iterative Processing with Gated Fusion
         for i in range(self.n_blocks):
             # Spatial 6-relation graph step
-            h_spatial = self.graph_blocks[i](h_spatial, self.rel_graphs, flux_w)
+            h_spatial = self.graph_blocks[i](h_spatial, self.rel_graphs, flux_w, self.untyped_graph)
 
             # Spectral 1D Fourier step
             h_spec_conv = self.spectral_blocks[i](h_spectral) + self.spectral_w[i](h_spectral)

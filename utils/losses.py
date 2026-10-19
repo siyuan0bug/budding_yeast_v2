@@ -7,6 +7,7 @@ from .physics_eqns_torch import (
     detect_event_mask_torch, PARAM_KEYS
 )
 from .biological_guard import CONTINUOUS_VARS, EVENT_VARS
+from budding_yeast_v2.data.normalization import denormalize_y, denormalize_p, check_norm_type
 
 
 class PhysicsInformedLoss(nn.Module):
@@ -303,7 +304,7 @@ class PINNResidualLoss(nn.Module):
                  lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
                  residual_subsample=1, event_weight=0.1,
-                 warmup_epochs=30, norm_type='log1p'):
+                 warmup_epochs=30, norm_type='log1p', s_c=None):
         """
         Args:
             mean_y, std_y: (1, 39, 1) 状态变量归一化统计量
@@ -326,6 +327,11 @@ class PINNResidualLoss(nn.Module):
         self.register_buffer('p_mean', p_mean.reshape(1, -1))
         self.register_buffer('p_std', p_std.reshape(1, -1))
         self.register_buffer('bound_norm', -mean_y.reshape(1, -1, 1) / std_y.reshape(1, -1, 1))
+        # The full transform is stored in the Lightning preprocessing contract.
+        self.register_buffer('s_c', None if s_c is None else s_c.reshape(1, -1, 1), persistent=False)
+        check_norm_type(norm_type)
+        if norm_type == 'asinh_scale' and s_c is None:
+            raise ValueError('asinh_scale physics loss requires s_c')
 
         self.t_max = t_max
         self.lambda_phys = lambda_phys
@@ -346,27 +352,24 @@ class PINNResidualLoss(nn.Module):
         """设置当前 epoch，用于 curriculum learning"""
         self._current_epoch = epoch
 
+    def set_stats(self, mean_y, std_y, p_mean, p_std, t_max=210., *, norm_type='log1p', s_c=None):
+        check_norm_type(norm_type)
+        if norm_type == 'asinh_scale' and s_c is None:
+            raise ValueError('asinh_scale physics loss requires s_c')
+        for key, value in (('mean_y', mean_y), ('std_y', std_y), ('p_mean', p_mean), ('p_std', p_std)):
+            getattr(self, key).copy_(value.reshape_as(getattr(self, key)).to(getattr(self, key)))
+        self.bound_norm.copy_(-self.mean_y / self.std_y)
+        self.s_c = None if s_c is None else s_c.reshape_as(self.mean_y).to(self.mean_y).clone()
+        self.norm_type = norm_type
+        self.t_max = float(t_max)
+
     def _denormalize_y(self, y_norm):
         """反归一化状态变量到真实空间"""
-        y_shifted = y_norm * self.std_y + self.mean_y
-        if getattr(self, 'norm_type', 'log1p') in ('log1p', 'asinh_z'):
-            return torch.clamp(torch.expm1(torch.clamp(y_shifted, min=-10.0, max=15.0)), min=0.0)
-        return y_shifted
+        return denormalize_y(y_norm, self.mean_y, self.std_y, self.norm_type, self.s_c)
 
     def _denormalize_p(self, p_norm):
         """反归一化参数到真实空间，并构建参数字典"""
-        nt = getattr(self, 'norm_type', 'log1p')
-        if nt == 'asinh_z':
-            is_varying = (self.p_std > 1e-5)
-            p_std_safe = torch.where(is_varying, self.p_std, torch.ones_like(self.p_std))
-            p_real = torch.where(is_varying, torch.sinh(p_norm) * p_std_safe + self.p_mean, self.p_mean)
-            p_real = torch.clamp(p_real, min=0.0)
-        elif nt == 'asinh_scale':
-            is_varying = (self.p_std > 1e-5)
-            p_trans = torch.where(is_varying, p_norm * self.p_std + self.p_mean, self.p_mean)
-            p_real = torch.clamp(10.0 ** torch.clamp(p_trans, min=-8.0, max=6.0), min=0.0)
-        else:
-            p_real = p_norm * self.p_std + self.p_mean
+        p_real = denormalize_p(p_norm, self.p_mean, self.p_std, self.norm_type)
         extra = {'is_mutant_104': torch.zeros(p_real.shape[0], device=p_real.device)}
         p_dict = params_tensor_to_dict(p_real, extra)
         return p_dict
@@ -657,7 +660,7 @@ class PINOLoss(PINNResidualLoss):
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
                  residual_subsample=1, event_weight=0.1,
                  warmup_epochs=30,
-                 lambda_h1=0.1, h1_beta=1.0):
+                 lambda_h1=0.1, h1_beta=1.0, norm_type='log1p', s_c=None):
         """
         Args:
             ... (继承 PINNResidualLoss 的所有参数)
@@ -668,7 +671,7 @@ class PINOLoss(PINNResidualLoss):
                          lambda_phys, lambda_jump, lambda_penalty,
                          event_window, event_tol, jump_ratio,
                          residual_subsample, event_weight,
-                         warmup_epochs)
+                         warmup_epochs, norm_type=norm_type, s_c=s_c)
         self.lambda_h1 = lambda_h1
         self.h1_beta = h1_beta
 
@@ -993,12 +996,12 @@ class HybridPINOCollocationLoss(PINNResidualLoss):
                  lambda_rel=0.2, lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
                  residual_subsample=1, event_weight=0.1, warmup_epochs=30,
-                 event_strategy='decoupled', huber_delta=1.0):
+                 event_strategy='decoupled', huber_delta=1.0, norm_type='log1p', s_c=None):
         super().__init__(mean_y, std_y, p_mean, p_std, t_max,
                          lambda_phys, lambda_jump, lambda_penalty,
                          event_window, event_tol, jump_ratio,
                          residual_subsample, event_weight,
-                         warmup_epochs)
+                         warmup_epochs, norm_type=norm_type, s_c=s_c)
         self.hybrid_data_loss = HybridMSERelLoss(lambda_rel=lambda_rel)
         self.event_strategy = event_strategy
         self.huber_delta = huber_delta
@@ -1124,14 +1127,15 @@ class HybridAllLoss(HybridPINOCollocationLoss):
                  lambda_phys=0.01, lambda_jump=0.001, lambda_penalty=1.0,
                  event_window=4, event_tol=0.08, jump_ratio=0.3,
                  residual_subsample=1, event_weight=0.1, warmup_epochs=30,
-                 event_strategy='decoupled', huber_delta=1.0):
+                 event_strategy='decoupled', huber_delta=1.0, norm_type='log1p', s_c=None):
         super().__init__(mean_y, std_y, p_mean, p_std, t_max=t_max,
                          lambda_rel=lambda_rel, lambda_phys=lambda_phys,
                          lambda_jump=lambda_jump, lambda_penalty=lambda_penalty,
                          event_window=event_window, event_tol=event_tol,
                          jump_ratio=jump_ratio, residual_subsample=residual_subsample,
                          event_weight=event_weight, warmup_epochs=warmup_epochs,
-                         event_strategy=event_strategy, huber_delta=huber_delta)
+                         event_strategy=event_strategy, huber_delta=huber_delta,
+                         norm_type=norm_type, s_c=s_c)
         self.lambda_pattern = lambda_pattern
         self.lambda_arrest = lambda_arrest
 

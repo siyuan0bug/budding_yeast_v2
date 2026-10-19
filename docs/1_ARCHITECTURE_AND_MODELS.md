@@ -1,5 +1,10 @@
 # 1. 出芽酵母神经算子代理模型系统架构与 70+ 模型全景 (Architecture & Model Zoo)
 
+> **2026-10-19 运行链路修复**：通用基线构造显式映射 width→d_model、n_blocks→e_layers/n_layers 等，
+> 不再依赖会吞参数的 `**kwargs`；旧 checkpoint 保留旧实际架构。Refiner/HANO 自回归训练与推断
+> 走同一滚动轨迹，并保留粗预测/事件辅助监督。重复命名的基线架构、软注意力、本系统专属假设未重写。
+> 范围、兼容性与测试见 [运行契约修复](RUNTIME_CONTRACT_FIX_2026-10-19.md)。
+
 > **版本**：v3.0 (2026-10)  
 > **核心定位**：出芽酵母细胞周期动力学代理模型的核心架构设计与模型全景字典。系统基于 **PyTorch Lightning** 框架，涵盖 40+ 经典/前沿基线（Baselines）与 30+ 专为细胞周期系统生物学定制的原创神经算子（Ours）。
 
@@ -9,7 +14,21 @@
 > 默认图路径从仓库根目录解析失败会静默回退。仍有可学习的稠密跨变量注意力，
 > 不能把此发现误读为完全没有跨变量建模。Attractor/CausalReach 的 IC 布局与
 > WT 表示空间缺陷及复现见 [当前证据审计](PURE_RANDOM_BADCASE_AUDIT_2026-10-18.md)。
-> 当前未修改模型或验证修复后的重训效果。
+> 上述为修复前证据。随后按用户要求修复了 IC 读取与 WT 特征表示，图保持不变，未重训；
+> API、受影响模型及 checkpoint 迁移见 [IC/WT 修复说明](IC_WT_CONTRACT_FIX_2026-10-18.md)。
+
+> **同日图来源统一第一阶段**：已新增由 `mutant_aware.py` ODE/事件源码生成的
+> 统一潜在依赖图入口，218 条连续非自环边、事件新增 8 条、并集 226 条。
+> 不编码永久正负号，功能模块图/映射仍单独保留。第一阶段尚未切换模型；
+> 随后的**第二阶段已迁移单一 39×39 变量图消费者**，默认 hybrid，提供 current /
+> checkpoint 两种固定图加载策略及来源指纹。六关系/27 模块图未替换，没有新增训练结果。
+> 范围、参数量变化、调用示例和后续问题见 [模型图迁移](GRAPH_MODEL_MIGRATION_2026-10-18.md)。
+
+> **2026-10-19 后续修复**：六关系消费者现使用同源 ODE 反应项覆盖层＋untyped 补充，
+> 总支持与选定源码图一致（continuous 218 / hybrid 226 条非自环边），统一 target/source。
+> DynamicPlus 27 模块图的邻接与符号方向也已修复；soft attention 保留，未新增可学习参数。
+> 消费者清单、未使用图的例外、checkpoint 策略及验证见
+> [关系图与模块方向修复](GRAPH_RELATION_MODULE_FIX_2026-10-19.md)。未重训或产生新的泛化指标。
 
 ---
 
@@ -38,8 +57,8 @@
 ```
                     ┌────────────────────────────────────────────────────────┐
                     │               YeastDataModule (数据流层)               │
-                    │ - Z-Score Y 轨迹归一化 (1, 39, 1)                      │
-                    │ - Min-Max P 参数向量归一化 (1, 141)                   │
+                    │ - 默认 Zscore(log1p(Y))，逐通道统计                    │
+                    │ - 默认 P 线性 Z-score (1, 141)                        │
                     │ - 突变体家族同进同出 + Pattern 稀有流形保护划分         │
                     └───────────────────────────┬────────────────────────────┘
                                                 │
@@ -48,7 +67,7 @@
 │                               YeastLitModule (LightningModule 核心层)                       │
 │                                                                                            │
 │   输入张量:                                                                                │
-│     • X (初始条件): (B, 39, 2)  [t0 浓度, t0 一阶差分]                                     │
+│     • X: (B, 39, 2, T)  [重复初值, 时间坐标]                                                │
 │     • P (突变参数): (B, 141)    [141 维动力学常数]                                         │
 │                                                                                            │
 │   前向适配器 (forward_ic_time):                                                            │
@@ -69,10 +88,10 @@
 ```
 
 ### 1.1 核心数据流与张量契约 (Tensor Contracts)
-- **初始状态张量 $X$**：形状 `(B, 39, 2)`。第 2 维包含了 $t=0$ 时刻 39 个变量的初始浓度 $u(0)$ 以及通过前向差分估计的初始演化趋势 $\Delta u(0) = u(1) - u(0)$。
-- **参数向量 $P$**：形状 `(B, 141)`。对应出芽酵母经典 Chen (2004) ODE 模型中的 141 个动力学反应常数（已在 `data/yeast_datamodule.py` 中 Min-Max 映射至 $[0, 1]$）。
-- **目标时序轨迹 $Y$**：形状 `(B, 39, 500)`。表示细胞周期 210 分钟在均匀时间网格（$\Delta t = 0.42$ min）上的 39 维连续演化，已由全量合成样本的跨时间/跨样本独立 Z-score 归一化。
-- **预测输出 $\hat{Y}$**：形状 `(B, 39, 500)`。模型直接输出归一化空间预测值，评估与画图时经反归一化：$\hat{Y}_{\text{denorm}} = \hat{Y} \odot \sigma_y + \mu_y$。
+- **输入张量 $X$**：实际 DataModule 输出 `(B,39,2,T)`；`X[:,:,0,:]` 是重复的标准化初值，`X[:,:,1,:]` 是时间坐标，第二项不是导数。初值应从原始 X 提取，不能取交错展平后的前 39 通道。
+- **参数向量 $P$**：形状 `(B,141)`；默认 `log1p` 模式对 P 使用线性 Z-score，而非 Min-Max。因果模块的 WT 差分需经同一统计量还原至物理空间，普通学习分支仍使用原模型输入表示。
+- **目标时序轨迹 $Y$**：形状 `(B,39,500)`；默认是 `Zscore(log1p(max(Y,0)))`，当前统计量来自全部合成样本，拟合拆分限制见数据审计。
+- **预测输出 $\hat{Y}$**：形状 `(B,39,500)`；反归一化须匹配 `norm_type`。默认 log1p 模式需在反 Z-score 后执行 expm1，不能只做线性反变换。
 
 ### 1.2 PyTorch Lightning 统一调度生命周期
 `YeastLitModule` 封装了标准的深度学习训练循环：
@@ -90,17 +109,13 @@
 
 ### 1.3 前向推理标准接口 `forward_ic_time`
 为抹平不同模型架构（谱卷积、注意力、CNN、ODE）的输入接口差异，`YeastLitModule` 统一实现了 `forward_ic_time`：
+默认 one_time 调度如下（省略特殊模型与自回归分支）；时间网格已经由 DataModule 构造，
+不在此处把第二通道解释为导数或重新拼接。
+
 ```python
-def forward_ic_time(self, ic: torch.Tensor, params: torch.Tensor) -> torch.Tensor:
-    B, V, _ = ic.shape
-    device = ic.device
-    # 构造标准网格 (B, V, 2, T)
-    t_grid = torch.linspace(0, 1, 500, device=device).view(1, 1, 1, 500).expand(B, V, 1, 500)
-    ic_expanded = ic[:, :, 0:1].unsqueeze(-1).expand(B, V, 1, 500)
-    ic_time_grid = torch.cat([ic_expanded, t_grid], dim=2)  # (B, V, 2, 500)
-    
-    # 派发至具体模型
-    return self.model(ic_time_grid, params)
+def forward_ic_time(self, x: torch.Tensor, params: torch.Tensor) -> torch.Tensor:
+    # x: (B,V,2,T)，包含重复初值及时间；params 使用 DataModule 的 P 表示。
+    return self.model(x, params)
 ```
 
 ---

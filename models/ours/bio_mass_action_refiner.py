@@ -32,6 +32,7 @@ import math
 import os
 import numpy as np
 import torch
+from .graph_contracts import resolve_variable_graph, row_normalized_support, attach_variable_graph
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -202,17 +203,9 @@ class StoichiometricMassActionAttention(nn.Module):
         self.k_proj = nn.Linear(head_dim, head_dim)
         self.v_proj = nn.Linear(head_dim, head_dim)
 
-        if adj_matrix is None:
-            adj_path = 'budding_yeast_v2/data/yeast_signed_adjacency_matrix.npy'
-            if os.path.exists(adj_path):
-                adj_matrix = np.load(adj_path)
-            else:
-                adj_matrix = np.eye(num_vars)
-
-        adj_tensor = torch.tensor(adj_matrix, dtype=torch.float32).abs()
-        adj_tensor = adj_tensor + torch.eye(num_vars)
-        adj_norm = adj_tensor / adj_tensor.sum(dim=-1, keepdim=True).clamp(min=1.0)
-        self.register_buffer('graph_bias', adj_norm)
+        graph = resolve_variable_graph(adj_matrix, num_vars)
+        self.register_buffer('graph_bias', row_normalized_support(graph))
+        attach_variable_graph(self, graph, ('graph_bias',))
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         B, C, T = h.shape

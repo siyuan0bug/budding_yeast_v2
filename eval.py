@@ -13,6 +13,7 @@ import json
 import csv
 import glob
 import re
+import inspect
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -25,6 +26,7 @@ from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.mass_dataset_generator import get_default_params, mutant_rules
 from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.data.preprocessing_contract import resolve_checkpoint_norm, resolve_checkpoint_fit_scope
 
 CORE_9_INDICES = [0, 1, 2, 3, 4, 20, 22, 33, 35]
 
@@ -77,18 +79,33 @@ def get_synth_perturbation_str(synth_name, synth_param_vec_real):
     chunks = [" | ".join(mutated_info[i:i+5]) for i in range(0, len(mutated_info), 5)]
     return mother_name, "\n".join(chunks)
 
-def load_model_from_checkpoint(ckpt_path, device='cpu'):
+def load_model_from_checkpoint(ckpt_path, device='cpu', *, graph_load_policy='current',
+                               graph_view=None, adj_matrix_path=None, norm_type=None):
+    if graph_load_policy == 'checkpoint' and (graph_view is not None or adj_matrix_path is not None):
+        raise ValueError('Historical graph reproduction cannot also request a graph override')
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    hp = ckpt.get('hyper_parameters', {})
-    model = YeastLitModule(
-        model_name=hp.get('model_name', 'pure_fno'), num_vars=hp.get('num_vars', 39),
-        param_dim=hp.get('param_dim', 141), modes=hp.get('modes', 24),
-        width=hp.get('width', 64), n_blocks=hp.get('n_blocks', 4),
-        adj_matrix=hp.get('adj_matrix', None), causal_matrix=hp.get('causal_matrix', None),
-        loss_type=hp.get('loss_type', 'physics_informed'), wavelet=hp.get('wavelet', 'haar'),
-        d_lambda=hp.get('d_lambda', 32), ode_method=hp.get('ode_method', 'dopri5')
+    hp = dict(ckpt.get('hyper_parameters', {}))
+    hp['norm_type'] = resolve_checkpoint_norm(ckpt, norm_type)
+    hp['normalization_fit_scope'] = resolve_checkpoint_fit_scope(ckpt)
+    dhp = ckpt.get('datamodule_hyper_parameters', {})
+    saved_split = (ckpt.get('preprocessing_contract') or {}).get('split') or {}
+    hp['data_seed'] = saved_split.get('seed', dhp.get('seed', hp.get('data_seed', 42)))
+    accepted = inspect.signature(YeastLitModule.__init__).parameters
+    init_kwargs = {key: value for key, value in hp.items() if key in accepted and key != 'self'}
+    init_kwargs.update(
+        adj_matrix=hp.get('adj_matrix') if adj_matrix_path is None else None,
+        causal_matrix=hp.get('causal_matrix') if adj_matrix_path is None else None,
+        adj_matrix_path=adj_matrix_path,
+        graph_view=graph_view or hp.get('graph_view', 'hybrid'), graph_load_policy=graph_load_policy,
+        constructor_contract_version=hp.get('constructor_contract_version', 0),
     )
-    model.load_state_dict(ckpt.get('state_dict', ckpt), strict=False)
+    model = YeastLitModule(**init_kwargs)
+    model.on_load_checkpoint(ckpt)
+    incompatible = model.load_state_dict(ckpt.get('state_dict', ckpt), strict=False)
+    missing = [key for key in incompatible.missing_keys if key.startswith('model.')]
+    unexpected = [key for key in incompatible.unexpected_keys if key.startswith('model.')]
+    if missing or unexpected:
+        raise RuntimeError(f'Incomplete model checkpoint: missing={missing}, unexpected={unexpected}')
     model.eval()
     return model, hp
 
@@ -148,7 +165,7 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             
             pred_denorm = dm.denormalize_y(pred, device)
             target_denorm = dm.denormalize_y(y, device)
-            p_real = p * dm.p_std.to(device) + dm.p_mean.to(device)
+            p_real = dm.denormalize_p(p, device)
             
             all_preds_denorm_list.append(pred_denorm.cpu())
             all_targets_denorm_list.append(target_denorm.cpu())
@@ -221,6 +238,12 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
         device = torch.device(device)
     model = model.to(device)
     model.eval()
+    # Standalone evaluation has no Trainer.setup hook. Bind the same parameter
+    # transform as training before causal modules compare inputs with physical WT.
+    if hasattr(model, 'bind_datamodule_stats'):
+        model.bind_datamodule_stats(dm)
+    elif hasattr(model, 'set_parameter_stats'):
+        model.set_parameter_stats(dm.p_mean, dm.p_std, norm_type=dm.norm_type)
 
     mean_y, std_y = dm.mean_y.to(device), dm.std_y.to(device)
 
@@ -268,6 +291,9 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
     json_path = os.path.join(save_dir, 'global_metrics_denorm.json')
     with open(json_path, 'w') as f:
         json.dump(global_metrics, f, indent=2)
+    if hasattr(model, 'graph_report'):
+        with open(os.path.join(save_dir, 'graph_provenance.json'), 'w') as f:
+            json.dump(model.graph_report(), f, indent=2)
     print(f"📊 Global metrics JSON saved to: {json_path}")
     print(f"   all_test:     n={all_test_summary['count']}, MAE={all_test_summary['all_39_vars']['MAE']:.4f}, Corr={all_test_summary['all_39_vars']['Correlation']:.4f}")
     print(f"   real_mutants: n={real_summary['count']}, MAE={real_summary['all_39_vars']['MAE']:.4f}, Corr={real_summary['all_39_vars']['Correlation']:.4f}")
@@ -305,12 +331,17 @@ def main():
     parser.add_argument('--dataset_name', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=1024, help='GPU 推理 Batch Size (A6000 48GB 推荐 1024)')
     parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--save_dir', type=str, default=None, help='评估输出目录 (默认保存在 exp_dir/eval 或 ./eval_result)')
+    parser.add_argument('--save_dir', type=str, default=None,
+                        help='评估输出目录 (默认 eval_graph_<policy>，与历史 eval 分开)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--graph_load_policy', choices=['current', 'checkpoint'], default='current',
+                        help='current: migrate fixed variable graph; checkpoint: reproduce saved graph')
+    parser.add_argument('--graph_view', choices=['continuous', 'hybrid'], default=None)
+    parser.add_argument('--adj_matrix_path', default=None, help='Explicit target/source graph override')
     parser.add_argument('--real_mutant_plots', type=int, default=-1, help='真实突变体最多画多少张图 (-1 表示完整保存全部 126 个真实突变体图片)')
     parser.add_argument('--synth_test_plots', type=int, default=50, help='合成测试集最多画多少张图 (0 表示不画合成测试集)')
     parser.add_argument('--plot_workers', type=int, default=16, help='CPU 多进程画图核数')
-    parser.add_argument('--norm_type', type=str, default='log1p', choices=['log1p', 'asinh_z', 'linear', 'asinh_scale'],
+    parser.add_argument('--norm_type', type=str, default=None, choices=['log1p', 'asinh_z', 'linear', 'asinh_scale'],
                         help='数据归一化类型: log1p (平滑对数归一化, 默认), asinh_z, asinh_scale, linear')
     parser.add_argument('--seed', type=int, default=None, help='随机种子 (默认自动从 ckpt 或 exp_dir 解析，兜底 42)')
     args = parser.parse_args()
@@ -319,7 +350,7 @@ def main():
     if args.exp_dir:
         args.exp_dir = os.path.abspath(args.exp_dir)
         if args.save_dir is None:
-            args.save_dir = os.path.join(args.exp_dir, 'eval')
+            args.save_dir = os.path.join(args.exp_dir, f'eval_graph_{args.graph_load_policy}')
         if args.ckpt is None:
             # 自动在 exp_dir/checkpoints 或 exp_dir 寻找 ckpt
             ckpt_search_dirs = [os.path.join(args.exp_dir, 'checkpoints'), args.exp_dir]
@@ -332,7 +363,7 @@ def main():
                         break
 
     if args.save_dir is None:
-        args.save_dir = './eval_result'
+        args.save_dir = f'./eval_result_graph_{args.graph_load_policy}'
 
     if not args.ckpt or not os.path.exists(args.ckpt):
         raise FileNotFoundError(f"未找到有效的 Checkpoint 文件: {args.ckpt}")
@@ -340,7 +371,12 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     print(f"🎯 加载 Checkpoint: {args.ckpt}")
     print(f"📁 评估结果输出目录: {args.save_dir}")
-    model, hp = load_model_from_checkpoint(args.ckpt, device=args.device)
+    model, hp = load_model_from_checkpoint(
+        args.ckpt, device=args.device, graph_load_policy=args.graph_load_policy,
+        graph_view=args.graph_view, adj_matrix_path=args.adj_matrix_path,
+        norm_type=args.norm_type,
+    )
+    print(f'Graph loading policy: {args.graph_load_policy}; provenance saved with metrics.')
     model = model.to(args.device)
 
     # 自动解析 seed: 优先级 args.seed -> checkpoint hyper_parameters -> 路径中的 seed_<N> -> 默认 42
@@ -368,7 +404,9 @@ def main():
     dm = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
         val_batch_size=args.batch_size, num_workers=args.num_workers, use_adj_matrix=False,
-        norm_type=resolved_norm_type
+        norm_type=resolved_norm_type, seed=hp.get('data_seed', 42),
+        preprocessing_state=model._preprocessing_state,
+        fit_scope=hp['normalization_fit_scope'],
     )
     dm.setup('test')
 

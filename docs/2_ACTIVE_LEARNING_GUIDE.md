@@ -1,5 +1,16 @@
 # 2. 出芽酵母主动学习全景指南与 AL4PDE 闭环体系 (Active Learning Guide)
 
+> **2026-10-19 后续归一化边界**：新训练统计量仅在源 NPZ 的合成 train 拆分拟合，
+> 后续 AL 轮次/入库继续复用，不含合成 val/test 或 real。没有改为每轮只在已标注 AL 子集重新拟合，
+> 也未修改初始子集、候选筛选或 real-envelope 规则；不能据此声称完整的 AL 标签盲态。
+> 详见 [train-only 修复](TRAIN_ONLY_NORMALIZATION_2026-10-19.md)。
+
+> **2026-10-19 工程修复**：al4pde 的预存池加载、即时构池、标注入库统一使用
+> `data/normalization.py` 编码 IC/P/Y，支持全部四种模式；在线 MASS 求解拒绝失败/截断解，
+> 父进程等待带 watchdog，按原候选顺序消费结果，配额提前结束也有受限清理。
+> 用户明确要求**保留所有筛选规则**（包括 real-envelope/nominal-flux 门控），不修改算法或阈值，
+> 因此不能将本轮修复称为零泄漏或完整 AL 状态恢复。见 [运行契约修复](RUNTIME_CONTRACT_FIX_2026-10-19.md)。
+
 > **版本**：v3.0 (2026-10)  
 > **核心定位**：出芽酵母代理模型主动学习（Active Learning, AL）全景技术指南。以 [utils/al_callback.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py) 为唯一代码真理源，系统梳理历史经典策略的演进脉络，深度剖析现代 **AL4PDE 闭环架构与 10 大生产级主动学习算法**。
 

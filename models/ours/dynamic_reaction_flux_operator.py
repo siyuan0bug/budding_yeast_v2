@@ -47,7 +47,7 @@ class DynamicReactionFluxBlock(nn.Module):
         self.norm = nn.GroupNorm(1, width)
         self.act = nn.GELU()
 
-    def forward(self, x, p, rel_graphs, flux_weights):
+    def forward(self, x, p, rel_graphs, flux_weights, untyped_graph=None):
         """
         x: (B, width, T)
         p: (B, 141)
@@ -62,6 +62,8 @@ class DynamicReactionFluxBlock(nn.Module):
         p_bias = torch.sigmoid(self.flux_bias_gen(p)) # (B, 6)
         eff_weights = flux_weights * p_bias # (B, 6)
         A_eff = torch.einsum('br,rij->bij', eff_weights, rel_graphs) # (B, 39, 39)
+        if untyped_graph is not None:
+            A_eff = A_eff + eff_weights.mean(-1)[:, None, None] * untyped_graph
 
         # 1. State-dependent dynamic kinetic gating (captures instant enzyme activation)
         gates = self.gate_net(x_vars) # (B, T, 39, d_var)
@@ -100,7 +102,7 @@ class DyRFOResNetBlock(nn.Module):
         # Dynamic Reaction-Flux Layer
         self.dy_flux = DynamicReactionFluxBlock(width=width, num_vars=num_vars, d_var=d_var, param_dim=param_dim)
 
-    def forward(self, x, p, rel_graphs, flux_weights):
+    def forward(self, x, p, rel_graphs, flux_weights, untyped_graph=None):
         res = x
 
         # 1. First temporal conv + FiLM
@@ -118,7 +120,7 @@ class DyRFOResNetBlock(nn.Module):
         h = self.conv2(h)
 
         # 3. Dynamic Reaction Flux Passing
-        h_flux = self.dy_flux(h, p, rel_graphs, flux_weights)
+        h_flux = self.dy_flux(h, p, rel_graphs, flux_weights, untyped_graph)
 
         return self.act(res + h + h_flux)
 
@@ -159,10 +161,7 @@ class DynamicReactionFluxOperator(nn.Module):
         )
 
         # Load & register physical prior graphs
-        rel_g, c_motifs, g_bipartite = load_multirelational_graphs()
-        self.register_buffer('rel_graphs', rel_g)
-        self.register_buffer('circuit_motifs', c_motifs)
-        self.register_buffer('gene_bipartite', g_bipartite)
+        load_multirelational_graphs().register(self, num_vars)
 
     def forward(self, x, p):
         """
@@ -185,7 +184,7 @@ class DynamicReactionFluxOperator(nn.Module):
 
         # 3. Dynamic Reaction Flux residual hierarchy
         for block in self.blocks:
-            h = block(h, p, self.rel_graphs, flux_w)
+            h = block(h, p, self.rel_graphs, flux_w, self.untyped_graph)
 
         # 4. Output projection
         out = self.head(h) # (B, 39, T)
