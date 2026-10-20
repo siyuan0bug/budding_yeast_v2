@@ -368,7 +368,7 @@ def verify_stoichiometry(n_checks=8, seed=0):
     S @ true_flux_rates(y, p) 必须与 eqns_torch(y, p) 逐项一致。
     """
     from budding_yeast_v2.utils.physics_eqns_torch import eqns_torch, params_tensor_to_dict
-    from budding_yeast_v2.data.mass_dataset_generator import get_default_params
+    from budding_yeast_v2.data.systems.budding.parameters import get_default_params
 
     torch.manual_seed(seed)
     defaults = get_default_params()

@@ -1,7 +1,8 @@
 """
 出芽酵母细胞周期 ODE 系统的 PyTorch 可微实现。
 
-本文件是 lhs_v1_origin.py 中 eqns 函数的 PyTorch 版本，用于 PINN 训练。
+本文件是 Budding ODE 的 PyTorch 可微版本，用于 PINN 训练。
+参数默认值统一来自 data/systems/budding/parameters.py（MA 生物模型）。
 核心目的：使 ODE 右端项 f(u, p) 可微，从而能用 autograd 计算 ODE 残差损失。
 
 关键设计：
@@ -9,12 +10,12 @@
 2. apply_event_torch: event 重置规则的可微版本（用于跳跃条件损失）
 3. 参数字典支持批量计算 (B, ...) 形状
 
-注意：不修改 lhs_v1_origin.py，而是 import 其常量并重写计算逻辑。
+公式保留现有可微实现及其数值稳定处理。
 """
 import torch
 import math
 import numpy as np
-from budding_yeast_v2.data.mass_dataset_generator import get_default_params
+from budding_yeast_v2.data.systems.budding.parameters import get_default_params
 
 # ==============================================================
 # 参数键顺序（与 al_callback.py 完全一致）

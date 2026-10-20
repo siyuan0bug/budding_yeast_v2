@@ -57,7 +57,7 @@ class YeastDataModule(pl.LightningDataModule):
         self.graph_view = graph_view
         
         # 🌟 新增：动态解析物理时间 t_max
-        match = re.search(r'(\d+)min', dataset_path)
+        match = re.search(r'(\d+)(?:min|m)', str(dataset_path))
         self.t_max = int(match.group(1)) if match else 210
 
         self.mean_y = None
@@ -80,8 +80,29 @@ class YeastDataModule(pl.LightningDataModule):
         # 若每次都重建数据集会抹掉 AL 追加的样本; 故仅首次真正构建。
         if getattr(self, '_setup_done', False):
             return
-        raw_data, param_conds, mutant_names, num_params, pattern_labels = load_yeast_dataset_universal(self.dataset_path)
+        raw_data, param_conds, mutant_names, num_params, pattern_labels,metadata = load_yeast_dataset_universal(self.dataset_path,return_metadata=True)
+        self.system_id=str(metadata.get('system_id','budding' if raw_data.shape[1]==39 else 'fission' if raw_data.shape[1]==16 else 'unspecified'))
+        self.num_vars=raw_data.shape[1]
+        from .systems.registry import resolve_system
+        spec=resolve_system(self.system_id,num_vars=self.num_vars,param_dim=num_params)
+        self.variable_names=tuple(spec.variable_names)
+        self.param_names=tuple(spec.param_names)
+        for key,expected in (('variable_names',self.variable_names),('param_names',self.param_names)):
+            if 'system_id' in metadata and key in metadata and tuple(metadata[key])!=expected:
+                raise ValueError(f'{self.system_id}: dataset {key} order does not match the model')
+        if 'time_grid' not in metadata and self.system_id=='fission':self.t_max=float(spec.horizon)
+        if 'time_grid' in metadata:
+            self.t_max=float(metadata['time_grid'][-1])
         self.pattern_labels = pattern_labels  # 🌟 新增：保存形态标签供 eval.py 使用
+        # Supplementary physical-window groups never replace the existing ABC
+        # split strata or the three-class targets used by historical models.
+        self.biological_labels = metadata['labels']
+        self.biological_labels_available = metadata['biological_labels_available']
+        self.pattern_group_codes = metadata.get('pattern_group_codes')
+        self.pattern_group_labels = metadata.get('pattern_group_labels')
+        self.pattern_group_ids = metadata.get('pattern_group_ids')
+        self.observed_division_counts = metadata.get('observed_division_counts')
+        self.pattern_group_version = str(metadata['pattern_group_version']) if 'pattern_group_version' in metadata else None
 
         self.num_params = num_params
         self.T_STEPS = raw_data.shape[2]
@@ -96,10 +117,10 @@ class YeastDataModule(pl.LightningDataModule):
             # Compatibility exposure only: production models own their graph.
             self.adj_matrix = (
                 np.load(self.adj_matrix_path, allow_pickle=False) if self.adj_matrix_path is not None
-                else build_yeast_graph().adjacency(self.graph_view, self_loops='all').astype(np.float32)
+                else build_yeast_graph(system_id=self.system_id).adjacency(self.graph_view, self_loops='all').astype(np.float32)
             )
-            if self.adj_matrix.shape != (39, 39) or not np.isfinite(self.adj_matrix).all():
-                raise ValueError('Expected a finite 39x39 target/source variable graph')
+            if self.adj_matrix.shape != (self.num_vars, self.num_vars) or not np.isfinite(self.adj_matrix).all():
+                raise ValueError('Expected a finite variable graph matching the dataset dimensions')
 
         Y = torch.tensor(raw_data, dtype=torch.float32)
         Params = torch.tensor(param_conds, dtype=torch.float32)
@@ -121,7 +142,15 @@ class YeastDataModule(pl.LightningDataModule):
         has_lhs = any('_LHS_' in str(name) for name in mutant_names)
         self.is_mass_dataset = not has_lhs
 
-        if has_lhs:
+        if 'is_real' in metadata:
+            flags=np.asarray(metadata['is_real'],dtype=bool)
+            real_indices=np.flatnonzero(flags).tolist()
+            synth_indices=np.flatnonzero(~flags).tolist()
+        elif self.system_id=='fission':
+            from .systems.fission.real_mutants import REAL_MUTANTS
+            real_indices=[i for i,name in enumerate(mutant_names) if str(name) in REAL_MUTANTS]
+            synth_indices=[i for i,name in enumerate(mutant_names) if str(name) not in REAL_MUTANTS]
+        elif has_lhs:
             synth_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' in str(name)]
             real_indices = [i for i, name in enumerate(mutant_names) if '_LHS_' not in str(name)]
             print(f"📊 [LHS 家族数据集] 提取到合成样本: {len(synth_indices)} 个 | 真实测试突变体: {len(real_indices)} 个")
@@ -138,7 +167,7 @@ class YeastDataModule(pl.LightningDataModule):
             print(f"📊 [通用非 LHS 数据集] 提取到合成样本: {len(synth_indices)} 个 | "
                   f"真实测试突变体: {len(real_indices)} 个 (跳过 LHS 家族分层, 仅按 Pattern 宏观划分)")
 
-        if len(real_indices) == 0:
+        if len(real_indices) == 0 and 'is_real' not in metadata:
             print("⚠️ 警告: 未在数据集中发现任何真实评估样本！自动切出最后 10 个样本作为测试集。")
             real_indices = synth_indices[-10:]
             synth_indices = synth_indices[:-10]
@@ -262,6 +291,10 @@ class YeastDataModule(pl.LightningDataModule):
             if 'Pattern_A' in s: return 0
             elif 'Pattern_B' in s: return 1
             elif 'Pattern_C' in s: return 2
+            if self.system_id == 'fission':
+                if s == 'None':
+                    return -1  # Original absence of pattern is not Pattern_B.
+                raise ValueError(f'Unknown original Fission pattern: {s}')
             return 1
         pattern_ids = torch.tensor([_to_pat_id(lbl) for lbl in pattern_labels], dtype=torch.long)
 
@@ -272,7 +305,7 @@ class YeastDataModule(pl.LightningDataModule):
 
         # ======== 4. 基于 Pattern 与 Badcase 靶向监控样本选取 (精简至 14 个核心样本, 零 LHS 标识) ========
         self.fixed_samples_for_plot = {}
-        patterns = ['Pattern_A', 'Pattern_B', 'Pattern_C']
+        patterns = ['Pattern_A', 'Pattern_B', 'Pattern_C'] if self.system_id == 'budding' else []
         
         def find_samples_by_pattern(indices, pattern_kw, n_samples):
             """从 indices 中按 pattern_kw 选出 n_samples 个样本的索引列表"""
@@ -311,7 +344,7 @@ class YeastDataModule(pl.LightningDataModule):
                 )
 
         # C. 真实突变体典型对照样本 (指定 3 个非 WT 高保真样本: #112 mad2Δ, #87 GAL-TEM1, #100 GAL-CDC14)
-        typical_prefixes = ['112_', '87_', '100_']
+        typical_prefixes = ['112_', '87_', '100_'] if self.system_id == 'budding' else []
         for prefix in typical_prefixes:
             matched_idx = find_real_sample_by_prefix(test_idx_real, prefix)
             if matched_idx is not None:
@@ -321,7 +354,7 @@ class YeastDataModule(pl.LightningDataModule):
                 )
 
         # D. 真实突变体共有核心 Badcase (指定 5 个跨全部实验共有最差样本: #15, #22, #20, #42, #76)
-        badcase_prefixes = ['15_', '22_', '20_', '42_', '76_']
+        badcase_prefixes = ['15_', '22_', '20_', '42_', '76_'] if self.system_id == 'budding' else []
         for prefix in badcase_prefixes:
             matched_idx = find_real_sample_by_prefix(test_idx_real, prefix)
             if matched_idx is not None:
@@ -329,6 +362,32 @@ class YeastDataModule(pl.LightningDataModule):
                     X[matched_idx:matched_idx+1].clone(), Params_norm[matched_idx:matched_idx+1].clone(),
                     Y_norm[matched_idx:matched_idx+1].clone(), mutant_names[matched_idx], pattern_labels[matched_idx]
                 )
+
+        if self.system_id == 'fission':
+            # One actual example per BIO/pattern combination in each split.
+            # No absent-class fallback and no Budding mutant numbers.
+            for split_name, indices in (('synth_train', train_idx_synth),
+                                        ('synth_test', test_idx_synth),
+                                        ('real_mutants', test_idx_real)):
+                seen = set()
+                for idx in indices:
+                    category = (str(self.biological_labels[idx]), str(pattern_labels[idx]))
+                    if category in seen:
+                        continue
+                    seen.add(category)
+                    self.fixed_samples_for_plot[f'{split_name}/{mutant_names[idx]}'] = (
+                        X[idx:idx+1].clone(), Params_norm[idx:idx+1].clone(),
+                        Y_norm[idx:idx+1].clone(), mutant_names[idx], pattern_labels[idx],
+                    )
+        self.fixed_sample_label_metadata = {}
+        name_to_idx = {str(name): idx for idx, name in enumerate(mutant_names)}
+        for key, sample in self.fixed_samples_for_plot.items():
+            idx = name_to_idx[str(sample[3])]
+            self.fixed_sample_label_metadata[key] = {
+                'biological_label': str(self.biological_labels[idx]),
+                'pattern_group': (str(self.pattern_group_codes[idx])
+                                  if self.pattern_group_codes is not None else None),
+            }
 
         self._raw_data = raw_data
         self._param_conds = param_conds

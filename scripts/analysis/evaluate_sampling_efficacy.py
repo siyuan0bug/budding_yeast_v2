@@ -44,10 +44,7 @@ for p in [_script_dir, PROJECT_ROOT, PARENT_DIR, DATA_DIR]:
     if os.path.exists(p) and p not in sys.path:
         sys.path.insert(0, p)
 
-try:
-    import mutant_aware as ma
-except ImportError:
-    from budding_yeast_v2.data import mutant_aware as ma
+from budding_yeast_v2.data.systems.budding import api as ma
 
 
 # ==============================================================================

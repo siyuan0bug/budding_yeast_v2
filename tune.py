@@ -23,6 +23,7 @@ from typing import Dict, Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
+import numpy as np
 import optuna
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -113,6 +114,19 @@ def bind_objective_contract(study):
     study.set_user_attr('normalization_fit_scope', TRAIN_FIT_SCOPE)
 
 
+def bind_study_dataset(study, dm):
+    """Never compare HPO trials from different biological systems or datasets."""
+    contract = dict(system_id=dm.system_id, dataset=dm._dataset_contract)
+    existing = study.user_attrs.get('biological_dataset_contract')
+    if existing is not None and existing != contract:
+        raise ValueError('HPO study biological system/dataset mismatch; use a separate study')
+    if existing is None:
+        completed = [trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE]
+        if completed:
+            raise ValueError('HPO study has completed trials without a biological dataset contract; use a new study')
+        study.set_user_attr('biological_dataset_contract', contract)
+
+
 def make_objective(args):
     """返回 objective 闭包"""
 
@@ -121,30 +135,6 @@ def make_objective(args):
         hp = sample_model_aware_hparams(trial, args.model)
         trial.set_user_attr("max_epochs", hp["max_epochs"])
         trial.set_user_attr('normalization_fit_scope', TRAIN_FIT_SCOPE)
-
-        # 2. 构建模型
-        model = YeastLitModule(
-            model_name=args.model,
-            adj_matrix_path=args.adj_matrix_path,
-            graph_view=args.graph_view,
-            graph_load_policy=args.graph_load_policy,
-            num_vars=39,
-            param_dim=141,
-            modes=hp.get("modes", 32),
-            width=hp["width"],
-            n_blocks=hp["n_blocks"],
-            wavelet=hp.get("wavelet", "haar"),
-            loss_type=args.loss_type,
-            lr=hp["lr"],
-            weight_decay=hp["weight_decay"],
-            max_epochs=hp["max_epochs"],
-            warmup_epochs=hp["warmup_epochs"],
-            d_lambda=args.d_lambda,
-            ode_method=args.ode_method,
-            ode_rtol=args.ode_rtol,
-            ode_atol=args.ode_atol,
-            norm_type=getattr(args, 'norm_type', 'log1p'),
-        )
 
         # 3. 构建 DataModule
         dataset_path = args.dataset_name if os.path.isabs(args.dataset_name) else os.path.join(args.data_dir, args.dataset_name)
@@ -157,6 +147,47 @@ def make_objective(args):
             norm_type=getattr(args, 'norm_type', 'log1p'),
             fit_scope=TRAIN_FIT_SCOPE,
         )
+
+        model_numpy_state=np.random.get_state()
+        datamodule.setup('fit')
+        if getattr(args, 'system', 'auto') not in ('auto', datamodule.system_id):
+            raise ValueError('--system contradicts the dataset biological system')
+        bind_study_dataset(trial.study, datamodule)
+        trial.set_user_attr('system_id', datamodule.system_id)
+        from budding_yeast_v2.data.label_metadata import dataset_label_summary
+        trial.set_user_attr('dataset_labels', dataset_label_summary(datamodule))
+        if datamodule.system_id=='fission' and args.al_strategy!='none':
+            raise ValueError('Fission HPO currently requires --al_strategy none')
+
+        # Construct from the pre-split RNG state; keep DataModule split state.
+        data_numpy_state=np.random.get_state()
+        np.random.set_state(model_numpy_state)
+        try:
+            model = YeastLitModule(
+                model_name=args.model,
+                adj_matrix_path=args.adj_matrix_path,
+                graph_view=args.graph_view,
+                graph_load_policy=args.graph_load_policy,
+                num_vars=datamodule.num_vars,
+                param_dim=datamodule.num_params,
+                system_id=datamodule.system_id,
+                modes=hp.get("modes", 32),
+                width=hp["width"],
+                n_blocks=hp["n_blocks"],
+                wavelet=hp.get("wavelet", "haar"),
+                loss_type=args.loss_type,
+                lr=hp["lr"],
+                weight_decay=hp["weight_decay"],
+                max_epochs=hp["max_epochs"],
+                warmup_epochs=hp["warmup_epochs"],
+                d_lambda=args.d_lambda,
+                ode_method=args.ode_method,
+                ode_rtol=args.ode_rtol,
+                ode_atol=args.ode_atol,
+                norm_type=getattr(args, 'norm_type', 'log1p'),
+            )
+        finally:
+            np.random.set_state(data_numpy_state)
 
         # 4. Checkpoint 与剪枝回调 (隔离每个 trial 的 ckpt)
         worker_suffix = f"w{args.worker_id}_" if args.worker_id is not None else ""
@@ -299,6 +330,7 @@ def main():
 
     # 模型与数据集
     parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--system", choices=("auto", "budding", "fission"), default="auto")
     parser.add_argument("--al_strategy", type=str, default="none")
     parser.add_argument("--loss_type", type=str, default="hybrid_mse_rel")
     parser.add_argument("--dataset_name", type=str, required=True)

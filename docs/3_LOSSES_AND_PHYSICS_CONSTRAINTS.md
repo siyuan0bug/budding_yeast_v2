@@ -1,5 +1,16 @@
 # 损失函数库与生物物理约束规范 (Loss Functions & Physics Constraints)
 
+> **2026-10-21 无pattern目标处理**：Fission原始pattern=None不再默认编码成B，内部ID=-1。
+> HybridBifurcate/HybridAll的分类交叉熵只用有效目标；全批无目标返回可微零值，轨迹损失仍覆盖全部样本。
+> 有效ABC的编码和损失语义保持不变，同时修复批大小1/列向量目标的形状处理。
+> 这些是缺失标签处理，不是把Fission生物标签或Budding六分类改成分类目标。见 [兼容验证](FISSION_EXTENSION.md)。
+
+
+> **2026-10-20 Fission物理后端**：从canonical方程AST生成可微RHS，处理mass相对尺度和
+> 由完整目标轨迹事件历史重建的隐含kS；单点RDNA不能可靠推断cut株阶段。
+> PINN/PINO/Hybrid PINO/HybridAll按系统分派，四种归一化的活跃物理损失和梯度已验证。
+> 可微重置、事件掩码与限制见 [Fission扩展](FISSION_EXTENSION.md)。
+
 > **2026-10-19 修复**：PINOLoss、HybridPINOCollocationLoss、HybridAllLoss 显式接收并转发
 > `norm_type/s_c`，解决训练启动 TypeError；四类物理损失的解码与 DataModule/HANO 共用同一变换。
 > asinh_scale 缺少 s_c 时直接报错，不再把 asinh 后的数当浓度。未重写损失公式、权重或评估指标。

@@ -367,7 +367,7 @@ def audit_attractor_input():
 def audit_causal_reference(p, synth, param_names, output_dir):
     """WT-only probe: no benchmark parameter or trajectory is needed."""
     import torch
-    from budding_yeast_v2.data.mutant_aware import get_default_params
+    from budding_yeast_v2.data.systems.budding.parameters import get_default_params
     from budding_yeast_v2.models.ours.bio_refiner_causal import WT_VALUES_141
     from budding_yeast_v2.models.ours.input_contracts import ParameterInputTransform
 
@@ -398,7 +398,7 @@ def audit_causal_reference(p, synth, param_names, output_dir):
 
 def audit_dedup_alias(output_dir):
     """Explain an observed overlap; never use this probe as a sampling filter."""
-    from budding_yeast_v2.data import mutant_aware as engine
+    from budding_yeast_v2.data.systems.budding import api as engine
 
     wt = engine.get_default_params()
     wt.update(init_CDH1T=1., init_CDH1=.9304992, init_BUB2=.2)

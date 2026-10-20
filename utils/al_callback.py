@@ -20,6 +20,7 @@ import pytorch_lightning as pl
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import closing
 import matplotlib
+import json
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -32,14 +33,15 @@ from sklearn.metrics.pairwise import euclidean_distances
 # ==============================================================
 # 1. 导入酵母 ODE 方程与参数提取逻辑 (供 PIAL 残差计算)
 # ==============================================================
-from budding_yeast_v2.data.LHS.lhs_v1_origin import (
+from budding_yeast_v2.data.systems.budding.api import (
     get_default_params,
     eqns as _yeast_ode_eqns,
 )
-from budding_yeast_v2.data.mass_dataset_generator import (
+from budding_yeast_v2.data.systems.budding.api import (
     simulate_mutant as simulate_mutant_mass,
     is_duplicate_real_mutant,
     initial_conds as initial_conds_mass,
+    prepare_initial_conditions,
     get_default_params as get_default_params_mass,
     BINDING_GROUPS as MASS_BINDING_GROUPS,
     # y0 变量索引 (用于把 ovr 中全部 init_* 键写入初始条件, 与 mass 版 simulate_mutant 对齐)
@@ -50,12 +52,14 @@ from budding_yeast_v2.data.mass_dataset_generator import (
     nPPX as _nPPX, nPDS1 as _nPDS1, nESP1 as _nESP1,
 )
 # v2.6: 全 al4pde 策略统一使用 random-only 采样器 (无 rescue motif 定向采样, 保留 Level 分层)
-from budding_yeast_v2.data.mass_random_sampler import sample_mass_random
+from budding_yeast_v2.data.systems.budding.api import sample_mass_random
 from budding_yeast_v2.data.normalization import normalize_y, normalize_p
 from budding_yeast_v2.data.simulation_guards import bounded_ordered_map
+from budding_yeast_v2.data.label_metadata import UNKNOWN_BIOLOGY_LABEL, trajectory_label_metadata
+from budding_yeast_v2.data.systems.budding.pattern_groups import abc_pattern_ids
 
 # MASS 默认参数向量 (与 mass_dataset_generator.generate_mass_dataset 完全一致)
-# 注: 与 lhs_v1_origin 默认值仅 ef6n3 不同 (0.3 vs 0.0), 候选池统一以 MASS 默认值为准
+# 生物模型/初值统一使用 systems.budding 的 MA 基准；随机合成采样保留 MASS 方案。
 _MASS_DEFAULTS = get_default_params_mass()
 _MASS_DEFAULTS.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
 
@@ -142,7 +146,7 @@ def _mass_desc_of(name):
 
 
 
-def solve_single_mass_bridge(name, ovr):
+def solve_single_mass_bridge(name, ovr, *, return_biological_label=False):
     """MASS 版 ODE 仿真桥: 用完整 ovr 字典调用 mass_dataset_generator.simulate_mutant。
 
     与 solve_single_mutant_bridge (lhs 版) 的关键差异:
@@ -157,7 +161,8 @@ def solve_single_mass_bridge(name, ovr):
         ovr: sample_mass_mutant 返回的完整参数覆盖字典
 
     Returns:
-        (X_dummy, y_uniform, p_vec, pattern_label) 或 None (仿真失败/被过滤)
+        默认返回 (X_dummy, y_uniform, p_vec, pattern_label) 或 None；
+        return_biological_label=True 时另附原始生物标签。
     """
     import signal
 
@@ -182,14 +187,15 @@ def solve_single_mass_bridge(name, ovr):
     p_vec = np.array([ovr.get(k, _MASS_DEFAULTS[k]) for k in PARAM_KEYS],
                      dtype=np.float64)
     X_dummy = np.zeros((39, 2, 500))
-    return (X_dummy, y_uniform, p_vec, pattern_label)
+    result = (X_dummy, y_uniform, p_vec, pattern_label)
+    return (*result, bio_label) if return_biological_label else result
 
 
 def _solve_single_mass_task_wrapper(task_tuple):
     """顶级函数包装器，供 ProcessPoolExecutor(mp_context='spawn') 进程池调用"""
     name, ovr = task_tuple
     try:
-        return solve_single_mass_bridge(name, ovr)
+        return solve_single_mass_bridge(name, ovr, return_biological_label=True)
     except Exception:
         return None
 
@@ -435,6 +441,38 @@ class ActiveLearningCallback(pl.Callback):
         """v2.3: 启用外层重训模式 (选样由 train.py 外层循环驱动, on_train_epoch_end 不再触发)。"""
         self._outer_loop_mode = True
 
+    @staticmethod
+    def _append_dm_label_metadata(dm, bd):
+        """Keep supplementary row arrays aligned; training targets remain ABC."""
+        if 'Y_real' not in bd:
+            return
+        fields = trajectory_label_metadata(np.asarray(bd['Y_real']), bd.get('biological_labels'),
+                                           getattr(dm, 'system_id', 'budding'))
+        arrays = dict(pattern_labels=np.asarray(bd['labels']), biological_labels=fields['labels'],
+                      biological_labels_available=fields['biological_labels_available'])
+        for key in ('pattern_group_codes', 'pattern_group_labels', 'pattern_group_ids', 'observed_division_counts'):
+            if key in fields:
+                arrays[key] = fields[key]
+        for key, values in arrays.items():
+            existing = getattr(dm, key, None)
+            if existing is not None:
+                setattr(dm, key, np.concatenate((existing, values)))
+
+    def _save_al_snapshot(self, path, dm):
+        """Preserve viability, ABC and neutral groups without inferring missing biology."""
+        data = np.asarray(self._benchmark_real_data + self._cum_synth_data, dtype=np.float32)
+        biology = self._benchmark_real_biological_labels + self._cum_synth_biological_labels
+        system_id = getattr(dm, 'system_id', 'budding')
+        fields = trajectory_label_metadata(data, biology, system_id)
+        np.savez_compressed(path, data=data,
+            params=np.asarray(self._benchmark_real_params + self._cum_synth_params, dtype=np.float64),
+            mutant_names=np.asarray(self._benchmark_real_names + self._cum_synth_names),
+            pattern_labels=np.asarray(self._benchmark_real_labels + self._cum_synth_labels),
+            param_names=self._param_names_cached, system_id=np.array(system_id),
+            time_grid=np.linspace(0, float(getattr(dm, 't_max', 210)), data.shape[2]),
+            is_real=np.r_[np.ones(len(self._benchmark_real_data), dtype=bool),
+                          np.zeros(len(self._cum_synth_data), dtype=bool)], **fields)
+
     def al4pde_setup(self, dm, device='cuda', exp_dir=None):
         """v2.3 外层重训式: 一次性初始化 (加载候选池 + 确定初始训练集 + 累积数据缓存)。
         供 train.py 在外层循环开始前调用一次。"""
@@ -447,10 +485,12 @@ class ActiveLearningCallback(pl.Callback):
         self._cum_synth_params = []
         self._cum_synth_names = []
         self._cum_synth_labels = []
+        self._cum_synth_biological_labels = []
         self._benchmark_real_data = []
         self._benchmark_real_params = []
         self._benchmark_real_names = []
         self._benchmark_real_labels = []
+        self._benchmark_real_biological_labels = []
         self._param_names_cached = np.array(PARAM_KEYS)
 
         dataset_path = getattr(dm, 'dataset_path', None)
@@ -461,10 +501,12 @@ class ActiveLearningCallback(pl.Callback):
                 params_arr = init_npz['params']
                 mutant_names_arr = init_npz['mutant_names'] if 'mutant_names' in init_npz else None
                 pattern_labels_arr = init_npz['pattern_labels'] if 'pattern_labels' in init_npz else None
+                biological_labels_arr = init_npz.get('labels', np.full(len(data_arr), UNKNOWN_BIOLOGY_LABEL))
 
                 if hasattr(dm, '_train_idx_synth') and len(dm._train_idx_synth) > 0:
                     idx = dm._train_idx_synth
                     self._cum_synth_data = list(data_arr[idx])
+                    self._cum_synth_biological_labels = list(biological_labels_arr[idx])
                     self._cum_synth_params = list(params_arr[idx])
                     if mutant_names_arr is not None:
                         self._cum_synth_names = [str(n) for n in mutant_names_arr[idx]]
@@ -478,6 +520,7 @@ class ActiveLearningCallback(pl.Callback):
                 if hasattr(dm, '_test_idx_real') and len(dm._test_idx_real) > 0:
                     idx = dm._test_idx_real
                     self._benchmark_real_data = list(data_arr[idx])
+                    self._benchmark_real_biological_labels = list(biological_labels_arr[idx])
                     self._benchmark_real_params = list(params_arr[idx])
                     if mutant_names_arr is not None:
                         self._benchmark_real_names = [str(n) for n in mutant_names_arr[idx]]
@@ -525,8 +568,10 @@ class ActiveLearningCallback(pl.Callback):
             bd = self._build_broadcast_from_pool(sel_idx, dm)
             if bd is None or bd['X'].shape[0] == 0:
                 raise RuntimeError("[al4pde] 初始训练集仿真全部失败, 无法继续")
-            dm.train_dataset_synth = TensorDataset(bd['X'], bd['P'], bd['Y'])
+            dm.train_dataset_synth = TensorDataset(bd['X'], bd['P'], bd['Y'],
+                torch.as_tensor(abc_pattern_ids(bd['labels']), dtype=torch.long, device=bd['Y'].device))
             if hasattr(dm, '_mutant_names'):
+                self._append_dm_label_metadata(dm, bd)
                 n_existing = len(dm._mutant_names)
                 dm._mutant_names = list(dm._mutant_names) + list(bd['names'])
                 dm._train_idx_synth = np.arange(n_existing, n_existing + len(bd['names']))
@@ -535,6 +580,7 @@ class ActiveLearningCallback(pl.Callback):
                 self._cum_synth_params.extend(bd['P_real'])
                 self._cum_synth_names.extend(bd['names'])
                 self._cum_synth_labels.extend(bd['labels'])
+                self._cum_synth_biological_labels.extend(bd.get('biological_labels', [UNKNOWN_BIOLOGY_LABEL] * len(bd['names'])))
 
         self._al_initialized = True
         self._al4pde_al_iter = 0
@@ -546,14 +592,7 @@ class ActiveLearningCallback(pl.Callback):
             os.makedirs(ds_dir, exist_ok=True)
             r0_path = os.path.join(ds_dir, f'al_iter0_train{len(self._cum_synth_data)}.npz')
             if not os.path.exists(r0_path):
-                np.savez_compressed(
-                    r0_path,
-                    data=np.array(self._benchmark_real_data + self._cum_synth_data, dtype=np.float32),
-                    params=np.array(self._benchmark_real_params + self._cum_synth_params, dtype=np.float64),
-                    mutant_names=np.array(self._benchmark_real_names + self._cum_synth_names),
-                    pattern_labels=np.array(self._benchmark_real_labels + self._cum_synth_labels),
-                    param_names=self._param_names_cached
-                )
+                self._save_al_snapshot(r0_path, dm)
                 print(f"💾 [al4pde] 已将 Round 0 初始数据集落盘保存至: {r0_path}")
 
         print(f"[al4pde] 初始训练集就绪: {len(dm.train_dataset_synth)} 样本 | 候选池剩余: {self._pool_size} | 策略: {self.strategy}")
@@ -599,7 +638,9 @@ class ActiveLearningCallback(pl.Callback):
         old_tensors = dm.train_dataset_synth.tensors
         old_X, old_P, old_Y = old_tensors[0], old_tensors[1], old_tensors[2]
         if len(old_tensors) >= 4:
-            pattern_ids = torch.cat([old_tensors[3], torch.zeros(bd['X'].shape[0], dtype=old_tensors[3].dtype, device=old_tensors[3].device)], dim=0)
+            new_pattern_ids = torch.as_tensor(abc_pattern_ids(bd['labels']),
+                dtype=old_tensors[3].dtype, device=old_tensors[3].device)
+            pattern_ids = torch.cat([old_tensors[3], new_pattern_ids], dim=0)
             dm.train_dataset_synth = TensorDataset(
                 torch.cat([old_X, bd['X'].to(old_X.device)], dim=0),
                 torch.cat([old_P, bd['P'].to(old_X.device)], dim=0),
@@ -613,6 +654,7 @@ class ActiveLearningCallback(pl.Callback):
                 torch.cat([old_Y, bd['Y'].to(old_Y.device)], dim=0),
             )
         if 'names' in bd and hasattr(dm, '_mutant_names'):
+            self._append_dm_label_metadata(dm, bd)
             new_names = list(bd['names'])
             n_existing = len(dm._mutant_names)
             dm._mutant_names = list(dm._mutant_names) + new_names
@@ -635,16 +677,10 @@ class ActiveLearningCallback(pl.Callback):
             self._cum_synth_params.extend(bd['P_real'])
             self._cum_synth_names.extend(bd['names'])
             self._cum_synth_labels.extend(bd['labels'])
+            self._cum_synth_biological_labels.extend(bd.get('biological_labels', [UNKNOWN_BIOLOGY_LABEL] * len(bd['names'])))
 
             round_ds_path = os.path.join(ds_dir, f'al_iter{self._al4pde_al_iter}_train{len(self._cum_synth_data)}.npz')
-            np.savez_compressed(
-                round_ds_path,
-                data=np.array(self._benchmark_real_data + self._cum_synth_data, dtype=np.float32),
-                params=np.array(self._benchmark_real_params + self._cum_synth_params, dtype=np.float64),
-                mutant_names=np.array(self._benchmark_real_names + self._cum_synth_names),
-                pattern_labels=np.array(self._benchmark_real_labels + self._cum_synth_labels),
-                param_names=self._param_names_cached
-            )
+            self._save_al_snapshot(round_ds_path, dm)
             print(f"💾 [al4pde v2.3] 已将 Iteration {self._al4pde_al_iter} 扩充数据集完整保存至: {round_ds_path}")
 
             # 保存选样明细清单 CSV
@@ -1735,7 +1771,10 @@ class ActiveLearningCallback(pl.Callback):
             self._pool_size = len(pool_names)
             self._al4pde_pool_loaded = True
             self._pool_P_real = P_tensor
-            self._pool_ovr = None
+            # Keep init_* and other non-vector overrides when labelling selections.
+            self._pool_ovr = ([json.loads(str(value)) for value in data['overrides_json']]
+                              if 'overrides_json' in data else None)
+            data.close()
 
             pool_metas = []
             for name in pool_names:
@@ -1875,12 +1914,8 @@ class ActiveLearningCallback(pl.Callback):
             p_vec = [ovr.get(k, _MASS_DEFAULTS[k]) for k in PARAM_KEYS]
             pool_params.append(p_vec)
 
-            # 构造 IC: 用 initial_conds 覆盖 ovr 中全部 init_* 键
-            # (与 mass 版 simulate_mutant 的 y0 写入逻辑完全一致, 支持 16 个 init 键)
-            y0 = y0_base.copy()
-            for k, idx in _MASS_INIT_Y0_IDX.items():
-                if k in ovr:
-                    y0[idx] = ovr[k]
+            # 与实际仿真共用初值处理，包括 init_* 和 KO 联动初值。
+            _, y0, _, _ = prepare_initial_conditions(ovr)
             pool_ics.append(y0)
 
             if n_accepted % max(1, N_POOL_TARGET // 10) == 0:
@@ -2875,11 +2910,7 @@ class ActiveLearningCallback(pl.Callback):
                 if 'param_names' in npz_data:
                     param_keys = list(npz_data['param_names'])
         if param_keys is None:
-            from data.mutant_aware import get_default_params
-            param_keys = sorted(list(get_default_params().keys()) + [
-                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
-                'init_Cdc15', 'init_PPX', 'init_CLN2'
-            ])
+            param_keys = list(PARAM_KEYS)
         ode_engine = VectorizedYeastODE(param_keys).to(device)
 
         batch_size = 2500
@@ -2983,11 +3014,7 @@ class ActiveLearningCallback(pl.Callback):
                 if 'param_names' in npz_data:
                     param_keys = list(npz_data['param_names'])
         if param_keys is None:
-            from data.mutant_aware import get_default_params
-            param_keys = sorted(list(get_default_params().keys()) + [
-                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
-                'init_Cdc15', 'init_PPX', 'init_CLN2'
-            ])
+            param_keys = list(PARAM_KEYS)
         ode_engine = VectorizedYeastODE(param_keys).to(device)
 
         batch_size = 2500
@@ -3084,11 +3111,7 @@ class ActiveLearningCallback(pl.Callback):
                 if 'param_names' in npz_data:
                     param_keys = list(npz_data['param_names'])
         if param_keys is None:
-            from data.mutant_aware import get_default_params
-            param_keys = sorted(list(get_default_params().keys()) + [
-                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
-                'init_Cdc15', 'init_PPX', 'init_CLN2'
-            ])
+            param_keys = list(PARAM_KEYS)
         ode_engine = VectorizedYeastODE(param_keys).to(device)
 
         batch_size = 2500
@@ -3234,11 +3257,7 @@ class ActiveLearningCallback(pl.Callback):
                 if 'param_names' in npz_data:
                     param_keys = list(npz_data['param_names'])
         if param_keys is None:
-            from data.mutant_aware import get_default_params
-            param_keys = sorted(list(get_default_params().keys()) + [
-                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
-                'init_Cdc15', 'init_PPX', 'init_CLN2'
-            ])
+            param_keys = list(PARAM_KEYS)
         ode_engine = VectorizedYeastODE(param_keys).to(device)
 
         batch_size = 10000
@@ -3314,11 +3333,7 @@ class ActiveLearningCallback(pl.Callback):
                 if 'param_names' in npz_data:
                     param_keys = list(npz_data['param_names'])
         if param_keys is None:
-            from data.mutant_aware import get_default_params
-            param_keys = sorted(list(get_default_params().keys()) + [
-                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
-                'init_Cdc15', 'init_PPX', 'init_CLN2'
-            ])
+            param_keys = list(PARAM_KEYS)
         ode_engine = VectorizedYeastODE(param_keys).to(device)
 
         batch_size = 2500
@@ -3418,11 +3433,7 @@ class ActiveLearningCallback(pl.Callback):
                 if 'param_names' in npz_data:
                     param_keys = list(npz_data['param_names'])
         if param_keys is None:
-            from data.mutant_aware import get_default_params
-            param_keys = sorted(list(get_default_params().keys()) + [
-                'init_CDH1T', 'init_CDH1', 'init_BUB2', 'init_ESP1', 'init_Tem1',
-                'init_Cdc15', 'init_PPX', 'init_CLN2'
-            ])
+            param_keys = list(PARAM_KEYS)
         ode_engine = VectorizedYeastODE(param_keys).to(device)
 
         batch_size = 2500
@@ -3586,12 +3597,13 @@ class ActiveLearningCallback(pl.Callback):
             valid_P_real = []
             valid_names = []
             valid_labels = []
+            valid_biological_labels = []
 
             for i in range(n_sel):
                 res = sim_results[i]
                 if res is None:
                     continue
-                _, y_uniform, p_vec, pattern_label = res
+                _, y_uniform, p_vec, pattern_label = res[:4]
                 lhs_max_vals = np.max(y_uniform, axis=1)
                 is_monster = any(lhs_max_vals[v] > dynamic_thresholds[v] for v in range(1, 39))
                 if is_monster:
@@ -3601,6 +3613,7 @@ class ActiveLearningCallback(pl.Callback):
                 valid_P_real.append(p_vec)
                 valid_names.append(str(sel_names[i]))
                 valid_labels.append(pattern_label)
+                valid_biological_labels.append(res[4] if len(res) > 4 else UNKNOWN_BIOLOGY_LABEL)
 
             evaluated_indices = sel_idx
             if valid_positions:
@@ -3619,6 +3632,7 @@ class ActiveLearningCallback(pl.Callback):
             valid_P_real = []
             valid_names = []
             valid_labels = []
+            valid_biological_labels = []
             valid_pool_idx = []
             evaluated_idx_list = []
 
@@ -3650,7 +3664,7 @@ class ActiveLearningCallback(pl.Callback):
 
                         if res is None:
                             continue
-                        _, y_uniform, p_vec, pattern_label = res
+                        _, y_uniform, p_vec, pattern_label = res[:4]
                         lhs_max_vals = np.max(y_uniform, axis=1)
                         is_monster = any(lhs_max_vals[v] > dynamic_thresholds[v] for v in range(1, 39))
                         if is_monster:
@@ -3660,6 +3674,7 @@ class ActiveLearningCallback(pl.Callback):
                         valid_P_real.append(p_vec)
                         valid_names.append(str(batch_names[i]))
                         valid_labels.append(pattern_label)
+                        valid_biological_labels.append(res[4] if len(res) > 4 else UNKNOWN_BIOLOGY_LABEL)
                         valid_pool_idx.append(pool_cand_idx)
 
                         if len(valid_Y_real) == target_n:
@@ -3673,6 +3688,7 @@ class ActiveLearningCallback(pl.Callback):
                 valid_P_real = valid_P_real[:target_n]
                 valid_names = valid_names[:target_n]
                 valid_labels = valid_labels[:target_n]
+                valid_biological_labels = valid_biological_labels[:target_n]
                 valid_pool_idx = valid_pool_idx[:target_n]
 
             evaluated_indices = np.array(evaluated_idx_list, dtype=np.int64)
@@ -3742,5 +3758,6 @@ class ActiveLearningCallback(pl.Callback):
             'P_real': valid_P_real,
             'names': valid_names,
             'labels': valid_labels,
+            'biological_labels': valid_biological_labels,
             'sample_plots': {}
         }

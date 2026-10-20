@@ -1,0 +1,40 @@
+{
+  "primary_round": 2,
+  "primary_strategies": [
+    "al4pde_bifurcation_entropy",
+    "al4pde_diversity",
+    "al4pde_novelty",
+    "al4pde_random",
+    "al4pde_residual",
+    "al4pde_residual_diversity",
+    "al4pde_uncertainty"
+  ],
+  "targets": [
+    "MAE",
+    "MSE",
+    "Relative_L2",
+    "composite_error_rank"
+  ],
+  "primary_target": "composite_error_rank",
+  "rank_definition": "Within each run, (ascending average rank - 1)/(126 - 1); composite is equal mean of MAE/MSE/Relative_L2 ranks",
+  "cross_validation": "Leave target strategy out; five-fold mutant-identity holdout stratified by ABC, repeated with fixed seed",
+  "folds": 5,
+  "repeats": 10,
+  "shrinkage_mutant_equivalents": 5.0,
+  "permutations": 499,
+  "bootstrap_mutant_clusters": 5000,
+  "seed": 42020,
+  "categories": {
+    "GLOBAL": 1,
+    "ABC": 3,
+    "BIO": 5,
+    "ABC_BIO": 7,
+    "SIX": 6,
+    "ABC_CRITICAL": 5,
+    "SIX_CRITICAL": 9,
+    "SIX_BIO": 10
+  },
+  "interpretation": "Post-hoc diagnostic utility, NOT causal evidence that new-label AL/training improves surrogate accuracy; one seed and a shared benchmark",
+  "label_source": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/outputs/six_pattern_audit_2026-10-20/mutant_aware_pure_random_100000_210m_500s/real_mutants.csv",
+  "label_source_sha256": "ebef54b42de5af34af14ed4cc0822459fa40ae61f222b24e1acf7746d578f059"
+}

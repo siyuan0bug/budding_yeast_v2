@@ -50,7 +50,7 @@ OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'massv2_bad
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
-from budding_yeast_v2.data.mass_dataset_generator import REAL_MUTANTS, get_default_params
+from budding_yeast_v2.data.systems.budding.api import REAL_MUTANTS, get_default_params
 
 # 39 Variables in Chen (2004) Model
 VAR_NAMES = [

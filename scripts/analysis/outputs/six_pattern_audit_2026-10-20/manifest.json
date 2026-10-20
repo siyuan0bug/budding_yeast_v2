@@ -1,0 +1,506 @@
+[
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analysis_output_v5_old/split_dataset_norm_stats_v5.npz",
+    "size": 2113,
+    "mtime_ns": 1783344419438968479,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analyze_lhs_cheat_origin_210min_500steps_dual_labels/split_dataset_norm_stats.npz",
+    "size": 2111,
+    "mtime_ns": 1784416346042398145,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analyze_lhs_cheat_origin_guaranteed_1000per_210min_500steps_dual_labels/split_dataset_norm_stats.npz",
+    "size": 2113,
+    "mtime_ns": 1784412660143012342,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analyze_lhs_cheat_origin_no_filter_210min_500steps_dual_labels/split_dataset_norm_stats.npz",
+    "size": 2109,
+    "mtime_ns": 1784414840254274008,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analyze_lhs_cheat_origin_v5_210min_500steps_dual_labels/split_dataset_norm_stats.npz",
+    "size": 2111,
+    "mtime_ns": 1784612128429925220,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analyze_lhs_cheat_origin_v5_210min_500steps_dual_labels_old/split_dataset_norm_stats.npz",
+    "size": 2112,
+    "mtime_ns": 1784409143417462987,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/analyze_lhs_cheat_origin_v5_boundary_210min_500steps_dual_labels/split_dataset_norm_stats.npz",
+    "size": 2112,
+    "mtime_ns": 1784405387175079478,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/fno_yeast_210min_500steps_dual_labels.npz",
+    "size": 15750752,
+    "mtime_ns": 1779723272773284465,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/fno_yeast_500min_1000steps_dual_labels.npz",
+    "size": 31152444,
+    "mtime_ns": 1779723273090288346,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_120min_300steps_dual_labels.npz",
+    "size": 941909399,
+    "mtime_ns": 1779723202988430110,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_160min_400steps_dual_labels.npz",
+    "size": 1250449943,
+    "mtime_ns": 1779723208937502954,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_280min_700steps_dual_labels.npz",
+    "size": 2170818390,
+    "mtime_ns": 1779723216808599328,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_350min_850steps_dual_labels.npz",
+    "size": 2631797394,
+    "mtime_ns": 1779723228477742200,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_430min_1080steps_dual_labels.npz",
+    "size": 3331333283,
+    "mtime_ns": 1779723242532914275,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_600min_1500steps_dual_labels.npz",
+    "size": 4605884004,
+    "mtime_ns": 1779723260341132282,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_60min_150steps_dual_labels.npz",
+    "size": 476275353,
+    "mtime_ns": 1779723271792272457,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_origin_v2_210min_500steps_dual_labels.npz",
+    "size": 15041665273,
+    "mtime_ns": 1783114347419604943,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_origin_v3_210min_500steps_dual_labels.npz",
+    "size": 17215497276,
+    "mtime_ns": 1783205977309000345,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_origin_v4_210min_500steps_dual_labels.npz",
+    "size": 19743992083,
+    "mtime_ns": 1783271163173389988,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_origin_v5_210min_500steps_dual_labels.npz",
+    "size": 20320741220,
+    "mtime_ns": 1783339846717333551,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_origin_v5_no_target_210min_500steps_dual_labels.npz",
+    "size": 13468457215,
+    "mtime_ns": 1783452412914332053,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/lhs_cheat_origin_v6_210min_500steps_dual_labels.npz",
+    "size": 20537373273,
+    "mtime_ns": 1783412574448700236,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/LHS/otherdata/split_dataset_norm_stats.npz",
+    "size": 2113,
+    "mtime_ns": 1783800298680886013,
+    "status": "excluded_deprecated_lhs"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/al_iter0_10000_210m_500s.npz",
+    "size": 590091656,
+    "mtime_ns": 1790191510506553445,
+    "shape": [
+      10126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/bams_100000_210m_500s.npz",
+    "size": 5873500407,
+    "mtime_ns": 1789355614279681264,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/bams_50000_210m_500s.npz",
+    "size": 2940680745,
+    "mtime_ns": 1789474557860882283,
+    "shape": [
+      50126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/bams_ablation_hard_50000_210m_500s.npz",
+    "size": 2936767483,
+    "mtime_ns": 1789475783873508252,
+    "shape": [
+      50126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/bams_ablation_hypo_50000_210m_500s.npz",
+    "size": 2938182525,
+    "mtime_ns": 1789476013246276793,
+    "shape": [
+      50126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/bams_motif_topology_100000_210m_500s.npz",
+    "size": 5864980929,
+    "mtime_ns": 1789527903191770475,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/distribution_twin_a_direct_100000_210m_500s.npz",
+    "size": 5821279768,
+    "mtime_ns": 1790506896804594966,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/distribution_twin_b_continuous_100000_210m_500s.npz",
+    "size": 5837625569,
+    "mtime_ns": 1790506647086291265,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/gibbs_boltzmann_100000_210m_500s.npz",
+    "size": 5835227980,
+    "mtime_ns": 1789877058185892713,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/gibbs_sobol_100000_210m_500s.npz",
+    "size": 5834683520,
+    "mtime_ns": 1789923890053623381,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/kdpp_curv_gated_100000_210m_500s.npz",
+    "size": 12282463144,
+    "mtime_ns": 1789272619368978582,
+    "shape": [
+      99358,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/kdpp_gated_100000_210m_500s.npz",
+    "size": 12359568166,
+    "mtime_ns": 1789233464625137715,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/kdpp_gated_uniform25_100000_210m_500s.npz",
+    "size": 12354711566,
+    "mtime_ns": 1789237812513219264,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mass_100000_dataset_210min_500steps_dual_labels.npz",
+    "size": 12371266200,
+    "mtime_ns": 1787690327710776469,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mass_100000_random_dataset_210min_500steps_dual_labels.npz",
+    "size": 12346750644,
+    "mtime_ns": 1787688676368245470,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mass_100000_random_l_dataset_210min_500steps_dual_labels.npz",
+    "size": 12369334671,
+    "mtime_ns": 1788323103359131791,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mass_50000_dataset_210min_500steps_dual_labels.npz",
+    "size": 6192637669,
+    "mtime_ns": 1787671694045251470,
+    "shape": [
+      50126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mass_random_dist_100000_210m_500s.npz",
+    "size": 5835528985,
+    "mtime_ns": 1788863563815465396,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mutant_aware_100000_210m_500s.npz",
+    "size": 12352557323,
+    "mtime_ns": 1789067579991020995,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mutant_aware_100000_210m_500s_rolemode.npz",
+    "size": 12362496953,
+    "mtime_ns": 1788754366606603373,
+    "shape": [
+      100124,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mutant_aware_100000_leaklevel_210m_500s.npz",
+    "size": 12367049907,
+    "mtime_ns": 1788756372381504413,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mutant_aware_pure_random_100000_210m_500s.npz",
+    "size": 5854558523,
+    "mtime_ns": 1789631735738700350,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mutant_aware_pure_random_ko_interval_100000_210m_500s.npz",
+    "size": 5874872855,
+    "mtime_ns": 1789830929157482768,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/mutant_aware_pure_random_rescue_100000_210m_500s.npz",
+    "size": 5853589980,
+    "mtime_ns": 1789790843091511629,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/pure_random_1m_pool.npz",
+    "size": 64751540,
+    "mtime_ns": 1790191098222544064,
+    "status": "excluded_no_trajectory"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/pure_random_distribution_twin_a_direct_100000_210m_500s.npz",
+    "size": 5836727107,
+    "mtime_ns": 1790510447298622430,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/pure_random_distribution_twin_b_continuous_100000_210m_500s.npz",
+    "size": 5855260581,
+    "mtime_ns": 1790510175099964430,
+    "shape": [
+      100126,
+      39,
+      500
+    ],
+    "dtype": "float32",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/real_mutants_only_210min_500steps_dual_labels.npz",
+    "size": 15620106,
+    "mtime_ns": 1784832463631283175,
+    "shape": [
+      126,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/wb_mass_100000_dataset_210min_500steps_dual_labels.npz",
+    "size": 12253520787,
+    "mtime_ns": 1788257089040408677,
+    "shape": [
+      98859,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/wb_mass_100000_dataset_210min_500steps_dual_labels_s5mode.npz",
+    "size": 12226764366,
+    "mtime_ns": 1788282826570646255,
+    "shape": [
+      98952,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  },
+  {
+    "path": "/data/zsy/budding_yeast/wb_mass_100000_dataset_210min_500steps_dual_labels_tier2fold.npz",
+    "size": 12324440871,
+    "mtime_ns": 1788329133079741740,
+    "shape": [
+      99354,
+      39,
+      500
+    ],
+    "dtype": "float64",
+    "status": "cached"
+  }
+]

@@ -32,7 +32,7 @@ for p in [PROJECT_ROOT, PARENT_DIR, DATA_DIR]:
         sys.path.insert(0, p)
 
 # Import mutant_aware module WITHOUT MODIFICATION
-import mutant_aware as ma
+from budding_yeast_v2.data.systems.budding import api as ma
 
 CORE_9_INDICES = [ma.nMASS, ma.nCLN2, ma.nCLB2, ma.nSIC1, ma.nC5, ma.nF2, ma.nF5, ma.nSIC1P, ma.nC2P]
 VAR_NAMES_39 = [

@@ -1,0 +1,100 @@
+{
+  "identity": {
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_bifurcation_entropy/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train17996.npz",
+    "size": 1069500950,
+    "mtime_ns": 1790773986686684900
+  },
+  "counts": [
+    {
+      "population": "real",
+      "pattern_code": "P1",
+      "count": 21,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P2",
+      "count": 47,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P3",
+      "count": 7,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P4",
+      "count": 5,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5a",
+      "count": 33,
+      "critical_count": 1
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5b",
+      "count": 13,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "critical_count": 0
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P1",
+      "count": 5652,
+      "critical_count": 278
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P2",
+      "count": 4570,
+      "critical_count": 798
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P3",
+      "count": 1603,
+      "critical_count": 23
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P4",
+      "count": 1154,
+      "critical_count": 193
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5a",
+      "count": 3953,
+      "critical_count": 713
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5b",
+      "count": 1064,
+      "critical_count": 11
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "critical_count": 0
+    }
+  ],
+  "n_real": 126,
+  "n_synthetic": 17996,
+  "old_pattern_mismatch": 0,
+  "real_exact_canonical": 126,
+  "negative_below_minus_1e_minus4": 1,
+  "duplicate_synthetic_names": 0,
+  "seconds": 21.743257220136
+}

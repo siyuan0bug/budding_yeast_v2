@@ -229,6 +229,16 @@ GENERIC_BASELINE_MODELS = frozenset({
     'icon', 'bampno', 'gfno', 'g_fno', 'noble',
 })
 
+# Architectures whose computation does not encode Budding-specific pools/events.
+FISSION_MODELS = GENERIC_BASELINE_MODELS | frozenset({
+    'pure_fno','fno1d','fno1d_standard','unet1d','unet','pure_wno','cno1d','cno','mwt1d','mwt',
+    'galerkin_transformer1d','galerkin_transformer','galerkin','transolver1d','transolver','dpot1d','dpot',
+    'resnet_film','hyper_fno','cross_fno','wno','lno','channel_hyper_fno',
+    'graph_resnet_film','gated_graph_resnet_film','multiscale_diffgraph','dualpath_spectralgraph',
+    'bio_statespace_graph','sc_fno','bregman_fno','bregman_wno','pno1d','pno','mpno1d','mpno',
+    'konode','ncflow','iganet_transformer','iganet','deeponet','neural_ode','gcgnet','ultimate_fno',
+})
+
 
 class YeastLitModule(pl.LightningModule):
     def __init__(
@@ -275,9 +285,17 @@ class YeastLitModule(pl.LightningModule):
         graph_load_policy='current',
         adj_matrix_path=None,
         constructor_contract_version=1,
+        system_id=None,
     ):
         super().__init__()
         self.save_hyperparameters()
+        self.system_id=system_id or ('fission' if (num_vars,param_dim)==(16,58) else 'budding')
+        if system_id is not None or (num_vars,param_dim) in ((16,58),(39,141)):
+            from budding_yeast_v2.data.systems.registry import resolve_system
+            resolve_system(self.system_id,num_vars=num_vars,param_dim=param_dim)
+        self.hparams.system_id=self.system_id
+        if self.system_id=='fission' and model_name not in FISSION_MODELS:
+            raise ValueError(f'{model_name} embeds Budding-specific biology; use a supported Fission architecture such as fno1d, cross_fno or graph_resnet_film')
 
         if model_name in SINGLE_VARIABLE_GRAPH_MODELS:
             if causal_matrix is not None and (adj_matrix is not None or adj_matrix_path is not None):
@@ -286,7 +304,7 @@ class YeastLitModule(pl.LightningModule):
                 raise ValueError('causal_matrix is supported only by ultimate_fno')
             graph = resolve_variable_graph(
                 causal_matrix if model_name == 'ultimate_fno' and causal_matrix is not None else adj_matrix,
-                num_vars, view=graph_view, path=adj_matrix_path,
+                num_vars, view=graph_view, path=adj_matrix_path,system_id=self.system_id,
             )
             adj_matrix = graph
             causal_matrix = graph if model_name == 'ultimate_fno' else causal_matrix
@@ -426,7 +444,7 @@ class YeastLitModule(pl.LightningModule):
         if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel', 'gradnorm_hybrid',
                          'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw',
                          'triple_dynamic', 'hybrid_phase_dtw'):
-            self.criterion = loss_class()
+            self.criterion = loss_class(num_vars=num_vars) if loss_type=='gradnorm_hybrid' else loss_class()
         elif loss_type == 'hybrid_bifurcate':
             self.criterion = loss_class(lambda_pattern=lambda_pattern, lambda_arrest=lambda_arrest)
         elif loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
@@ -437,7 +455,9 @@ class YeastLitModule(pl.LightningModule):
             dummy_p_mean = torch.zeros(1, param_dim)
             dummy_p_std = torch.ones(1, param_dim)
             pinn_kwargs = {
-                't_max': 210.0,
+                't_max': 300.0 if self.system_id=='fission' else 210.0,
+                'norm_type':norm_type,
+                's_c':torch.ones(1,num_vars,1) if norm_type=='asinh_scale' else None,
                 'lambda_phys': lambda_phys,
                 'lambda_jump': lambda_jump,
                 'lambda_penalty': lambda_penalty,
@@ -465,6 +485,7 @@ class YeastLitModule(pl.LightningModule):
             )
         else:
             self.criterion = loss_class(torch.zeros(1, num_vars, 1), torch.ones(1, num_vars, 1))
+        self.criterion.system_id=self.system_id
 
         self.lr = lr
         self.weight_decay = weight_decay
@@ -514,6 +535,8 @@ class YeastLitModule(pl.LightningModule):
 
     def bind_datamodule_stats(self, dm):
         """Validate a saved contract before binding every physical decoder."""
+        if getattr(dm,'system_id',self.system_id)!=self.system_id:
+            raise ValueError('Checkpoint/model biological system does not match the dataset')
         state_fn = getattr(dm, 'preprocessing_state', None)
         state = state_fn() if callable(state_fn) else None
         if (self._legacy_fit_scope is not None and state is not None
@@ -666,6 +689,8 @@ class YeastLitModule(pl.LightningModule):
                         dm.mean_y.to(self.device),
                         dm.std_y.to(self.device),
                     )
+
+        self.criterion.system_id=self.system_id
 
     def forward(self, x, p):
         return self.forward_ic_time(x, p)

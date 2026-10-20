@@ -16,8 +16,8 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 cd "$SCRIPT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/users/zsy/.conda/envs/neuralop/bin/python}"
-POOL_FILE="/home/users/zsy/mydata/budding_yeast/pure_random_1m_pool.npz"
-INIT_DATASET="/home/users/zsy/mydata/budding_yeast/al_iter0_10000_210m_500s.npz"
+POOL_FILE="${POOL_FILE:-/home/users/zsy/mydata/budding_yeast/budding_pool_1000000_seed42_modular.npz}"
+INIT_DATASET="${INIT_DATASET:-/home/users/zsy/mydata/budding_yeast/al_iter0_10000_210m_500s_modular.npz}"
 EXP_ROOT="./experiments"
 mkdir -p "$EXP_ROOT" /home/users/zsy/mydata/budding_yeast
 
@@ -70,8 +70,8 @@ echo "==========================================================================
 # ==============================================================================
 if [ ! -f "$POOL_FILE" ]; then
     echo -e "\n[阶段 1/3] 未找到 100 万候选池文件，启动秒级采样引擎..."
-    $PYTHON_BIN data/generate_1m_pure_random_pool.py \
-        --n_samples 1000000 \
+    $PYTHON_BIN data/generate.py --recipe budding_pool \
+        --samples 1000000 \
         --output "$POOL_FILE" \
         --seed 42
 else

@@ -1,0 +1,152 @@
+[
+  {
+    "strategy": "al4pde_bifurcation",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_bifurcation/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_bifurcation",
+    "round": 1,
+    "train_samples": 17996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_bifurcation/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train17996.npz"
+  },
+  {
+    "strategy": "al4pde_bifurcation_entropy",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_bifurcation_entropy/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_bifurcation_entropy",
+    "round": 1,
+    "train_samples": 17996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_bifurcation_entropy/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train17996.npz"
+  },
+  {
+    "strategy": "al4pde_bifurcation_entropy",
+    "round": 2,
+    "train_samples": 37996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_bifurcation_entropy/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train37996.npz"
+  },
+  {
+    "strategy": "al4pde_diversity",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_diversity/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_diversity",
+    "round": 1,
+    "train_samples": 15055,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_diversity/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train15055.npz"
+  },
+  {
+    "strategy": "al4pde_diversity",
+    "round": 2,
+    "train_samples": 29247,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_diversity/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train29247.npz"
+  },
+  {
+    "strategy": "al4pde_event_entropy",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_event_entropy/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_fisher_oed",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_fisher_oed/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_novelty",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_novelty/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_novelty",
+    "round": 1,
+    "train_samples": 16554,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_novelty/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train16554.npz"
+  },
+  {
+    "strategy": "al4pde_novelty",
+    "round": 2,
+    "train_samples": 33493,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_novelty/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train33493.npz"
+  },
+  {
+    "strategy": "al4pde_random",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_random/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_random",
+    "round": 1,
+    "train_samples": 16541,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_random/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train16541.npz"
+  },
+  {
+    "strategy": "al4pde_random",
+    "round": 2,
+    "train_samples": 33733,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_random/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train33733.npz"
+  },
+  {
+    "strategy": "al4pde_residual",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_residual/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_residual",
+    "round": 1,
+    "train_samples": 17996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_residual/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train17996.npz"
+  },
+  {
+    "strategy": "al4pde_residual",
+    "round": 2,
+    "train_samples": 37996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_residual/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train37996.npz"
+  },
+  {
+    "strategy": "al4pde_residual_diversity",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_residual_diversity/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_residual_diversity",
+    "round": 1,
+    "train_samples": 17996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_residual_diversity/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train17996.npz"
+  },
+  {
+    "strategy": "al4pde_residual_diversity",
+    "round": 2,
+    "train_samples": 37996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_residual_diversity/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train37996.npz"
+  },
+  {
+    "strategy": "al4pde_uncertainty",
+    "round": 0,
+    "train_samples": 7996,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_uncertainty/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter0_train7996.npz"
+  },
+  {
+    "strategy": "al4pde_uncertainty",
+    "round": 1,
+    "train_samples": 16857,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_uncertainty/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter1_train16857.npz"
+  },
+  {
+    "strategy": "al4pde_uncertainty",
+    "round": 2,
+    "train_samples": 35036,
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_uncertainty/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train35036.npz"
+  }
+]

@@ -34,7 +34,7 @@ class VariableGraphInput:
         )
 
 
-def resolve_variable_graph(value=None, num_vars=39, *, view="hybrid", path=None):
+def resolve_variable_graph(value=None, num_vars=39, *, view="hybrid", path=None, system_id=None):
     """Resolve once, without cwd-relative files or an identity fallback.
 
     An explicit matrix/path is an ablation override, not certified ODE support.
@@ -49,7 +49,7 @@ def resolve_variable_graph(value=None, num_vars=39, *, view="hybrid", path=None)
     if isinstance(value, VariableGraphInput):
         spec = value
     elif value is None:
-        graph = build_yeast_graph()
+        graph = build_yeast_graph(system_id=system_id or ('fission' if num_vars==16 else 'budding'))
         if num_vars != len(graph.variable_names):
             raise ValueError("The source-derived yeast graph has 39 variables; supply an explicit matrix for other sizes")
         matrix = torch.tensor(graph.adjacency(view, self_loops="all"), dtype=torch.float32)

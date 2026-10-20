@@ -20,7 +20,7 @@ def relation_inputs(num_vars=39, *, view='hybrid', variable_graph=None, rel_grap
     if isinstance(variable_graph, VariableGraphInput) and variable_graph.origin == 1:
         view = {1: 'hybrid', 2: 'continuous'}[variable_graph.view_code]
     graph = resolve_variable_graph(variable_graph, num_vars, view=view)
-    source = build_yeast_relations()
+    source = build_yeast_relations(system_id='fission' if num_vars==16 else 'budding')
     rel_np, _ = source.matrices(view, self_loops='none')
     support = graph.matrix.ne(0)
     rel = torch.tensor(rel_np, dtype=torch.float32) * support[None]

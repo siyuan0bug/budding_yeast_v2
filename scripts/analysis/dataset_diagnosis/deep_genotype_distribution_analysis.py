@@ -56,7 +56,7 @@ GENE_GROUPS = [
 ]
 
 # Real Mutants Master Definitions from Chen (2004) Appendix B Table S5
-from budding_yeast_v2.data.mass_dataset_generator import REAL_MUTANTS, get_default_params
+from budding_yeast_v2.data.systems.budding.api import REAL_MUTANTS, get_default_params
 
 def parse_synthetic_name(name_str):
     """

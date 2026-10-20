@@ -202,6 +202,9 @@ class GradNormHybridLoss(nn.Module):
                 'w_min': w_snap.min().item(),
                 'w_std': w_snap.std().item(),
             }
+            if getattr(self,'system_id','budding')=='fission':
+                for old,new in (('w_clb2','w_mpf'),('w_sic1','w_rum1'),('w_cln2','w_rdna')):
+                    self._last_metrics[new]=self._last_metrics.pop(old)
 
         return weighted_loss
 
@@ -370,9 +373,46 @@ class PINNResidualLoss(nn.Module):
     def _denormalize_p(self, p_norm):
         """反归一化参数到真实空间，并构建参数字典"""
         p_real = denormalize_p(p_norm, self.p_mean, self.p_std, self.norm_type)
+        if getattr(self,'system_id','budding')=='fission':
+            from .fission_physics import params_tensor_to_dict as fission_params
+            return fission_params(p_real)
         extra = {'is_mutant_104': torch.zeros(p_real.shape[0], device=p_real.device)}
         p_dict = params_tensor_to_dict(p_real, extra)
         return p_dict
+
+    def _rhs(self,y,parameters,t):
+        if getattr(self,'system_id','budding')=='fission':
+            from .fission_physics import eqns_torch as fission_eqns
+            # Fractional activities have a physical domain [0,1]. Project only
+            # the RHS evaluation; the data loss still sees the full prediction.
+            upper=torch.full((16,),float('inf'),device=y.device,dtype=y.dtype)
+            upper[[8,9,10,11,15]]=1.
+            return fission_eqns(torch.minimum(y,upper),parameters,t)
+        return eqns_torch(y,parameters,t)
+
+    def _event_mask(self,target,p_dict):
+        if getattr(self,'system_id','budding')=='fission':
+            from .fission_physics import detect_event_mask
+            return detect_event_mask(target,event_window=self.event_window,event_tol=self.event_tol,
+                                     jump_ratio=self.jump_ratio,parameters=p_dict)
+        else:detector=detect_event_mask_torch
+        return detector(target,event_window=self.event_window,event_tol=self.event_tol,jump_ratio=self.jump_ratio)
+
+    def _expanded_parameters(self,p_dict,target_indices,batch):
+        expanded={}
+        for key,value in p_dict.items():
+            if isinstance(value,torch.Tensor) and value.dim()>0 and value.shape[0]==batch:
+                if value.ndim==2:
+                    expanded[key]=value[:,target_indices].reshape(-1)
+                else:expanded[key]=value.unsqueeze(1).expand(batch,len(target_indices)).reshape(-1)
+            else:expanded[key]=value
+        return expanded
+
+    def _bind_target_phase(self,target,p_dict):
+        if getattr(self,'system_id','budding')=='fission':
+            # Teacher phase resolves the unexported kS; phase transitions are masked.
+            from .fission_physics import phase_history
+            p_dict['kS']=phase_history(target,p_dict)
 
     def _get_physics_weight(self):
         """
@@ -422,15 +462,10 @@ class PINNResidualLoss(nn.Module):
         y_all = torch.clamp(y_all, min=0.0)
         y_all = y_all.transpose(1, 2).reshape(B * n_t, V)  # (B*n_t, 39)
 
-        p_dict_expanded = {}
-        for k, v in p_dict.items():
-            if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == B:
-                p_dict_expanded[k] = v.unsqueeze(1).expand(B, n_t).reshape(B * n_t)
-            else:
-                p_dict_expanded[k] = v
+        p_dict_expanded = self._expanded_parameters(p_dict,t_indices,B)
 
         t_all = t_grid[t_indices].unsqueeze(0).expand(B, n_t).reshape(B * n_t)
-        f_all = eqns_torch(y_all, p_dict_expanded, t_all)  # (B*n_t, 39)
+        f_all = self._rhs(y_all, p_dict_expanded, t_all)
         # 安全防护: ODE 函数在极端输入下仍可能产生 NaN/Inf (Goldbeter-Koshland 分母→0)
         f_all = torch.nan_to_num(f_all, nan=0.0, posinf=1e4, neginf=-1e4)
         f_u[:, :, t_indices] = f_all.reshape(B, n_t, V).transpose(1, 2)
@@ -536,13 +571,11 @@ class PINNResidualLoss(nn.Module):
             pred_real = self._denormalize_y(pred_norm)
             target_real = self._denormalize_y(target_norm)
             p_dict = self._denormalize_p(p_norm)
+            self._bind_target_phase(target_real,p_dict)
 
             # 4. Event 掩码用**真值**检测（v1 用预测，早期掩码错误）
             with torch.no_grad():
-                mask = detect_event_mask_torch(
-                    target_real, event_window=self.event_window,
-                    event_tol=self.event_tol, jump_ratio=self.jump_ratio
-                )
+                mask = self._event_mask(target_real,p_dict)
 
             # 5. ODE 残差损失（连续区间）
             if lam_phys_eff > 0:
@@ -933,6 +966,15 @@ class TripleDynamicLoss(nn.Module):
 # =========================================================================
 # 方案 A, 方案 C, 方案 A+C 损失函数体系
 # =========================================================================
+def _masked_pattern_cross_entropy(logits, targets):
+    """Original Fission pattern=None has no classification target (ID -1)."""
+    targets = targets.reshape(-1).long()
+    valid = targets != -1
+    if not valid.any():
+        return logits.sum() * 0.0
+    return F.cross_entropy(logits[valid], targets[valid])
+
+
 class HybridBifurcateLoss(nn.Module):
     """
     方案 A 损失: 基础数据损失 + 表型分类交叉熵 + 阻滞态末端平坦稳态正则
@@ -954,11 +996,11 @@ class HybridBifurcateLoss(nn.Module):
         loss_data = self.hybrid_data_loss(pred_norm, target_norm)
 
         # 2. Pattern classification loss
+        if pattern_targets is not None:
+            pattern_targets = pattern_targets.reshape(-1)
         loss_cls = torch.tensor(0.0, device=pred_norm.device)
         if pattern_logits is not None and pattern_targets is not None:
-            if pattern_targets.dim() > 1:
-                pattern_targets = pattern_targets.squeeze()
-            loss_cls = F.cross_entropy(pattern_logits, pattern_targets.long())
+            loss_cls = _masked_pattern_cross_entropy(pattern_logits, pattern_targets)
 
         # 3. Pattern C arrest flatness penalty (suppresses fake oscillations like #15)
         loss_arrest = torch.tensor(0.0, device=pred_norm.device)
@@ -1024,15 +1066,10 @@ class HybridPINOCollocationLoss(PINNResidualLoss):
         y_all = torch.clamp(y_all, min=0.0)
         y_all = y_all.transpose(1, 2).reshape(B * n_t, V)
 
-        p_dict_expanded = {}
-        for k, v in p_dict.items():
-            if isinstance(v, torch.Tensor) and v.dim() > 0 and v.shape[0] == B:
-                p_dict_expanded[k] = v.unsqueeze(1).expand(B, n_t).reshape(B * n_t)
-            else:
-                p_dict_expanded[k] = v
+        p_dict_expanded = self._expanded_parameters(p_dict,t_indices,B)
 
         t_all = t_grid[t_indices].unsqueeze(0).expand(B, n_t).reshape(B * n_t)
-        f_all = eqns_torch(y_all, p_dict_expanded, t_all)
+        f_all = self._rhs(y_all, p_dict_expanded, t_all)
         f_all = torch.nan_to_num(f_all, nan=0.0, posinf=1e4, neginf=-1e4)
         f_u[:, :, t_indices] = f_all.reshape(B, n_t, V).transpose(1, 2)
 
@@ -1042,13 +1079,17 @@ class HybridPINOCollocationLoss(PINNResidualLoss):
 
         # 解法 1: 变量解耦 (仅在 33 个连续生化变量上计算残差)
         if self.event_strategy == 'decoupled':
-            residual_norm = residual_norm[:, CONTINUOUS_VARS, :]
+            continuous=([i for i in range(16) if i not in (0,1,2,3)]
+                        if getattr(self,'system_id','budding')=='fission' else CONTINUOUS_VARS)
+            residual_norm = residual_norm[:, continuous, :]
             residual_val = torch.where(
                 torch.abs(residual_norm) <= self.huber_delta,
                 0.5 * (residual_norm ** 2),
                 self.huber_delta * (torch.abs(residual_norm) - 0.5 * self.huber_delta)
             )
-            weight = torch.ones(B, len(CONTINUOUS_VARS), T, dtype=pred_real.dtype, device=pred_real.device)
+            weight = torch.ones(B, len(continuous), T, dtype=pred_real.dtype, device=pred_real.device)
+            if getattr(self,'system_id','budding')=='fission':
+                weight=weight*mask[:,None,:]
             subsample_mask = torch.zeros(T, dtype=torch.bool, device=pred_real.device)
             subsample_mask[t_indices] = True
             weight = weight * subsample_mask.unsqueeze(0).unsqueeze(0).float()
@@ -1099,12 +1140,10 @@ class HybridPINOCollocationLoss(PINNResidualLoss):
             pred_real = self._denormalize_y(pred_norm)
             target_real = self._denormalize_y(target_norm)
             p_dict = self._denormalize_p(p_norm)
+            self._bind_target_phase(target_real,p_dict)
 
             with torch.no_grad():
-                mask = detect_event_mask_torch(
-                    target_real, event_window=self.event_window,
-                    event_tol=self.event_tol, jump_ratio=self.jump_ratio
-                )
+                mask = self._event_mask(target_real,p_dict)
 
             if lam_phys_eff > 0:
                 loss_residual = self._compute_ode_residual_loss(pred_real, p_dict, mask)
@@ -1147,10 +1186,10 @@ class HybridAllLoss(HybridPINOCollocationLoss):
                                      lambda_penalty=lambda_penalty, lambda_smooth=lambda_smooth)
 
         # 2. Add pattern classification loss
+        if pattern_targets is not None:
+            pattern_targets = pattern_targets.reshape(-1)
         if pattern_logits is not None and pattern_targets is not None:
-            if pattern_targets.dim() > 1:
-                pattern_targets = pattern_targets.squeeze()
-            loss_cls = F.cross_entropy(pattern_logits, pattern_targets.long())
+            loss_cls = _masked_pattern_cross_entropy(pattern_logits, pattern_targets)
             total_loss = total_loss + self.lambda_pattern * loss_cls
 
         # 3. Add arrest state flatness penalty

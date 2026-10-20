@@ -1,0 +1,10 @@
+{
+  "evaluation_csv": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv",
+  "evaluation_sha256": "2f6422d84d8488db60cd730396b0edeafb9e5cf0e518b3e2f731d2e5e8d265d5",
+  "ranking": "ascending arithmetic mean of descending min-ranks of MAE, MSE and Relative_L2; ties broken by Relative_L2 rank, MAE rank, name",
+  "top_k": 20,
+  "correlation_in_ranking": false,
+  "fit_or_retraining": false,
+  "training_support": "current DataModule non-LHS 80/10/10 split, seed=42; not proof of historical training membership",
+  "cross_dataset_sample_counts": "row counts per file; overlap between files is not deduplicated"
+}

@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import argparse
+import json
 import concurrent.futures
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
@@ -25,13 +26,7 @@ for p in [_script_dir, _v2_root, _repo_root]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-try:
-    import budding_yeast_v2.data.mutant_aware as ma
-except ImportError:
-    try:
-        import data.mutant_aware as ma
-    except ImportError:
-        import mutant_aware as ma
+from budding_yeast_v2.data.systems.budding import api as ma
 
 
 def select_initial_kmeans(pool_path, n_samples=10000, seed=42):
@@ -121,6 +116,12 @@ def simulate_selected_tasks(selected_indices, pool_path, num_workers=40):
     all_names = pool_data['mutant_names']
     all_params = pool_data['params']
     param_keys = pool_data['param_names']
+    # NPZ indexing decompresses a whole member; load it once, not once per selection.
+    all_overrides = pool_data['overrides_json'] if 'overrides_json' in pool_data else None
+    if 'system_id' in pool_data and str(pool_data['system_id'])!='budding':
+        raise ValueError('The AL oracle currently supports only Budding pools')
+    if list(param_keys)!=list(ma.PARAM_KEYS):
+        raise ValueError('Pool parameter names/order do not match the Budding oracle')
     defaults = ma.get_default_params()
     defaults.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
 
@@ -129,8 +130,10 @@ def simulate_selected_tasks(selected_indices, pool_path, num_workers=40):
         name = str(all_names[idx])
         p_vec = all_params[idx]
         # Build override dict for mutant_aware
-        ovr = {param_keys[i]: float(p_vec[i]) for i in range(len(param_keys))}
+        ovr = (json.loads(str(all_overrides[idx])) if all_overrides is not None
+               else {param_keys[i]: float(p_vec[i]) for i in range(len(param_keys))})
         tasks.append((name, ovr))
+    pool_data.close()
 
     print(f"  |-- Simulating {len(tasks)} tasks on {num_workers} CPU workers...")
     t0 = time.time()
@@ -162,7 +165,8 @@ def simulate_selected_tasks(selected_indices, pool_path, num_workers=40):
                 print(f"  |-- [{i+1:5d}/{len(tasks):5d}] ({pct:5.1f}%) | Valid: {valid_count} | Speed: {speed:5.1f} samples/s", flush=True)
 
     print(f"  |-- ODE Simulation completed: {valid_count}/{len(tasks)} valid trajectories in {time.time() - t0:.2f}s.")
-    return results, bio_labels, pattern_labels, final_params, param_keys
+    ordered=[name for name,_ in tasks if name in results]
+    return ({name:results[name] for name in ordered}, bio_labels, pattern_labels, final_params, param_keys)
 
 
 def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
@@ -185,7 +189,7 @@ def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
     real_patterns = {}
     real_params = {}
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=min(40, len(real_tasks))) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_workers, len(real_tasks))) as executor:
         futures = {executor.submit(_simulate_single_task, t): t[0] for t in real_tasks}
         for future in concurrent.futures.as_completed(futures):
             m_name, y_uniform, bio_label, pattern_label, ovr = future.result()
@@ -196,6 +200,10 @@ def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
                 real_params[m_name] = [ovr.get(k, defaults[k]) for k in param_keys]
 
     print(f"  |-- Real Mutants ready: {len(real_trajs)} valid benchmark strains.")
+    if len(real_trajs)!=len(real_tasks):
+        raise RuntimeError('Incomplete real-mutant benchmark; refusing to export a partial real test set')
+    # Completion order must not reorder the canonical real benchmark.
+    real_trajs={name:real_trajs[name] for name,_ in real_tasks}
 
     # Combine: Real mutants first (for standardized index mapping), then synthetic mutants
     all_names = list(real_trajs.keys()) + list(synth_trajs.keys())
@@ -222,13 +230,19 @@ def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
         param_names=param_names_arr,
         mutant_names=names_arr,
         labels=labels_arr,
-        pattern_labels=pattern_labels_arr
+        pattern_labels=pattern_labels_arr,
+        is_real=np.array([True]*len(real_trajs)+[False]*len(synth_trajs)),
+        y_init=data_arr[:,:,0].astype(np.float64),
+        system_id=np.array('budding'),
+        variable_names=np.array(ma.VARIABLE_NAMES),
+        time_grid=np.linspace(0,210,500),
+        artifact_kind=np.array('trajectory_dataset')
     )
 
     print("=" * 80)
     print(f" DATASET PACKAGING COMPLETED")
     print(f" Export Path        : {output_path}")
-    print(f" Total Samples      : {len(all_names)} (126 Real + {len(synth_trajs)} Synthetic)")
+    print(f" Total Samples      : {len(all_names)} ({len(real_trajs)} Real + {len(synth_trajs)} Synthetic)")
     print(f" Trajectory Shape   : {data_arr.shape}")
     print(f" Parameters Shape   : {params_arr.shape}")
     print("=" * 80, flush=True)

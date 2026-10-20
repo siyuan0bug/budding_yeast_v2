@@ -23,14 +23,14 @@ PYTHON_BIN="/home/users/zsy/.conda/envs/neuralop/bin/python"
 # ============================================================
 
 # --- 1. 目标模型与损失策略 ---
-MODEL="biom_refiner_plus"              # 可选: biom_refiner_plus, biom_refiner_curvature, pure_wno, pure_fno, resnet_film, hyper_fno 等
-LOSS_TYPE="hybrid_mse_rel"             # 可选: hybrid_mse_rel, triple_dynamic, mse_only
-AL_STRATEGY="none"                     # 可选: none, al4pde_boundary, al4pde_diversity, rgs 等
+MODEL="${MODEL:-biom_refiner_plus}"              # 可选: biom_refiner_plus, biom_refiner_curvature, pure_wno, pure_fno, resnet_film, hyper_fno 等
+LOSS_TYPE="${LOSS_TYPE:-hybrid_mse_rel}"             # 可选: hybrid_mse_rel, triple_dynamic, mse_only
+AL_STRATEGY="${AL_STRATEGY:-none}"                     # 可选: none, al4pde_boundary, al4pde_diversity, rgs 等
 
 # --- 2. 数据集配置 ---
-DATA_DIR="/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast"
-DATASET="${DATA_DIR}/mass_100000_random_dataset_210min_500steps_dual_labels.npz"
-DATASET_TAG="mass_100000_random"
+DATA_DIR="${DATA_DIR:-/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast}"
+DATASET="${DATASET:-${DATA_DIR}/budding_mass_random_100000_seed42_modular.npz}"
+DATASET_TAG="${DATASET_TAG:-$(basename "${DATASET}" .npz)}"
 
 # --- 3. 多 GPU 分布式资源调度 ---
 # 指定参与并行搜索的 GPU 编号列表 (例如 8 卡: 0 1 2 3 4 5 6 7; 或部分卡: 0 1 2 3)

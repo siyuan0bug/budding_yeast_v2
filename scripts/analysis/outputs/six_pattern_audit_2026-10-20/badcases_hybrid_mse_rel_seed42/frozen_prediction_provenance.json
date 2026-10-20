@@ -1,0 +1,6 @@
+{
+  "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/scripts/analysis/outputs/pure_random_current_audit/hybrid_mse_rel_predictions.npz",
+  "sha256": "a5e8a00fefa9a1176d8c895b81a5753c1a8edc7713118884e67fc4f621ffcbae",
+  "total": 126,
+  "targets_exactly_match_current_npz": 126
+}

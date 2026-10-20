@@ -1,5 +1,32 @@
 # 全量模型基准评测榜单与坏 Case 深度剖析 (Benchmark Leaderboard & Badcase Analysis)
 
+> **2026-10-21 Fission流程复核**：实际跑通W&B离线训练、checkpoint恢复、20 real/8 synth评测与一轮受控HPO。
+> 采用复制合成轨迹的小规模冒烟数据，仅验证接口，不更新模型精度榜单。
+> 原Fission标签保持不变，详细范围见 [Fission实验流程](FISSION_EXTENSION.md)。
+
+
+> **2026-10-21 中性标签补充**：未来评测另存 `per_mutant_label_groups.csv` 与 `per_synth_test_label_groups.csv`，
+> 将BIO、ABC、六分类和原指标逐行对齐；原指标CSV格式、指标定义、历史文件和排行榜不变。
+> 本次没有训练六分类辅助头或实施分组补采，不能据此宣称消除了badcase。
+
+
+> **AL跨策略标签诊断补充**：完成第2轮的7种策略中，#15/#124均为7/7策略的Top20，#22/#42为6/7。
+> 同时留出算法及mutant的风险预测检验：六分类对ABC的MAE/MSE名次预测RMSE改善5.43%/9.16%，
+> relL2名次预测恶化1.60%；这些是**标签诊断指标，不是新模型精度提升**。
+> 保留BIO更换pattern，综合风险预测改善0.66%，条件区间跨0；目前不能宣称全面胜出。
+> 逐策略坏例、预算差异、指纹与验证边界见 [完整标签比较](AL_PATTERN_LABEL_COMPARISON.md)。
+
+> **2026-10-20 Pattern/Badcase核验**：本轮按用户指定的BioRefinerPlus / hybrid_mse_rel / seed_42
+> 的`eval/per_mutant_metrics.csv`，用MAE、MSE、Relative_L2的平均名次挑选20个badcase。
+> #15的Relative_L2=7.53625，#124的MSE=557.40076；不能混入triple_dynamic的指标。
+> 新临界标记只命中这20条中的1条，#15/#22/#42/#124均未命中；六分类完备不等于机制已验证。
+> 真实条件长时积分、完整名单及逐变量诊断见 [Pattern核验与统计入口](BUDDING_PATTERN_LABEL_AUDIT_2026-10-20.md)。
+> 本轮未训练新模型、未修改旧指标或排行榜。
+
+> **2026-10-20接口验证，不纳入精度榜单**：小规模Fission数据完成CLI单epoch训练、checkpoint恢复、
+> 20 real评测和16变量绘图，文件位于`scratch/probes/fission_cli_train`与`fission_cli_eval`。
+> 这仅验证系统接入，不能与下述充分训练的Budding精度结果比较。见 [扩展与验证范围](FISSION_EXTENSION.md)。
+
 本文档汇集了在统一基准数据集 `mutant_aware_pure_random_100000_210m_500s` 上，覆盖全部神经算子模型对 **126 个真实酵母突变体金标准**（Chen et al., 2004）的最终评测表现、关键细胞周期核心蛋白精度拆解以及极端坏 Case 的生化机理归因。
 
 > **2026-10-19 corr 口径再核查（只读历史存档，未重新推理）**：

@@ -221,6 +221,7 @@ def setup_wandb_logger(
 
     # 3. 结构化标签 (W&B 限制单个 Tag 长度必须在 1~64 字符之间)
     raw_tags = [
+        f"system:{getattr(args, 'system_id', getattr(args, 'system', 'auto'))}",
         f"data:{dataset_tag}",
         f"model:{model_name}",
         f"loss:{loss_type}",

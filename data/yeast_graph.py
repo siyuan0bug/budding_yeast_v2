@@ -1,7 +1,7 @@
 """Source-derived *potential dependency* graphs, not fixed signed causal graphs.
 
 Only the ODE, its reachable scalar helpers, event guards, and reset dispatch in
-mutant_aware.py are inspected. The source module is never imported/executed.
+systems/budding are inspected. The source modules are never imported/executed.
 No default/real-mutant parameter table or trajectory is used. All matrix views
 are derived from immutable equation/event records, with A[target, source].
 
@@ -24,7 +24,9 @@ import sympy as sp
 from sympy.logic.boolalg import Boolean
 
 
-DEFAULT_SOURCE = Path(__file__).resolve().with_name("mutant_aware.py")
+from .systems.budding.graph import MODEL_SOURCE_DIR,read_budding_source
+
+DEFAULT_SOURCE = MODEL_SOURCE_DIR
 SCHEMA_VERSION = 1
 VIEWS = ("continuous", "event_trigger", "reset_value", "event", "hybrid")
 
@@ -620,11 +622,16 @@ def _build_cached(source: str, path: str) -> YeastGraph:
         raise GraphExtractionError(f"{path}: unsupported or inconsistent symbolic source: {exc}") from exc
 
 
-def build_yeast_graph(source_path: str | Path | None = None) -> YeastGraph:
+def build_yeast_graph(source_path: str | Path | None = None, *, system_id='budding') -> YeastGraph:
     """Build/read an immutable graph; source edits invalidate the in-memory cache.
 
     Paths are relative to this module by default, not the process working dir.
     No on-disk artifact is read or written, and no source Python is executed.
     """
+    if system_id=='fission':
+        from .systems.fission.graph import build_fission_graph
+        return build_fission_graph(source_path)
+    if system_id!='budding':raise ValueError(f'Unknown biological system: {system_id}')
     path = (DEFAULT_SOURCE if source_path is None else Path(source_path)).resolve()
-    return _build_cached(path.read_text(encoding="utf-8"), str(path))
+    source=read_budding_source(path) if path.is_dir() else path.read_text(encoding="utf-8")
+    return _build_cached(source, str(path))

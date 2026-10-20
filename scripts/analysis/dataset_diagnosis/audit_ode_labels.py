@@ -40,7 +40,8 @@ def _timeout(signum, frame):
 
 def worker(task):
     mid, name, target, tolerances, timeout = task
-    from budding_yeast_v2.data import mutant_aware as engine
+    from budding_yeast_v2.data.systems.budding import simulation as engine
+    from budding_yeast_v2.data.systems.budding.real_mutants import REAL_MUTANTS
     original_solver = engine.solve_ivp
     results = []
     original_y = None
@@ -62,7 +63,7 @@ def worker(task):
         signal.signal(signal.SIGALRM, _timeout)
         signal.setitimer(signal.ITIMER_REAL, timeout)
         try:
-            _, y, label, pattern = engine.simulate_mutant(name, dict(engine.REAL_MUTANTS[mid][1]), tf=210, ns=500)
+            _, y, label, pattern = engine.simulate_mutant(name, dict(REAL_MUTANTS[mid][1]), tf=210, ns=500)
             if y is None:
                 row.update(status="simulation_failed", label=label, pattern=pattern)
             else:

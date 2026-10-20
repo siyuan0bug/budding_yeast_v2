@@ -22,57 +22,58 @@ export WANDB_API_KEY="wandb_v1_TUcFfF0jwaTwckveM51WoLpEzra_14KoSskpEcz2M3CJrY2va
 NO_WANDB=1
 NORM_TYPE="log1p"
 
-DATA_DIR="/home/users/zsy/mydata/budding_yeast"
+DATA_DIR="${DATA_DIR:-/home/users/zsy/mydata/budding_yeast}"
+# Standard recipes use modular filenames. Explicit historical variants below remain opt-in.
 
 # MASS 数据集 (mass_dataset_generator.py 生成: 126 Real Mutants + MASS 合成样本, 无 LHS 家族结构)
 #   样本命名: real mutants 用原名 (如 1_WT_Glc), 合成样本以 'MASS_' 开头 (如 MASS_00001)
 #   yeast_datamodule.py 会自动识别 (无 '_LHS_' + 有 'MASS_' 前缀) 并跳过家族分层, 仅按 Pattern 宏观划分
-DATASET_MASS="${DATA_DIR}/mass_dataset_210min_500steps_dual_labels.npz"
+DATASET_MASS="${DATA_DIR}/budding_mass_100000_seed42_modular.npz"
 # MASS v4.5 / v2 数据集 (全新升级: 结构化生物救援基序扩充 + 高阶多突变占比提升至75%)
 DATASET_MASS_V2="${DATA_DIR}/mass_v2_dataset_210min_500steps_dual_labels.npz"
 # MASS Mutant-Aware 100,000 数据集 (mutant_aware.py v5.0 生成: 零泄露分层采样 + 126 Real Mutants, 10万样本全量高精数据集)
-DATASET_MUTANT_AWARE_100000="${DATA_DIR}/mutant_aware_100000_210m_500s.npz"
+DATASET_MUTANT_AWARE_100000="${DATA_DIR}/budding_mutant_aware_100000_seed42_modular.npz"
 # MASS Mutant-Aware 100,000 Role-mode 数据集 (mutant_aware.py: Tier 2/3 affinity 角色模式采样 + 126 Real Mutants)
 DATASET_MUTANT_AWARE_100000_ROLE="${DATA_DIR}/mutant_aware_100000_210m_500s_rolemode.npz"
 # MASS Mutant-Aware 100,000 Leak-Level 数据集 (mutant_aware.py: 40/30/20/10 level 配额采样 + 126 Real Mutants)
 DATASET_MUTANT_AWARE_100000_LEAKLEVEL="${DATA_DIR}/mutant_aware_100000_leaklevel_210m_500s.npz"
 # MASS k-DPP Gated 100,000 V2 数据集 (generate_kdpp_gated_dataset.py: 图拉普拉斯扩散 k-DPP + 吸引子门控均衡 V2版, 75.1分最优配比 20/40/25/15)
-DATASET_KDPP_GATED_V2_100000="${DATA_DIR}/kdpp_gated_100000_210m_500s.npz"
+DATASET_KDPP_GATED_V2_100000="${DATA_DIR}/budding_kdpp_100000_seed42_modular.npz"
 # MASS k-DPP Curv Gated 100,000 数据集 (generate_kdpp_curv_gated_dataset.py: 符号有向图拉普拉斯 k-DPP + 相空间曲率门控融合版)
-DATASET_KDPP_CURV_GATED_100000="${DATA_DIR}/kdpp_curv_gated_100000_210m_500s.npz"
+DATASET_KDPP_CURV_GATED_100000="${DATA_DIR}/budding_kdpp_curvature_100000_seed42_modular.npz"
 # MASS BAMS 100,000 数据集 (bams_dataset_generator.py: 基尔霍夫符号流守恒 + 闭环数值分岔二分逼近, 93.6分顶级无泄露数据集)
-DATASET_BAMS_100000="${DATA_DIR}/bams_100000_210m_500s.npz"
+DATASET_BAMS_100000="${DATA_DIR}/budding_bams_100000_seed42_modular.npz"
 # MASS 100,000 数据集 (含生物救援基序 Motif, 10万样本全量高精数据集)
-DATASET_MASS_100000="${DATA_DIR}/mass_100000_dataset_210min_500steps_dual_labels.npz"
+DATASET_MASS_100000="${DATA_DIR}/budding_mass_100000_seed42_modular.npz"
 # MASS 100,000 Random 数据集 (无 Motif 纯随机基线, 10万样本对照数据集)
-DATASET_MASS_100000_RANDOM="${DATA_DIR}/mass_100000_random_dataset_210min_500steps_dual_labels.npz"
+DATASET_MASS_100000_RANDOM="${DATA_DIR}/budding_mass_random_100000_seed42_modular.npz"
 # MASS Random + Mutant-Aware Parameter Distribution 100,000 数据集 (mass_random_mutant_dist.py 生成: mass_random_sampler 突变选取逻辑 + mutant_aware 连续物理参数分布采样消融实验)
-DATASET_MASS_RANDOM_DIST_100000="${DATA_DIR}/mass_random_dist_100000_210m_500s.npz"
+DATASET_MASS_RANDOM_DIST_100000="${DATA_DIR}/budding_mass_random_dist_100000_seed42_modular.npz"
 
 DATASET_MASS_100000_RANDOM_LEVEL="${DATA_DIR}/mass_100000_random_l_dataset_210min_500steps_dual_labels.npz"
 # MASS 50,000 数据集 (5万样本规模对比数据集)
-DATASET_MASS_50000="${DATA_DIR}/mass_50000_dataset_210min_500steps_dual_labels.npz"
+DATASET_MASS_50000="${DATA_DIR}/budding_mass_50000_seed42_modular.npz"
 
 # ====== BAMS 50,000 三分支靶向消融实验数据集 (50k样本, 50 Epochs, biom_refiner_plus 对比) ======
 # 0. 对照组 (50k 纯 BAMS 0 靶向基线):
-DATASET_BAMS_50000="${DATA_DIR}/bams_50000_210m_500s.npz"
+DATASET_BAMS_50000="${DATA_DIR}/budding_bams_ablation_50000_seed20260915_modular.npz"
 # 1. 消融组 A (40k BAMS 底座 + 10k 靶向骨架 Hard Zeros 0.0):
-DATASET_BAMS_ABLATION_HARD_50000="${DATA_DIR}/bams_ablation_hard_50000_210m_500s.npz"
+DATASET_BAMS_ABLATION_HARD_50000="${DATA_DIR}/budding_bams_ablation_50000_seed20260915_modular_hard.npz"
 # 2. 消融组 B (40k BAMS 底座 + 10k 靶向骨架 Continuous Hypomorphic ts 衰减):
-DATASET_BAMS_ABLATION_HYPO_50000="${DATA_DIR}/bams_ablation_hypo_50000_210m_500s.npz"
+DATASET_BAMS_ABLATION_HYPO_50000="${DATA_DIR}/budding_bams_ablation_50000_seed20260915_modular_hypo.npz"
 # 3. 方案 A 增强优化版: 100,000 样本 (网络拓扑基序 + 并联检查点配对 + 主控开关 5 阶深探 + 硬零点 KO):
-DATASET_BAMS_MOTIF_TOPOLOGY_100000="${DATA_DIR}/bams_motif_topology_100000_210m_500s.npz"
+DATASET_BAMS_MOTIF_TOPOLOGY_100000="${DATA_DIR}/budding_motif_100000_seed42_modular.npz"
 
 # 4. mutant_aware 纯随机对照基准: 100,000 样本 (零拓扑结构, 27基因均匀随机, 模式均匀随机, 25/25/25/25 平权)
-DATASET_MUTANT_AWARE_PURE_RANDOM_100000="${DATA_DIR}/mutant_aware_pure_random_100000_210m_500s.npz"
+DATASET_MUTANT_AWARE_PURE_RANDOM_100000="${DATA_DIR}/budding_random_100000_seed42_modular.npz"
 # 5. mutant_aware 纯随机 + 碰撞拯救 (Collision Rescue) 增强版: 100,000 样本 (消除查重黑洞, 70% DAmP/ts/pLOF 连续弱化 + 30% 碳源漂移)
-DATASET_MUTANT_AWARE_PURE_RANDOM_RESCUE_100000="${DATA_DIR}/mutant_aware_pure_random_rescue_100000_210m_500s.npz"
+DATASET_MUTANT_AWARE_PURE_RANDOM_RESCUE_100000="${DATA_DIR}/budding_random_100000_seed42_modular.npz"
 # 6. mutant_aware 纯随机 + KO 邻域微扰区间 [0, 1e-4] 采样版: 100,000 样本 (无 Rescue, 仅 KO 微扰采样, 消除 Dirac 硬零点)
-DATASET_MUTANT_AWARE_PURE_RANDOM_KO_INTERVAL_100000="${DATA_DIR}/mutant_aware_pure_random_ko_interval_100000_210m_500s.npz"
+DATASET_MUTANT_AWARE_PURE_RANDOM_KO_INTERVAL_100000="${DATA_DIR}/budding_random_ko_interval_100000_seed42_modular.npz"
 # 7. Gibbs-Boltzmann 图连续热力学能量采样版 (无泄露直舍拦截, 100,000 样本 + 126 Real Mutants):
-DATASET_GIBBS_BOLTZMANN_100000="${DATA_DIR}/gibbs_boltzmann_100000_210m_500s.npz"
+DATASET_GIBBS_BOLTZMANN_100000="${DATA_DIR}/budding_gibbs_100000_seed42_modular.npz"
 # 8. Gibbs-Sobol 低差异准随机加扰采样版 (Scrambled Sobol + Gibbs-Boltzmann, 100,000 样本 + 126 Real Mutants):
-DATASET_GIBBS_SOBOL_100000="${DATA_DIR}/gibbs_sobol_100000_210m_500s.npz"
+DATASET_GIBBS_SOBOL_100000="${DATA_DIR}/budding_gibbs_sobol_100000_seed42_modular.npz"
 
 # 9. 参数分布消融孪生实验数据集 (严格控制单变量对比: 仅 ts, db, APC-A, TAB6-1, CA, CSL, CKO, scc1-RR, PM 参数采样分布不同):
 #   - Twin B: 完整体系 B 连续物理包络与边界缓冲采样 (mutant_aware.py v5.2)
@@ -83,8 +84,8 @@ DATASET_DIST_TWIN_A="${DATA_DIR}/distribution_twin_a_direct_100000_210m_500s.npz
 # 10. 纯随机无拓扑参数分布消融孪生实验数据集 (零拓扑、零 Motif、27基因完全均匀随机、突变类型完全均匀随机):
 #   - Twin B: 纯随机骨架 + 完整体系 B 连续物理包络与边界缓冲采样
 #   - Twin A: 纯随机骨架 + 体系 A 参数采样分布与赋值规则
-DATASET_PURE_RANDOM_DIST_TWIN_B="${DATA_DIR}/pure_random_distribution_twin_b_continuous_100000_210m_500s.npz"
-DATASET_PURE_RANDOM_DIST_TWIN_A="${DATA_DIR}/pure_random_distribution_twin_a_direct_100000_210m_500s.npz"
+DATASET_PURE_RANDOM_DIST_TWIN_B="${DATA_DIR}/budding_twins_100000_seed42_modular.npz"
+DATASET_PURE_RANDOM_DIST_TWIN_A="${DATA_DIR}/budding_twins_100000_seed42_modular_mass.npz"
 
 DATASET_MASS_100000_BLIND="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels.npz"
 

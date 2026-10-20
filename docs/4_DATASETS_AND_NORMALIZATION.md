@@ -1,5 +1,87 @@
 # 数据集全景、生物图先验与归一化规范 (Datasets, Biological Graphs & Normalization)
 
+## Budding 标签：生物标签保留，六分类作为补充（2026-10-21）
+
+**BIO 负责生物事件判定；六分类负责观察窗内轨迹分组；ABC 保留为粗粒度分裂次数。**
+六分类不替代 BIO，也不作为新的六分类训练目标自动启用。
+
+| 标签字段 | 来源与用途 |
+|---|---|
+| `labels` | 原 `mutant_aware.py` 生物规则，仍由 `systems/budding/phenotypes.py` 判定；保留事件顺序、出芽、分裂质量等信息 |
+| `pattern_labels` | 原 A/B/C；仍用于既有切分、三分类辅助头及损失掩码，保持旧训练接口 |
+| `pattern_group_codes` 等 | 新独立字段 `pattern_group_codes`、`pattern_group_labels`、`pattern_group_ids`；P1/P2/P3/P4/P5a/P5b，ID=0–5；由未归一化轨迹计算 |
+| `observed_division_counts` | 沿用质量相邻跌落严格大于0.1、相邻检测跌落间隔严格大于10步的计数 |
+| `pattern_group_version / pattern_group_rules_json` | 补充分组的独立版本 `budding_window_groups_v1` 和完整阈值、优先级 |
+| `biological_labels_available` | 生物标签是否原本记录；缺失时 `labels=Unknown: Not recorded`，不从采样曲线伪造事件标签 |
+
+中性名称为：P1“观察到多次分裂”、P2“观察到一次分裂”、P3“无观测分裂且ORI信号低”、
+P4“无观测分裂且ORI信号升高”、P5a“无观测分裂且末端Clb2/Esp1达到阈值组”、
+P5b“无观测分裂且Clb2高”。精确条件采用已核验的有序决策树，见
+[`pattern_groups.py`](../data/systems/budding/pattern_groups.py)。不采用“自持极限环”“衰竭”或“奇点”命名，
+也不接入未经独立校准的 `Is_Bifurcation_Critical`。
+
+新统一生成入口自动保存全部标签；参数池没有轨迹，不生成这些轨迹标签。
+旧 NPZ 不改写，通用加载器的 `return_metadata=True` 从物理轨迹补算六分类，已有补充字段则逐项校验。
+DataModule 暴露 `biological_labels`、`pattern_group_codes` 等行数组；六分类不改变切分、归一化或三分类目标。
+Fission 的 `labels` 和 `pattern_labels` 严格保持原 `fission_random_sampler.py` 规则，不套用 Budding 六分类；
+原 pattern=None 的样本仍导出为字符串 `'None'`，不补成 Pattern_C；内部训练ID=-1，分类损失跳过这些行。
+W&B按Fission自身BIO/pattern选样，详见 [Fission标签与实验流程](FISSION_EXTENSION.md)。
+
+未来 AL 快照同时保留 BIO、ABC 和六分类，历史缺失 BIO 的记录明确标为未知。
+AL 新追加样本的训练类别 ID 修复为实际 A/B/C，过去的全零占位会错误地标成 A；
+从候选池直接构建初始训练集时也传入实际三分类目标。选样、配额、过滤阈值保持原样。
+评测保留原指标 CSV，另输出 `per_mutant_label_groups.csv` 与 `per_synth_test_label_groups.csv`，
+按名称/索引对齐原指标、BIO、ABC 和六分类，用于坏例诊断，不把分组收益视为训练精度提升。
+
+对消除 badcase，ABC 的区分能力有限：P1=A、P2=B，其余四组细分C，六分类包含了ABC全部计数信息。
+但已有跨策略比较只证明六分类对MAE/MSE风险的区分较好，对relL2反而较差，
+尚未通过“按新标签补采/训练”的对照实验验证坏例改善。相关证据见 [AL标签比较](AL_PATTERN_LABEL_COMPARISON.md)。
+C只说明窗口内未检测到分裂，不能据此对全部39变量施加稳态假设；现有损失行为本次未改。
+
+canonical 126 real 的P1/P2/P3/P4/P5a/P5b计数为21/47/7/5/33/13。
+47个P2延长至630分钟后全部继续分裂，因此“单次分裂后衰竭”不是数据支持的解释。
+论文核对及全部非LHS统计见 [Pattern核验](BUDDING_PATTERN_LABEL_AUDIT_2026-10-20.md)。
+
+## 当前生产接口（2026-10-20）
+
+Fission现已扩展独立图、通用模型训练/评测及可微物理残差：连续67条、hybrid75条非自环边，
+Budding仍为218/226。详见 [Fission扩展](FISSION_EXTENSION.md)。
+`budding_random` 的实际分布、RNG、冲突/救援、过滤/失败与无配对规则见
+[逐步说明](BUDDING_RANDOM_WALKTHROUGH.md)。
+
+新生成入口统一为 `data/generate.py`；文件名、18 种配置及加载方式见
+[文件与调用速查](DATA_GENERATION_QUICKSTART.md)。生产消费者已切换到
+`data/systems/budding/api.py` 和独立 Fission 模块；原地原样归档的是 31 个旧生成/LHS 文件，
+辅助消费者按本次要求迁移，不再适用此前“44 个 data 文件全部未变”的阶段性表述。
+图默认读取新生物源码，DataModule 优先读取 `is_real/time_grid`。
+新旧 NPZ 核心字段兼容，不代表所有历史样本、排序或文件字节完全相同。
+
+本次接口迁移验证：18 种配置均实际生成小规模文件；Budding 126 real + 16 synthetic、
+Fission 20 real + 8 synthetic 的加载与划分通过，Budding 完成单步训练/验证。
+507 个相关回归测试分批通过，另有 381 项突变/分布及 105 项采样专项通过。
+240 个非归档/非旧版对照 Python 文件解析及导入语句扫描未发现旧生成器依赖；
+运行时禁用旧生成器导入后，新生成与训练加载仍通过。未进行十万/百万规模端到端逐行比对。
+
+以下三段为本次迁移早期的审计记录；旧文件留存范围以当前生产接口说明为准。
+
+> **2026-10-20 逐文件规则范围更正**：采样/数值专项通过不能代表所有新旧文件规则相同。
+> 完整清点44个旧文件、54个新文件后，确认统一入口默认值、部分可选项、重复调用状态、尝试上限和失败/导出政策仍有差异。
+> 参见 [逐文件规则结论](DATA_GENERATION_FILE_RULES_2026-10-20.md) 与 [全部文件/定义出处](DATA_GENERATION_RULE_INVENTORY_2026-10-20.md)。
+
+> **2026-10-20 最终复查**：Budding/Fission 的 `benchmarks.py` 已改名为 `real_mutants.py`，同步全部新入口引用。
+> 补查并修复超时传播、救援配对、派生编号/元数据、源参数与 real 身份校验、失败状态导出等问题；旧 44 个 Python 文件未改动。
+> 完整复查结果和已知验证边界见 [数据生成最终复查](DATA_GENERATION_FINAL_REVIEW_2026-10-20.md)。
+
+> **2026-10-20 数据生成模块化**：新增 `data/generate.py` 和 18 个可选配置，原有 44 个 Python 文件保持原样。
+> Budding 基础模型及 126 个 real mutant 统一来自 `mutant_aware.py`；保留 MASS / mutant_aware 两套合成突变与幅度分布，
+> 并接入 Fission 独立生物模型。新流程碰撞统一救援；完整 126 条 Budding real 新旧仿真逐元素一致（最大差值 0）。
+> 文件职责、旧新入口对应、运行命令及一致性边界见 [数据生成整理说明](DATA_GENERATION_REFACTOR_2026-10-20.md)。
+> 没有覆盖正式 NPZ，也没有改变训练、归一化或切分。
+
+> **同日采样一致性复核**：发现并修复 Gibbs-Sobol 层级配额/顺序、MASS Random 的 shuffle RNG、Twins 的 TEM1-ts 初值及救援 RNG 调用方式。
+> 两套突变/分布及功能模块核对 381 项通过；采样内核与旧入口无碰撞调度对照 105 组通过。
+> 验证方法、复跑脚本与有意差异见 [采样一致性报告](SAMPLER_EQUIVALENCE_AUDIT_2026-10-20.md)。
+
 > **2026-10-19 后续授权：pure-random RNG 已修复**。局部 seed 统一控制幅度、随机等位基因、
 > 冲突重抽及救援，显式 RNG 的冲突遍历顺序不再依赖 Python 哈希种子。
 > 共享 helper 旧调用保持兼容；没有重新生成正式 NPZ，corr 定义与重复分组未改。
@@ -345,4 +427,3 @@ asinh_scale 的 s_c 使用固定 train 索引顺序的前最多 20,000 条，计
 > [!TIP]
 > **当前默认不变**：参数端 Z(P)，变量端 Z(log1p(Y))。不要把以上一组结果推广为所有模型/损失都最优；
 > 新训练的性能需要另行验证，旧结果文件、数据集和权重未被重写。
-

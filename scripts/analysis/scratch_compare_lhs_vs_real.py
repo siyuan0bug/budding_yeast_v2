@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append('budding_yeast_v2/data')
-import mutant_aware as ma
+from budding_yeast_v2.data.systems.budding import api as ma
 
 p_lhs = 'budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_lhs_test_metrics.csv'
 p_real = 'budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/triple_dynamic_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv'

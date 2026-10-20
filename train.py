@@ -15,6 +15,7 @@ else:
 
 import time
 import argparse
+import math
 import json
 import torch
 import numpy as np
@@ -50,6 +51,9 @@ class SimToRealVisualizerCallback(Callback):
         self.seed = seed
 
     def on_validation_epoch_end(self, trainer, pl_module):
+        if (self.plot_every_n_epochs <= 0 or trainer.sanity_checking
+                or not trainer.is_global_zero or not isinstance(trainer.logger, WandbLogger)):
+            return
         if (trainer.current_epoch + 1) % self.plot_every_n_epochs != 0:
             return
 
@@ -58,64 +62,75 @@ class SimToRealVisualizerCallback(Callback):
             return
 
         device = pl_module.device
+        was_training = pl_module.training
         pl_module.eval()
 
-        mean_y = dm.mean_y.to(device)
-        std_y = dm.std_y.to(device)
         log_dict = {'epoch': trainer.current_epoch + 1}
 
-        with torch.no_grad():
-            for key, (x, p, y, name, pat_label) in dm.fixed_samples_for_plot.items():
-                x, p, y = x.to(device), p.to(device), y.to(device)
-                pred = pl_module.forward_ic_time(x, p)
+        try:
+            with torch.no_grad():
+                for key, (x, p, y, name, pat_label) in dm.fixed_samples_for_plot.items():
+                    x, p, y = x.to(device), p.to(device), y.to(device)
+                    pred = pl_module.forward_ic_time(x, p)
 
-                pred_denorm = dm.denormalize_y(pred, device)
-                target_denorm = dm.denormalize_y(y, device)
+                    pred_denorm = dm.denormalize_y(pred, device)
+                    target_denorm = dm.denormalize_y(y, device)
 
-                metrics = calculate_metrics(pred_denorm.cpu(), target_denorm.cpu())
-                m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
+                    metrics = calculate_metrics(pred_denorm.cpu(), target_denorm.cpu())
+                    m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
 
-                fig, axes = plt.subplots(5, 8, figsize=(28, 16))
-                axes = axes.flatten()
+                    num_vars=pred_denorm.shape[1]
+                    cols=8 if num_vars>16 else 4
+                    rows=math.ceil(num_vars/cols)
+                    fig, axes = plt.subplots(rows, cols, figsize=(cols*3.5, rows*3.2))
+                    axes = axes.flatten()
 
-                for var_idx in range(39):
-                    ax = axes[var_idx]
-                    pred_np = pred_denorm[0, var_idx, :].cpu().numpy()
-                    target_np = target_denorm[0, var_idx, :].cpu().numpy()
+                    for var_idx in range(num_vars):
+                        ax = axes[var_idx]
+                        pred_np = pred_denorm[0, var_idx, :].cpu().numpy()
+                        target_np = target_denorm[0, var_idx, :].cpu().numpy()
 
-                    T_len = len(pred_np)
-                    t_max = getattr(dm, 't_max', 210)
-                    t = np.linspace(0, t_max, T_len)
+                        T_len = len(pred_np)
+                        t_max = getattr(dm, 't_max', 210)
+                        t = np.linspace(0, t_max, T_len)
 
-                    ax.plot(t, target_np, 'b-', label='Ground Truth', linewidth=2)
-                    ax.plot(t, pred_np, 'r--', label='Prediction', linewidth=2)
+                        ax.plot(t, target_np, 'b-', label='Ground Truth', linewidth=2)
+                        ax.plot(t, pred_np, 'r--', label='Prediction', linewidth=2)
 
-                    var_name = VARIABLE_NAMES[var_idx] if var_idx < len(VARIABLE_NAMES) else f"Var {var_idx}"
-                    ax.set_title(f'{var_idx}: {var_name}', fontweight='bold', fontsize=10)
-                    ax.set_xlabel('Time (min)')
-                    if var_idx == 0: ax.legend(fontsize=8)
-                    ax.grid(True, alpha=0.3)
+                        names=getattr(dm,'variable_names',VARIABLE_NAMES)
+                        var_name = names[var_idx] if var_idx < len(names) else f"Var {var_idx}"
+                        ax.set_title(f'{var_idx}: {var_name}', fontweight='bold', fontsize=10)
+                        ax.set_xlabel('Time (min)')
+                        if var_idx == 0: ax.legend(fontsize=8)
+                        ax.grid(True, alpha=0.3)
 
-                for i in range(39, len(axes)):
-                    axes[i].set_visible(False)
+                    for i in range(num_vars, len(axes)):
+                        axes[i].set_visible(False)
 
-                title_str = f"[{pat_label}] {name} (Seed: {self.seed} | Epoch {trainer.current_epoch + 1})\n{m_str}"
-                plt.suptitle(title_str, fontsize=22, fontweight='bold')
-                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                    label_info = getattr(dm, 'fixed_sample_label_metadata', {}).get(key, {})
+                    biology = label_info.get('biological_label', 'Unknown: Not recorded')
+                    group = label_info.get('pattern_group')
+                    label_text = f"{dm.system_id} | BIO: {biology} | Pattern: {pat_label}"
+                    if group is not None:
+                        label_text += f" | Group: {group}"
+                    title_str = f"[{label_text}] {name} (Seed: {self.seed} | Epoch {trainer.current_epoch + 1})\n{m_str}"
+                    plt.suptitle(title_str, fontsize=22, fontweight='bold')
+                    plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-                # key 格式: "synth_train/Pattern_A_0", "synth_val/Pattern_B_1", "real_mutants/Pattern_C_5"
-                # group = key 的第一段, 样本名 = key 的第二段
-                parts = key.split('/', 1)
-                group_name = parts[0]  # synth_train, synth_val, synth_test, real_mutants
-                sample_name = parts[1] if len(parts) > 1 else key
-                if isinstance(trainer.logger, WandbLogger):
-                    log_dict[f'{group_name}/{sample_name}'] = wandb.Image(fig)
+                    # key 格式: "synth_train/Pattern_A_0", "synth_val/Pattern_B_1", "real_mutants/Pattern_C_5"
+                    # group = key 的第一段, 样本名 = key 的第二段
+                    parts = key.split('/', 1)
+                    group_name = parts[0]  # synth_train, synth_val, synth_test, real_mutants
+                    sample_name = parts[1] if len(parts) > 1 else key
+                    if isinstance(trainer.logger, WandbLogger):
+                        log_dict[f'{group_name}/{sample_name}'] = wandb.Image(fig)
 
-                plt.close(fig)
+                    plt.close(fig)
 
-        if isinstance(trainer.logger, WandbLogger) and log_dict:
-            trainer.logger.experiment.log(log_dict)
-        pl_module.train()
+            if isinstance(trainer.logger, WandbLogger) and log_dict:
+                trainer.logger.experiment.log(log_dict)
+        finally:
+            pl_module.train(was_training)
 
 class EpochSummaryCallback(Callback):
     """每个 epoch 结束后用 print 输出训练摘要, 确保日志文件中可见 (不依赖 tqdm 终端渲染)."""
@@ -156,6 +171,7 @@ def main():
     parser.add_argument('--wavelet', type=str, default='haar')
     parser.add_argument('--loss_type', type=str, default='physics_informed')
     parser.add_argument('--dataset_name', type=str, required=True)
+    parser.add_argument('--system',choices=('auto','budding','fission'),default='auto')
     parser.add_argument('--adj_matrix_path', type=str, default=None)
     parser.add_argument('--graph_view', choices=['continuous', 'hybrid'], default='hybrid')
     parser.add_argument('--graph_load_policy', choices=['current', 'checkpoint'], default='current')
@@ -217,7 +233,7 @@ def main():
                         help='验证/测试的 batch size（不影响训练，设大加速评估，默认 256）')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--devices', type=int, default=1)
-    parser.add_argument('--project', type=str, default='budding_yeast_v2_mass')
+    parser.add_argument('--project', type=str, default=None, help='W&B project; default follows the biological system')
     parser.add_argument('--name', type=str, default=None)
     parser.add_argument('--no_wandb', action='store_true', default=False,
                         help='禁用 W&B 上传，仅本地日志')
@@ -348,7 +364,6 @@ def main():
     os.makedirs(actual_exp_dir, exist_ok=True)
 
     # 保存完整运行配置与元数据快照
-    save_metadata(actual_exp_dir, args, extra_info={"exp_dir": actual_exp_dir, "ckpt_dir": ckpt_dir})
 
     def build_fresh_model():
         """构造一个全新随机初始化的模型 (v2.3 al4pde 外层重训: 每轮冷启动)。"""
@@ -358,8 +373,9 @@ def main():
             graph_view=args.graph_view,
             graph_load_policy=args.graph_load_policy,
             wavelet=args.wavelet,
-            num_vars=39,
-            param_dim=141,
+            num_vars=datamodule.num_vars,
+            param_dim=datamodule.num_params,
+            system_id=datamodule.system_id,
             modes=args.modes,
             width=args.width,
             n_blocks=args.n_blocks,
@@ -390,10 +406,7 @@ def main():
             norm_type=args.norm_type,
         )
 
-    model = build_fresh_model()
-    with open(os.path.join(actual_exp_dir, 'graph_provenance.json'), 'w') as f:
-        json.dump(model.graph_report(), f, indent=2)
-
+    model_numpy_state=np.random.get_state()
     datamodule = YeastDataModule(
         dataset_path=os.path.join(args.data_dir, args.dataset_name),
         batch_size_synth=args.batch_size,
@@ -404,8 +417,31 @@ def main():
         fit_scope=args.normalization_fit_scope,
     )
 
+    datamodule.setup('fit')
+    if args.system!='auto' and args.system!=datamodule.system_id:
+        raise ValueError('--system contradicts the dataset biological system')
+    if datamodule.system_id=='fission' and args.al_strategy!='none':
+        raise ValueError('Fission training/physics/graphs are supported; AL strategies still require a Fission-specific oracle/pool policy. Use --al_strategy none')
+    data_numpy_state=np.random.get_state()
+    np.random.set_state(model_numpy_state)
+    try:
+        model = build_fresh_model()
+    finally:
+        np.random.set_state(data_numpy_state)
+    with open(os.path.join(actual_exp_dir, 'graph_provenance.json'), 'w') as f:
+        json.dump(model.graph_report(), f, indent=2)
+
+    from budding_yeast_v2.data.label_metadata import dataset_label_summary
+    args.system_id = datamodule.system_id
+    if args.project is None:
+        args.project = 'fission_yeast_v2' if datamodule.system_id == 'fission' else 'budding_yeast_v2_mass'
+    label_summary = dataset_label_summary(datamodule)
+    save_metadata(actual_exp_dir, args, extra_info={
+        'exp_dir': actual_exp_dir, 'ckpt_dir': ckpt_dir, 'dataset_labels': label_summary,
+    })
     # W&B Logger 结构化接入
     logger = setup_wandb_logger(args, exp_dir=actual_exp_dir, project=args.project)
+    logger.log_hyperparams({'system_id': datamodule.system_id, 'dataset_labels': label_summary})
 
     AL4PDE_STRATEGIES = ('al4pde_random', 'al4pde_uncertainty', 'al4pde_diversity',
                          'maal', 'al4pde_mass', 'al4pde_novelty', 'al4pde_residual',
@@ -463,7 +499,7 @@ def main():
                 max_epochs=args.max_epochs,
                 logger=logger,
                 callbacks=[lr_monitor, visualizer, EpochSummaryCallback(), curve_callback],
-                accelerator=args.device if args.device != 'cpu' else 'auto',
+                accelerator=args.device,
                 devices=args.devices,
                 gradient_clip_val=1.0,
                 precision="bf16-mixed",
@@ -533,7 +569,7 @@ def main():
 
         import shutil
         last_eval_dir = os.path.join(eval_base_dir, f"round_{NUM_AL_ROUNDS-1}_train{n_train}")
-        for item in ['global_metrics_denorm.json', 'graph_provenance.json', 'per_mutant_metrics.csv', 'per_synth_test_metrics.csv', 'real_mutants', 'synth_test']:
+        for item in ['global_metrics_denorm.json', 'graph_provenance.json', 'per_mutant_metrics.csv', 'per_synth_test_metrics.csv', 'per_mutant_label_groups.csv', 'per_synth_test_label_groups.csv', 'real_mutants', 'synth_test']:
             src = os.path.join(last_eval_dir, item)
             dst = os.path.join(eval_base_dir, item)
             if os.path.exists(src):
@@ -583,7 +619,7 @@ def main():
             max_epochs=args.max_epochs,
             logger=logger,
             callbacks=callbacks,
-            accelerator=args.device if args.device != 'cpu' else 'auto',
+            accelerator=args.device,
             devices=args.devices,
             gradient_clip_val=1.0,
             precision="bf16-mixed",

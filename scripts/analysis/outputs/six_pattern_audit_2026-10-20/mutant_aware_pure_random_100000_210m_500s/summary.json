@@ -1,0 +1,280 @@
+{
+  "version": "user_six_patterns_v1_2026-10-20",
+  "identity": {
+    "path": "/data/zsy/budding_yeast/mutant_aware_pure_random_100000_210m_500s.npz",
+    "size": 5854558523,
+    "mtime_ns": 1789631735738700350
+  },
+  "shape": [
+    100126,
+    39,
+    500
+  ],
+  "seconds": 189.23005816992372,
+  "real_metadata_disagreements": 0,
+  "real_name_duplicates": 0,
+  "time_grid_source": "legacy_filename_210min_500steps",
+  "split_seed": 42,
+  "counts": [
+    {
+      "population": "all",
+      "pattern_code": "P1",
+      "count": 6350,
+      "percent": 6.3420090685735975,
+      "total": 100126,
+      "critical_count": 273
+    },
+    {
+      "population": "all",
+      "pattern_code": "P2",
+      "count": 29171,
+      "percent": 29.134290793600066,
+      "total": 100126,
+      "critical_count": 2970
+    },
+    {
+      "population": "all",
+      "pattern_code": "P3",
+      "count": 16795,
+      "percent": 16.773864930187962,
+      "total": 100126,
+      "critical_count": 94
+    },
+    {
+      "population": "all",
+      "pattern_code": "P4",
+      "count": 9318,
+      "percent": 9.306274094640752,
+      "total": 100126,
+      "critical_count": 1900
+    },
+    {
+      "population": "all",
+      "pattern_code": "P5a",
+      "count": 30781,
+      "percent": 30.74226474641951,
+      "total": 100126,
+      "critical_count": 6991
+    },
+    {
+      "population": "all",
+      "pattern_code": "P5b",
+      "count": 7711,
+      "percent": 7.701296366578112,
+      "total": 100126,
+      "critical_count": 83
+    },
+    {
+      "population": "all",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 100126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P1",
+      "count": 21,
+      "percent": 16.666666666666668,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P2",
+      "count": 47,
+      "percent": 37.301587301587304,
+      "total": 126,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P3",
+      "count": 7,
+      "percent": 5.555555555555555,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P4",
+      "count": 5,
+      "percent": 3.9682539682539684,
+      "total": 126,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5a",
+      "count": 33,
+      "percent": 26.19047619047619,
+      "total": 126,
+      "critical_count": 1
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5b",
+      "count": 13,
+      "percent": 10.317460317460318,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P1",
+      "count": 6329,
+      "percent": 6.329,
+      "total": 100000,
+      "critical_count": 273
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P2",
+      "count": 29124,
+      "percent": 29.124,
+      "total": 100000,
+      "critical_count": 2967
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P3",
+      "count": 16788,
+      "percent": 16.788,
+      "total": 100000,
+      "critical_count": 94
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P4",
+      "count": 9313,
+      "percent": 9.313,
+      "total": 100000,
+      "critical_count": 1897
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5a",
+      "count": 30748,
+      "percent": 30.748,
+      "total": 100000,
+      "critical_count": 6990
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5b",
+      "count": 7698,
+      "percent": 7.698,
+      "total": 100000,
+      "critical_count": 83
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 100000,
+      "critical_count": 0
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P1",
+      "count": 5063,
+      "percent": 6.328908222705568,
+      "total": 79998,
+      "critical_count": 218
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P2",
+      "count": 23298,
+      "percent": 29.123228080702017,
+      "total": 79998,
+      "critical_count": 2367
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P3",
+      "count": 13430,
+      "percent": 16.78791969799245,
+      "total": 79998,
+      "critical_count": 84
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P4",
+      "count": 7452,
+      "percent": 9.31523288082202,
+      "total": 79998,
+      "critical_count": 1525
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P5a",
+      "count": 24591,
+      "percent": 30.7395184879622,
+      "total": 79998,
+      "critical_count": 5618
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P5b",
+      "count": 6164,
+      "percent": 7.705192629815746,
+      "total": 79998,
+      "critical_count": 67
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 79998,
+      "critical_count": 0
+    }
+  ],
+  "evaluation_csv": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv",
+  "diagnostics": {
+    "real": {
+      "old_pattern_mismatch": 0,
+      "p3_past_clb2_inconsistent": 0,
+      "p4_prose_inconsistent": 0,
+      "negative_below_minus_1e4": 0,
+      "pattern_changes_minus10pct": 0,
+      "pattern_changes_plus10pct": 3,
+      "critical_changes_minus10pct": 20,
+      "critical_changes_plus10pct": 3,
+      "hyper_clb2_any_v": 13,
+      "prose_gaps": 0,
+      "prose_overlaps": 22,
+      "critical_total": 7
+    },
+    "synthetic": {
+      "old_pattern_mismatch": 0,
+      "p3_past_clb2_inconsistent": 0,
+      "p4_prose_inconsistent": 1331,
+      "negative_below_minus_1e4": 0,
+      "pattern_changes_minus10pct": 524,
+      "pattern_changes_plus10pct": 365,
+      "critical_changes_minus10pct": 32746,
+      "critical_changes_plus10pct": 1720,
+      "hyper_clb2_any_v": 7748,
+      "prose_gaps": 1331,
+      "prose_overlaps": 14702,
+      "critical_total": 12304
+    }
+  },
+  "evaluation_identity": {
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/mutant_aware_pure_random_100000_210m_500s/biom_refiner_plus/hybrid_mse_rel_none/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/eval/per_mutant_metrics.csv",
+    "size": 17281,
+    "mtime_ns": 1790163234681098514
+  }
+}

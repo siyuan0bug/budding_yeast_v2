@@ -1,0 +1,275 @@
+{
+  "version": "user_six_patterns_v1_2026-10-20",
+  "identity": {
+    "path": "/data/zsy/budding_yeast/mutant_aware_100000_leaklevel_210m_500s.npz",
+    "size": 12367049907,
+    "mtime_ns": 1788756372381504413
+  },
+  "shape": [
+    100126,
+    39,
+    500
+  ],
+  "seconds": 359.91213921085,
+  "real_metadata_disagreements": 0,
+  "real_name_duplicates": 0,
+  "time_grid_source": "legacy_filename_210min_500steps",
+  "split_seed": 42,
+  "counts": [
+    {
+      "population": "all",
+      "pattern_code": "P1",
+      "count": 6342,
+      "percent": 6.33401913588878,
+      "total": 100126,
+      "critical_count": 542
+    },
+    {
+      "population": "all",
+      "pattern_code": "P2",
+      "count": 24408,
+      "percent": 24.377284621377065,
+      "total": 100126,
+      "critical_count": 2633
+    },
+    {
+      "population": "all",
+      "pattern_code": "P3",
+      "count": 24060,
+      "percent": 24.029722549587518,
+      "total": 100126,
+      "critical_count": 101
+    },
+    {
+      "population": "all",
+      "pattern_code": "P4",
+      "count": 11534,
+      "percent": 11.519485448335098,
+      "total": 100126,
+      "critical_count": 2329
+    },
+    {
+      "population": "all",
+      "pattern_code": "P5a",
+      "count": 26912,
+      "percent": 26.878133551724826,
+      "total": 100126,
+      "critical_count": 6164
+    },
+    {
+      "population": "all",
+      "pattern_code": "P5b",
+      "count": 6870,
+      "percent": 6.861354693086711,
+      "total": 100126,
+      "critical_count": 52
+    },
+    {
+      "population": "all",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 100126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P1",
+      "count": 21,
+      "percent": 16.666666666666668,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P2",
+      "count": 47,
+      "percent": 37.301587301587304,
+      "total": 126,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P3",
+      "count": 7,
+      "percent": 5.555555555555555,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P4",
+      "count": 5,
+      "percent": 3.9682539682539684,
+      "total": 126,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5a",
+      "count": 33,
+      "percent": 26.19047619047619,
+      "total": 126,
+      "critical_count": 1
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5b",
+      "count": 13,
+      "percent": 10.317460317460318,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 126,
+      "critical_count": 0
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P1",
+      "count": 6321,
+      "percent": 6.321,
+      "total": 100000,
+      "critical_count": 542
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P2",
+      "count": 24361,
+      "percent": 24.361,
+      "total": 100000,
+      "critical_count": 2630
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P3",
+      "count": 24053,
+      "percent": 24.053,
+      "total": 100000,
+      "critical_count": 101
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P4",
+      "count": 11529,
+      "percent": 11.529,
+      "total": 100000,
+      "critical_count": 2326
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5a",
+      "count": 26879,
+      "percent": 26.879,
+      "total": 100000,
+      "critical_count": 6163
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5b",
+      "count": 6857,
+      "percent": 6.857,
+      "total": 100000,
+      "critical_count": 52
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 100000,
+      "critical_count": 0
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P1",
+      "count": 5055,
+      "percent": 6.319065953297665,
+      "total": 79996,
+      "critical_count": 431
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P2",
+      "count": 19487,
+      "percent": 24.35996799839992,
+      "total": 79996,
+      "critical_count": 2111
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P3",
+      "count": 19188,
+      "percent": 23.9861993099655,
+      "total": 79996,
+      "critical_count": 77
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P4",
+      "count": 9267,
+      "percent": 11.584329216460823,
+      "total": 79996,
+      "critical_count": 1853
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P5a",
+      "count": 21474,
+      "percent": 26.843842192109605,
+      "total": 79996,
+      "critical_count": 4965
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "P5b",
+      "count": 5525,
+      "percent": 6.906595329766488,
+      "total": 79996,
+      "critical_count": 39
+    },
+    {
+      "population": "train_synth",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "percent": 0.0,
+      "total": 79996,
+      "critical_count": 0
+    }
+  ],
+  "evaluation_csv": null,
+  "diagnostics": {
+    "real": {
+      "old_pattern_mismatch": 0,
+      "p3_past_clb2_inconsistent": 0,
+      "p4_prose_inconsistent": 0,
+      "negative_below_minus_1e4": 0,
+      "pattern_changes_minus10pct": 0,
+      "pattern_changes_plus10pct": 3,
+      "critical_changes_minus10pct": 20,
+      "critical_changes_plus10pct": 3,
+      "hyper_clb2_any_v": 13,
+      "prose_gaps": 0,
+      "prose_overlaps": 22,
+      "critical_total": 7
+    },
+    "synthetic": {
+      "old_pattern_mismatch": 0,
+      "p3_past_clb2_inconsistent": 1,
+      "p4_prose_inconsistent": 1575,
+      "negative_below_minus_1e4": 177,
+      "pattern_changes_minus10pct": 573,
+      "pattern_changes_plus10pct": 462,
+      "critical_changes_minus10pct": 44297,
+      "critical_changes_plus10pct": 1437,
+      "hyper_clb2_any_v": 7026,
+      "prose_gaps": 1576,
+      "prose_overlaps": 16345,
+      "critical_total": 11814
+    }
+  }
+}

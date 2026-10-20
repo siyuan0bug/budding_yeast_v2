@@ -1,0 +1,100 @@
+{
+  "identity": {
+    "path": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/experiments/al_pure_random_1m/biom_refiner_plus/hybrid_mse_rel_al4pde_random/w192_m24_b256_ep100_lr8.8e-4_wm8/seed_42/datasets/al_iter2_train33733.npz",
+    "size": 1976403648,
+    "mtime_ns": 1790317379081613706
+  },
+  "counts": [
+    {
+      "population": "real",
+      "pattern_code": "P1",
+      "count": 21,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P2",
+      "count": 47,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P3",
+      "count": 7,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "P4",
+      "count": 5,
+      "critical_count": 3
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5a",
+      "count": 33,
+      "critical_count": 1
+    },
+    {
+      "population": "real",
+      "pattern_code": "P5b",
+      "count": 13,
+      "critical_count": 0
+    },
+    {
+      "population": "real",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "critical_count": 0
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P1",
+      "count": 1840,
+      "critical_count": 124
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P2",
+      "count": 8270,
+      "critical_count": 1130
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P3",
+      "count": 6075,
+      "critical_count": 46
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P4",
+      "count": 3384,
+      "critical_count": 666
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5a",
+      "count": 11186,
+      "critical_count": 2597
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "P5b",
+      "count": 2978,
+      "critical_count": 39
+    },
+    {
+      "population": "synthetic",
+      "pattern_code": "INVALID",
+      "count": 0,
+      "critical_count": 0
+    }
+  ],
+  "n_real": 126,
+  "n_synthetic": 33733,
+  "old_pattern_mismatch": 0,
+  "real_exact_canonical": 126,
+  "negative_below_minus_1e_minus4": 266,
+  "duplicate_synthetic_names": 0,
+  "seconds": 28.537689161021262
+}

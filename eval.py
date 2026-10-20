@@ -24,7 +24,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
-from budding_yeast_v2.data.mass_dataset_generator import get_default_params, mutant_rules
+from budding_yeast_v2.data.systems.budding.api import get_default_params, mutant_rules
 from budding_yeast_v2.utils.metrics import calculate_metrics
 from budding_yeast_v2.data.preprocessing_contract import resolve_checkpoint_norm, resolve_checkpoint_fit_scope
 
@@ -43,8 +43,9 @@ _DEFAULTS_DICT.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0
 PARAM_KEYS = sorted([k for k in _DEFAULTS_DICT.keys() if k != 'is_mutant_104'])
 _DEFAULT_PARAM_VEC = np.array([_DEFAULTS_DICT[k] for k in PARAM_KEYS])
 
-def get_real_mutations_str(mutant_name):
-    rules = mutant_rules.get(mutant_name, {})
+def get_real_mutations_str(mutant_name,system_id='budding'):
+    from budding_yeast_v2.data.systems.registry import real_mutation_rules
+    rules = real_mutation_rules(system_id).get(mutant_name, {})
     if not rules:
         return "WT (Default)"
     return ", ".join(f"{k}={v:.4g}" for k, v in rules.items())
@@ -112,7 +113,8 @@ def load_model_from_checkpoint(ckpt_path, device='cpu', *, graph_load_policy='cu
 def _render_and_save_plot(task):
     """独立的多进程画图函数，充分利用多核 CPU"""
     try:
-        pred, target, title, save_path, rows, cols, t_max = task
+        pred, target, title, save_path, rows, cols, t_max = task[:7]
+        names=task[7] if len(task)>7 else VARIABLE_NAMES
         fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
         axes = axes.flatten()
         t = np.linspace(0, t_max, pred.shape[-1])
@@ -122,7 +124,7 @@ def _render_and_save_plot(task):
             ax.plot(t, pred[i], 'r--', label='Pred', linewidth=1.5)
             ax.set_xlabel('Time (min)', fontsize=8)
             ax.set_ylabel('Concentration', fontsize=8)
-            var_name = VARIABLE_NAMES[i] if i < len(VARIABLE_NAMES) else f"Var {i}"
+            var_name = names[i] if i < len(names) else f"Var {i}"
             ax.set_title(f'{i}: {var_name}', fontweight='bold', fontsize=9)
             ax.grid(True, alpha=0.3)
             if i == 0:
@@ -140,6 +142,16 @@ def _render_and_save_plot(task):
         except Exception:
             pass
 
+def _metric_summary(pred,target,system_id):
+    count=len(pred)
+    metrics=calculate_metrics(pred,target) if count else None
+    result={'all_variables':metrics,'count':count}
+    result['all_16_vars' if system_id=='fission' else 'all_39_vars']=metrics
+    if system_id=='budding':
+        result['core_9_vars']=calculate_metrics(pred[:,CORE_9_INDICES,:],target[:,CORE_9_INDICES,:]) if count else None
+    return result
+
+
 def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, save_dir, 
                      sub_dir, batch_size=512, max_plots=None, max_workers=16):
     """
@@ -151,7 +163,11 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
     plot_dir = os.path.join(save_dir, sub_dir)
     os.makedirs(plot_dir, exist_ok=True)
     
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    system_id=getattr(dm,'system_id','budding')
+    if len(dataset)==0:
+        empty=torch.empty(0,dm.num_vars,dm.T_STEPS)
+        return _metric_summary(empty,empty,system_id),[],[empty],[empty],[]
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=getattr(dm,'num_workers',4), pin_memory=device.type=='cuda')
     
     all_preds_denorm_list = []
     all_targets_denorm_list = []
@@ -203,26 +219,52 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
             title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
             
-            if '_LHS_' in m_name or '_SYNTH_' in m_name:
+            if system_id=='budding' and ('_LHS_' in m_name or '_SYNTH_' in m_name):
                 mother_name, perturb_str = get_synth_perturbation_str(m_name, p_real_i)
                 title_base += f"\nMother: {mother_name} | Perturbations (mother_val, ratio):\n{perturb_str}"
-            elif str(m_name).startswith('MASS_'):
+            elif global_idx not in set(dm._test_idx_real):
                 title_base += f"\nMASS synthetic sample (mutant-aware stratified sampling)"
             else:
-                mut_str = get_real_mutations_str(m_name)
+                mut_str = get_real_mutations_str(m_name,system_id)
                 title_base += f"\nMutations: {mut_str}"
 
             save_plot_path = os.path.join(plot_dir, f"{m_name}.png")
-            plot_tasks.append((pred_i.numpy(), target_i.numpy(), f"{title_base}\nAll 39 Variables", save_plot_path, 5, 8, dm.t_max))
+            cols=4 if system_id=='fission' else 8
+            rows=(pred_i.shape[0]+cols-1)//cols
+            names=getattr(dm,'variable_names',VARIABLE_NAMES)
+            plot_tasks.append((pred_i.numpy(), target_i.numpy(), f"{title_base}\nAll {pred_i.shape[0]} Variables", save_plot_path, rows, cols, dm.t_max, names))
 
     # 3. 全局汇总指标
-    summary = {
-        "all_39_vars": calculate_metrics(all_preds, all_targets),
-        "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
-        "count": N
-    }
+    summary = _metric_summary(all_preds,all_targets,system_id)
 
     return summary, csv_rows, [all_preds], [all_targets], plot_tasks
+
+def write_supplementary_label_metrics(rows, indices, dm, path):
+    """Join observed labels to metrics; preserve the historical metric CSV contract."""
+    from budding_yeast_v2.data.label_metadata import UNKNOWN_BIOLOGY_LABEL
+    fields = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation',
+              'Biological_Label', 'Biological_Label_Available', 'Pattern_Group',
+              'Pattern_Group_Label', 'Pattern_Group_Version', 'Observed_Divisions']
+    if len(rows) != len(indices):
+        raise ValueError('Evaluation labels and metric rows do not agree')
+    biology = getattr(dm, 'biological_labels', None)
+    codes = getattr(dm, 'pattern_group_codes', None)
+    labels = getattr(dm, 'pattern_group_labels', None)
+    divisions = getattr(dm, 'observed_division_counts', None)
+    with open(path, 'w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row, idx in zip(rows, indices):
+            if str(row['Mutant']) != str(dm._mutant_names[idx]):
+                raise ValueError('Evaluation mutant order disagrees with label indices')
+            bio = str(biology[idx]) if biology is not None else UNKNOWN_BIOLOGY_LABEL
+            writer.writerow(dict(row, Biological_Label=bio,
+                Biological_Label_Available=bio != UNKNOWN_BIOLOGY_LABEL,
+                Pattern_Group=str(codes[idx]) if codes is not None else '',
+                Pattern_Group_Label=str(labels[idx]) if labels is not None else '',
+                Pattern_Group_Version=getattr(dm, 'pattern_group_version', None) or '',
+                Observed_Divisions=int(divisions[idx]) if divisions is not None else ''))
+
 
 def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42, batch_size=512, 
                                  max_plots=None, max_real_plots=None, synth_test_plots=50, plot_workers=16):
@@ -276,13 +318,11 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
     all_preds = torch.cat(real_preds + synth_preds, dim=0)
     all_targets = torch.cat(real_targets + synth_targets, dim=0)
 
-    all_test_summary = {
-        "all_39_vars": calculate_metrics(all_preds, all_targets),
-        "core_9_vars": calculate_metrics(all_preds[:, CORE_9_INDICES, :], all_targets[:, CORE_9_INDICES, :]),
-        "count": len(all_preds)
-    }
+    all_test_summary = _metric_summary(all_preds,all_targets,getattr(dm,'system_id','budding'))
 
     global_metrics = {
+        'system_id':getattr(dm,'system_id','budding'),
+        'variable_names':list(getattr(dm,'variable_names',VARIABLE_NAMES)),
         "all_test": all_test_summary,
         "real_mutants": real_summary,
         "synth_test": synth_summary,
@@ -295,9 +335,10 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
         with open(os.path.join(save_dir, 'graph_provenance.json'), 'w') as f:
             json.dump(model.graph_report(), f, indent=2)
     print(f"📊 Global metrics JSON saved to: {json_path}")
-    print(f"   all_test:     n={all_test_summary['count']}, MAE={all_test_summary['all_39_vars']['MAE']:.4f}, Corr={all_test_summary['all_39_vars']['Correlation']:.4f}")
-    print(f"   real_mutants: n={real_summary['count']}, MAE={real_summary['all_39_vars']['MAE']:.4f}, Corr={real_summary['all_39_vars']['Correlation']:.4f}")
-    print(f"   synth_test:   n={synth_summary['count']}, MAE={synth_summary['all_39_vars']['MAE']:.4f}, Corr={synth_summary['all_39_vars']['Correlation']:.4f}")
+    for name,summary in (('all_test',all_test_summary),('real_mutants',real_summary),('synth_test',synth_summary)):
+        metrics=summary.get('all_variables',summary.get('all_39_vars'))
+        detail=f"MAE={metrics['MAE']:.4f}, Corr={metrics['Correlation']:.4f}" if metrics else 'empty split'
+        print(f"   {name}: n={summary['count']}, {detail}")
 
     # ======== 4. 输出 CSV 记录 (立即落盘) ========
     def write_csv(rows, path):
@@ -311,6 +352,10 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
 
     write_csv(real_csv, os.path.join(save_dir, 'per_mutant_metrics.csv'))
     write_csv(synth_csv, os.path.join(save_dir, 'per_synth_test_metrics.csv'))
+    write_supplementary_label_metrics(real_csv, dm._test_idx_real, dm,
+        os.path.join(save_dir, 'per_mutant_label_groups.csv'))
+    write_supplementary_label_metrics(synth_csv, dm._test_idx_synth, dm,
+        os.path.join(save_dir, 'per_synth_test_label_groups.csv'))
 
     # ======== 5. 多进程并发画图 (若有请求) ========
     all_plot_tasks = real_plot_tasks + synth_plot_tasks
@@ -409,6 +454,8 @@ def main():
         fit_scope=hp['normalization_fit_scope'],
     )
     dm.setup('test')
+    if dm.system_id!=model.system_id:
+        raise ValueError('Checkpoint biological system does not match the evaluation dataset')
 
     max_real_plots = None if args.real_mutant_plots < 0 else args.real_mutant_plots
     evaluate_model_on_datamodule(

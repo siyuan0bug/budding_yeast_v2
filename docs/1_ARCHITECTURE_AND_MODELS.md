@@ -1,5 +1,14 @@
 # 1. 出芽酵母神经算子代理模型系统架构与 70+ 模型全景 (Architecture & Model Zoo)
 
+> **2026-10-21 Fission监控复核**：原BIO/pattern保持不变；无pattern训练目标用-1并跳过分类交叉熵，
+> W&B按Fission自身BIO/pattern选样，显示16变量/300分钟，不套用Budding的监控编号或六分类。
+> 系统标签、checkpoint/评测及HPO兼容边界见 [Fission扩展](FISSION_EXTENSION.md)。
+
+
+> **2026-10-20 Fission扩展**：共享基线和通用图模型可使用16变量/58参数，训练、调参、checkpoint、
+> 评测按系统选择维度与图。8种架构已做前向/反向验证；Budding专用生物结构仍明确限制。
+> 模型范围、命令与验证边界见 [Fission扩展](FISSION_EXTENSION.md)。
+
 > **2026-10-19 运行链路修复**：通用基线构造显式映射 width→d_model、n_blocks→e_layers/n_layers 等，
 > 不再依赖会吞参数的 `**kwargs`；旧 checkpoint 保留旧实际架构。Refiner/HANO 自回归训练与推断
 > 走同一滚动轨迹，并保留粗预测/事件辅助监督。重复命名的基线架构、软注意力、本系统专属假设未重写。

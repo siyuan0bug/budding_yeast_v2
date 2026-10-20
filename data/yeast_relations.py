@@ -85,12 +85,12 @@ class YeastRelations:
 
 
 @lru_cache(maxsize=4)
-def _build(graph, rules):
+def _build(graph, rules, rate_anchors=RATE_ANCHORS, parameter_anchors=PARAMETER_ANCHORS):
     records = []
     for term in graph.terms:
         names, parameters = set(term.names), set(term.parameters)
-        matches = [(i, tuple(sorted((names & set(RATE_ANCHORS[i])) |
-                                   (parameters & set(PARAMETER_ANCHORS[i]))))) for i in range(6)]
+        matches = [(i, tuple(sorted((names & set(rate_anchors[i])) |
+                                   (parameters & set(parameter_anchors[i]))))) for i in range(6)]
         matches = [(i, anchors) for i, anchors in matches if anchors]
         # A product involving two different mechanisms stays untyped. Nothing
         # is assigned on the basis of an arbitrary priority between labels.
@@ -104,6 +104,14 @@ def _build(graph, rules):
     return YeastRelations(graph, tuple(records), digest)
 
 
-def build_yeast_relations(source_path=None):
+def build_yeast_relations(source_path=None, *, system_id='budding'):
+    if system_id=='fission':
+        rates=((),(),(),(),('k2','k2c','k4'),('kWee','kC25'))
+        parameters=(('kJ','kJR'),('kp','ki'),('kpp_','kpp','kiR'),('k1','k3','k5','kas','mu','K'),
+                    ('k6_','k6','kad'),('kste9r_','kste9r','kste9','kMR_','kMR','kM','kWR_','kWR','kW',
+                                      'k25','k25R_','k25R','kaa_','kaa','kai','kS'))
+        rules=json.dumps(('fission_v1',RELATION_NAMES,rates,parameters),separators=(',',':'))
+        return _build(build_yeast_graph(source_path,system_id=system_id),rules,rates,parameters)
+    if system_id!='budding':raise ValueError(f'Unknown biological system: {system_id}')
     rules = json.dumps((RULE_VERSION, RELATION_NAMES, RATE_ANCHORS, PARAMETER_ANCHORS), separators=(',', ':'))
     return _build(build_yeast_graph(source_path), rules)
