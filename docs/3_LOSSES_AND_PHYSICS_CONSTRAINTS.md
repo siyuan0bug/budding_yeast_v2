@@ -178,3 +178,16 @@ python train.py \
   --lambda_pattern 0.1 \
   --lambda_arrest 0.05
 ```
+
+
+## 2026-10-21：标准 SC-FNO 灵敏度损失
+
+注册名 `sc_sensitivity`，类 `SensitivityLoss`：
+`L = MSE(Y_pred,Y) + sensitivity_weight * mean_k MSE(dY_pred/dP_k, S_k)`。
+这里 Y、P 及 S 必须处于同一归一化坐标，且求参数偏导时固定全部初值。
+模型仍是标准 FNO，不增加参数调制。JVP 对每个选定参数计算完整轨迹方向导数，并保留网络参数的高阶梯度；
+权重必须为正且有限。验证/测试只计算轨迹 MSE，不使用测试灵敏度。没有参考监督时训练报错。
+
+CLI：`--model sc_fno --loss_type sc_sensitivity --sensitivity_path <reference.npz> --sensitivity_weight 1.0 --al_strategy none`。
+sidecar 的形状、数据哈希、归一化指纹及事件边界要求见 [标准基线说明](BASELINE_SELECTION_AUDIT.md)。
+人工解析函数测试验证了 Jacobian 数值和训练参数梯度；SC-FNO 骨干与相同权重的 FNO 输出完全一致。

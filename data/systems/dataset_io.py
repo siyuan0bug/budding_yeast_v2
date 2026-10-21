@@ -20,6 +20,28 @@ def write_dataset(path, spec, results, config, report, *, parameter_only=False, 
         raise ValueError('No valid samples; refusing an empty/misleading dataset')
     if not parameter_only and any(r.status!='success' or r.trajectory is None for r in results):
         raise ValueError('Only successful simulation status may enter a trajectory dataset')
+    from .sampling_policy import VERSION, valid_candidate
+    if report.get('sampling_policy') == VERSION:
+        for row in results:
+            checked = valid_candidate(row.candidate, spec.system_id)
+            if checked is None:
+                raise ValueError('Synthetic result violates exact L1/L2/L3 policy')
+            row.candidate = checked
+    if report.get('sampling_policy') == VERSION:
+        from .sampling_policy import ENVIRONMENT_MODULES
+        if spec.system_id == 'budding':
+            from .budding.catalog import GROUP_BY_NAME
+            catalog = GROUP_BY_NAME
+        else:
+            from .fission.catalog import SAMPLING_MODULES
+            catalog = SAMPLING_MODULES
+        expected = {(gene,mode) for gene,group in catalog.items() if gene not in ENVIRONMENT_MODULES for mode in group['modes']}
+        covered = {(gene,mode) for row in results if not row.candidate.is_real and row.candidate.level==1
+                   for gene,mode in row.candidate.metadata['pairs'] if (gene,mode) in expected}
+        from collections import Counter
+        histogram = Counter(int(row.candidate.metadata['module_count']) for row in results if not row.candidate.is_real)
+        report = dict(report,saved_module_count_histogram=dict(histogram),requested_level_ratios=list(config.level_ratios),l1_mode_cells_total=len(expected),l1_mode_cells_covered=len(covered),
+                      l1_missing_mode_cells=sorted(f'{gene}[{mode}]' for gene,mode in expected-covered))
     n=len(results)
     if len({r.candidate.sample_id for r in results})!=n:
         raise ValueError('Duplicate sample_id in dataset')
@@ -48,6 +70,10 @@ def write_dataset(path, spec, results, config, report, *, parameter_only=False, 
                  sampling_seed=np.int64(config.seed),sampling_rng_contract=np.array(report['rng_contract']),
                  generation_config=np.array(json.dumps(asdict(config),ensure_ascii=False)),
                  generation_report=np.array(json.dumps(report,ensure_ascii=False)))
+    if report.get('sampling_policy') == VERSION:
+        archive.update(sampling_policy=np.array(VERSION),
+            requested_levels=np.array([r.candidate.level for r in results],dtype=np.int16),
+            module_counts=np.array([-1 if r.candidate.is_real else r.candidate.metadata['module_count'] for r in results],dtype=np.int16))
     if parameter_only:
         archive['p_mean']=params.mean(axis=0)
         std=params.std(axis=0)

@@ -1,5 +1,12 @@
 # 数据集全景、生物图先验与归一化规范 (Datasets, Biological Graphs & Normalization)
 
+> **2026-10-22 Budding 合成突变目录精简**：删除 TEM1/CDC15 的 DAmP，以及 CDC5_Proxy、SCC1、CDC28、SBF_MBF、PPX、Mcm1、ORI_BUD_SPN 七个合成模块。当前为 19 个基因模块 + MDT 环境模块，共 65 种模式组合；拓扑、motif、WT-Blind、救援与 AL 候选审计同步更新。保留组合的两套赋值/分布保持一致，39 变量、141 参数、ODE、初值和 126 real 不变；Fission 不变。含已删除突变的旧候选池或派生源会拒绝继续生成，需重新生成；旧 NPZ 不改写，仍可用于原有训练/分析。
+
+
+> **2026-10-22 当前采样已更新**：Budding/Fission 静态配额 10/40/50、AL 候选池 5/40/55，仅一至三模块。下文较早的四/五层配额属于历史描述；新规则、输出字段和失败处理见 [三模块采样说明](EXACT_THREE_MODULE_SAMPLING.md)。
+
+> **Fission AL 输入池**：新增逐候选原生预热池，包含参数/初值和完整 overrides，不含完整目标轨迹及标签；与静态轨迹数据集分开使用。初值预热仍有真实 ODE 成本，生成入口与单位契约见 [Fission AL](FISSION_ACTIVE_LEARNING.md)。
+
 > **2026-10-21 系统目录收口完成**：新框架集中在 `data/systems/`，`data/generate.py` 为转发入口。
 > 已修复增量去重、混合指标格式seed汇总、旧导入/状态转发和Fission采样审计；原生物规则与标签保持。
 > 当前生成命令与文件职责见 [速查](DATA_GENERATION_QUICKSTART.md) 和 [整理说明](DATA_GENERATION_REFACTOR_2026-10-20.md)。
@@ -436,3 +443,32 @@ asinh_scale 的 s_c 使用固定 train 索引顺序的前最多 20,000 条，计
 > [!TIP]
 > **当前默认不变**：参数端 Z(P)，变量端 Z(log1p(Y))。不要把以上一组结果推广为所有模型/损失都最优；
 > 新训练的性能需要另行验证，旧结果文件、数据集和权重未被重写。
+
+
+## 2026-10-21：SC-FNO 参考灵敏度 sidecar
+
+`YeastDataModule(sensitivity_path=...)` 仅为训练集附加固定初值的参数敏感度；验证/测试接口不变。
+参考数据 shape 为 `(N,V,T,K)`，需与源数据行序、轨迹/参数哈希和当前归一化统计量指纹一致；
+索引为唯一有效整数，训练参考必须有限。此路径没有自动生成参考，不将缺失数据补为零。
+规范化偏导单位、事件边界与命令见 [标准基线清单](BASELINE_SELECTION_AUDIT.md)。
+
+
+## Real benchmark 的模块阶数统计（2026-10-21）
+
+基于当前 `data/systems/{budding,fission}/real_mutants.py` 的全部评测条目，以命名模型模块计数，不以 override 参数键个数计数。同模块的多种突变只计一次，碳源背景不加模块数；不同条件/同参数身份仍分别保留为评测行。Budding 的 CLN1/2、CLB1/2、CLB5/6 分别合并为 CLN2、CLB2、CLB5；TAB6-1 计 NET1，APC 计 APC_Core。Fission 的 cdc13dbD 按命名 Cdc13 模块计 1，虽然实现与 Ste9 KO 共享参数足迹。模块的生物命名与参数足迹不是唯一的一一对应。
+
+| 模块数 | Budding 数量（126） | 占比 | Fission 数量（20） | 占比 |
+|---|---:|---:|---:|---:|
+| 0 / WT 背景 | 3 | 2.38% | 1 | 5.00% |
+| 1 | 42 | 33.33% | 9 | 45.00% |
+| 2 | 58 | 46.03% | 7 | 35.00% |
+| 3 | 22 | 17.46% | 3 | 15.00% |
+| 4 | 1 | 0.79% | 0 | 0.00% |
+
+排除 WT 后，Budding 123 条为 **34.15% / 47.15% / 17.89% / 0.81%**；Fission 19 条为 **47.37% / 36.84% / 15.79%**。Budding 唯一四模块是 #42（SIC1、CDC6、CDH1、CDC20）；#15 是 CLN3、BCK2、CLN2 三模块。同一 CLB2 的 GAL 表达与 db 突变计一个模块。#104 包含 ODE 在 t≥180 时启用的 SIC1 诱导，不能只扫描静态参数向量判断模块数。
+
+当前 `budding_pool` 起始 L1–L4 配额为 **5/25/40/30**，`budding_random` 为 **25/25/25/25**，两者起始选择 k=level，冲突处理可能降低最终模块数。MASS 类型的 L3/L4 为 3–5/4–6 个模块，与前两者不能直接按同一精确阶数解释。`fission_random` 及 Fission AL 输入池为 **45/35/20**，其中采样 Growth 是环境模块，不能机械等同于一个生物基因。
+
+本次仅统计，未修改配额。若以该 benchmark 为覆盖目标，优先评估提高 Budding 池中一/二模块份额的对照：例如精确起始阶数配额 **35/45/18/2**；Fission 可对照 **50/35/15**。这是待验证配置，不是最优分配结论。最终应按冲突救援与仿真过滤后的有效模块数审计，并检查 badcase 邻域覆盖和误差；benchmark 的经验结构不等同于自然群体频率，依它调采样应明确为 benchmark-informed。
+
+复现：`python scripts/analysis/audit_real_mutant_module_counts.py --output-dir scratch/probes/real_module_counts_2026-10-21`。JSON 汇总、146 条逐株 CSV 与完整 recipe 配额表均保存在该目录。当前默认 recipe 不代表已有 NPZ 的实际配额，旧文件和历史实验没有被重写。

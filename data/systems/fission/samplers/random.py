@@ -5,7 +5,7 @@ from ..distributions import _strength
 
 MODE_FREQ = 'class'        # 由 --mode_freq 覆盖 (class = 配额; flat = 均匀)
 
-_L1_GRID = [(m, mo) for m in SAMPLING_MODULES for mo in SAMPLING_MODULES[m]['modes']]
+_L1_GRID = [(m, mo) for m in SAMPLING_MODULES if m != 'Growth' for mo in SAMPLING_MODULES[m]['modes']]
 
 _L1_IDX = {'i': 0}
 
@@ -32,8 +32,12 @@ def sample_random_mutant(level, rng):
         pairs = [(m, mode)]
     else:
         ki = level                                # L2 -> 2, L3 -> 3
-        mods = rng.choice(list(SAMPLING_MODULES.keys()), size=ki, replace=False)
+        mods = rng.choice([m for m in SAMPLING_MODULES if m != 'Growth'], size=ki, replace=False)
         pairs = [(str(m), _sample_mode(str(m))) for m in mods]
+    # Preserve the former marginal probability of Growth at each level while
+    # sampling it separately from the genetic-module quota.
+    if rng.random() < level / len(SAMPLING_MODULES):
+        pairs.append(('Growth', 'scale'))
     ovr, parts = {}, []
     for m, mode in pairs:
         for key in SAMPLING_MODULES[m]['params']:

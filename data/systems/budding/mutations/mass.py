@@ -1,11 +1,13 @@
 """mass synthetic mutation assignment, independent of the canonical biological engine."""
 import numpy as np
+from ..catalog import require_mutation
 
 def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
     """
     Explicit, dedicated parameter modification engine per (Gene, Mode) pair
     matching Section 7 of Mutant-Aware Sampling Scheme v1.
     """
+    require_mutation(g_name, m_chosen)
     rng = np.random if rng is None else rng
     if m_chosen == 'GAL-OE':
         if g_name == 'CLN2':
@@ -46,9 +48,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
         elif g_name == 'CDC15':
             p_mut['Cdc15T'] = alpha
             ovr['Cdc15T'] = p_mut['Cdc15T']
-        elif g_name in ['PPX', 'CDC5', 'CDC5_Proxy']:
-            p_mut['ksppx'] = alpha
-            ovr['ksppx'] = p_mut['ksppx']
         elif g_name == 'PDS1':
             p_mut['kspdsp'] = alpha
             ovr['kspdsp'] = p_mut['kspdsp']
@@ -96,17 +95,9 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
             ovr['ks14'] = p_wt['ks14'] * alpha
         elif g_name == 'NET1':
             ovr['ksnet'] = p_wt['ksnet'] * alpha
-        elif g_name == 'TEM1':
-            ovr['Tem1T'] = p_wt['Tem1T'] * alpha
-        elif g_name == 'CDC15':
-            ovr['Cdc15T'] = p_wt['Cdc15T'] * alpha
         elif g_name == 'CLB2':
             ovr['ksb2p'] = p_wt['ksb2p'] * alpha
             ovr['ksb2pp'] = p_wt['ksb2pp'] * alpha
-        elif g_name == 'CDC28':
-            cdk_eps = ['ec1k2', 'ec1n2', 'ec1b5', 'ec1b2', 'ec1n3', 'ef6k2', 'ef6n2', 'ef6b5', 'ef6b2', 'ef6n3', 'eicdhn2', 'eicdhn3', 'eicdhb5', 'eicdhb2', 'esbfn2', 'esbfn3', 'esbfb5', 'eorib5', 'eorib2', 'ebudn2', 'ebudn3', 'ebudb5']
-            for ep in cdk_eps:
-                ovr[ep] = p_wt[ep] * alpha
     elif m_chosen == 'ts':
         if g_name == 'CLN2':
             ovr['ksn2p'] = p_wt['ksn2p'] * alpha
@@ -129,8 +120,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
         elif g_name == 'NET1':
             ovr['kasrent'] = p_wt['kasrent'] * alpha
             ovr['kasrentp'] = p_wt['kasrentp'] * alpha
-        elif g_name in ['PPX', 'CDC5_Proxy']:
-            ovr['kppnetpp'] = 0.05
         elif g_name == 'CDC15':
             ovr['kkpnetpp'] = 0.0
         elif g_name == 'TEM1':
@@ -145,12 +134,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
             ovr['kscdh'] = 0.0
             ovr['init_CDH1T'] = 0.0
             ovr['init_CDH1'] = 0.0
-        elif g_name == 'Mcm1':
-            ovr['kamcm'] = 0.13
-        elif g_name == 'CDC28':
-            cdk_eps = ['ec1k2', 'ec1n2', 'ec1b5', 'ec1b2', 'ec1n3', 'ef6k2', 'ef6n2', 'ef6b5', 'ef6b2', 'ef6n3', 'eicdhn2', 'eicdhn3', 'eicdhb5', 'eicdhb2', 'esbfn2', 'esbfn3', 'esbfb5', 'eorib5', 'eorib2', 'ebudn2', 'ebudn3', 'ebudb5']
-            for ep in cdk_eps:
-                ovr[ep] = p_wt[ep] * alpha
     elif m_chosen == 'db':
         if g_name == 'CLB2':
             ovr['kdb2P'] = 0.0
@@ -162,8 +145,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
             ovr['kd3pdspp'] = 0.0
         elif g_name == 'SIC1':
             ovr['kd3c1'] = 0.0
-        elif g_name in ['PPX', 'CDC5_Proxy']:
-            ovr['kdppxpp'] = 0.0
     elif m_chosen == 'KO':
         if g_name == 'CLN2':
             ovr['ksn2pp'] = 0.0
@@ -202,35 +183,15 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
             ovr['Cdc15T'] = 0.0
             ovr['kkpnetpp'] = 0.0
             ovr['init_Cdc15'] = 0.0
-        elif g_name in ['PPX', 'CDC5_Proxy']:
-            ovr['ksppx'] = 0.0
         elif g_name == 'PDS1':
             ovr['ks1pdspp'] = 0.0
             ovr['ks2pdspp'] = 0.0
-        elif g_name == 'SBF_MBF':
-            ovr['kasbf'] = 0.0
-            ovr['ksn2pp'] = 0.0
-            ovr['ksb5pp'] = 0.0
-        elif g_name == 'Mcm1':
-            ovr['kamcm'] = 0.0
-        elif g_name == 'ORI_BUD_SPN':
-            ovr['ksori'] = 0.0
-            ovr['ksbud'] = 0.0
-            ovr['ksspn'] = 0.0
-        elif g_name == 'CDC28':
-            cdk_eps = ['ec1k2', 'ec1n2', 'ec1b5', 'ec1b2', 'ec1n3', 'ef6k2', 'ef6n2', 'ef6b5', 'ef6b2', 'ef6n3', 'eicdhn2', 'eicdhn3', 'eicdhb5', 'eicdhb2', 'esbfn2', 'esbfn3', 'esbfb5', 'eorib5', 'eorib2', 'ebudn2', 'ebudn3', 'ebudb5']
-            for ep in cdk_eps:
-                ovr[ep] = 0.0
     elif m_chosen == 'CA':
         if g_name == 'CDH1':
             ovr['kicdhpp'] = 0.0
             ovr['kscdh'] = 0.03
         elif g_name == 'CLB2':
             ovr['kdib2'] = 0.0
-        elif g_name == 'SBF_MBF':
-            ovr['is_sbf_ca'] = 1
-            ovr['kasbf'] = 0.38
-            ovr['kisbfpp'] = 0.0
     elif m_chosen == 'CSL':
         ovr['Vi20'] = 0.01
         ovr['Vi20_active'] = 0.01
@@ -243,8 +204,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
     elif m_chosen == 'TAB6-1':
         ovr['kasrent'] = 10.0
         ovr['kasrentp'] = 0.05
-    elif m_chosen == 'scc1-RR':
-        ovr['kasesp'] = 0.0
     elif m_chosen == 'PM':
         ovr['kd2c1'] = 0.0
         ovr['kd3c1'] = 0.0
@@ -252,15 +211,5 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
         ovr['ksf6p'] = 0.0
         ovr['ksf6pp'] = 0.0
         ovr['ksf6ppp'] = 0.0
-    elif m_chosen == 'perturb' and g_name == 'ORI_BUD_SPN':
-        for k in ['ksori', 'ksbud', 'ksspn']:
-            scale = float(np.clip(rng.normal(1.0, 0.2), 0.1, 3.0))
-            ovr[k] = p_wt[k] * scale
-    elif m_chosen == 'cdc24Δ':
-        ovr['ksbud'] = 0.0
-    elif m_chosen == 'cdc45Δ':
-        ovr['ksori'] = 0.0
-    elif m_chosen == 'spindle_defect':
-        ovr['ksspn'] = 0.0
     elif m_chosen == 'MDT':
         ovr['mdt'] = float(rng.choice([90.0, 150.0, 160.0]))

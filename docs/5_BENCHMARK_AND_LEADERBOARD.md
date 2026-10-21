@@ -1,5 +1,9 @@
 # 全量模型基准评测榜单与坏 Case 深度剖析 (Benchmark Leaderboard & Badcase Analysis)
 
+> **2026-10-21 baseline 清理**：下方旧实现的指标只保留为历史记录，不代表新标准 baseline 的性能。
+> 当前标准入口和来源见 [基线清单](BASELINE_SELECTION_AUDIT.md)；本次仅有数值/接口回归验证，没有重跑论文比较。
+
+
 > **2026-10-21 汇总兼容修复**：按seed规范化all_variables/all_16_vars/all_39_vars别名后再汇总，
 > 防止漏掉旧格式seed；每项指标记录实际有效n_seeds，并拒绝混合16/39变量系统或冲突的别名。
 > 本次未改写历史实验指标或seed_summary；现有单seed Fission榜单不受影响。

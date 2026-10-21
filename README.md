@@ -1,5 +1,10 @@
 # 酿酒酵母细胞周期神经算子动力学建模与主动学习系统 (Budding Yeast Neural Operators & Active Learning)
 
+> **2026-10-21 模型清理**：baseline 只保留 18 个标准实现，入口为 `mlp/resnet/unet/kan/transformer/mamba/deeponet/fno/wno/mwt/gnot/transolver/lno/neural_ode/sc_fno/bregman_fno/lamo/konode`。
+> 旧改造版已删除；标准入口没有额外参数调制/生物图模块。旧实验表是历史实现的结果，不能作为当前标准模型的论文结果。
+> 当前来源、参数量和 SC-FNO 监督要求见 [标准基线说明](docs/BASELINE_SELECTION_AUDIT.md)。
+
+
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg)](https://pytorch.org)
 [![PyTorch Lightning](https://img.shields.io/badge/Lightning-2.0+-792EE5.svg)](https://lightning.ai)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -48,7 +53,7 @@ budding_yeast_v2/
 ├── run_pipeline.sh            # ⚙️ 批量基准训练与多算子对比流水线
 ├── run_al_pure_random_1m.sh   # 🔬 AL4PDE 百万候选池主动学习执行流水线
 ├── docs/                      # 📚 5 篇核心技术专题规范文档
-├── models/                    # 🧠 神经网络模型库 (ours: BioRefinerPlus 等; baselines: 70+ 算子)
+├── models/                    # 🧠 神经网络模型库 (ours: BioRefinerPlus 等; baselines: 18 个标准实现)
 ├── data/                      # 💾 数据集生成脚本、生化多关系图、可达性分析
 │   ├── reachability/          # 🎯 参数与相空间轨迹可达性分析报告
 │   └── dataset_analysis/      # 📑 数据集分布消融与统计报告

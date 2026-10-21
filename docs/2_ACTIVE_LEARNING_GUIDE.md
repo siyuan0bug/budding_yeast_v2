@@ -1,5 +1,21 @@
 # 2. 出芽酵母主动学习全景指南与 AL4PDE 闭环体系 (Active Learning Guide)
 
+> **2026-10-22 Budding 合成突变目录精简**：删除 TEM1/CDC15 的 DAmP，以及 CDC5_Proxy、SCC1、CDC28、SBF_MBF、PPX、Mcm1、ORI_BUD_SPN 七个合成模块。当前为 19 个基因模块 + MDT 环境模块，共 65 种模式组合；拓扑、motif、WT-Blind、救援与 AL 候选审计同步更新。保留组合的两套赋值/分布保持一致，39 变量、141 参数、ODE、初值和 126 real 不变；Fission 不变。含已删除突变的旧候选池或派生源会拒绝继续生成，需重新生成；旧 NPZ 不改写，仍可用于原有训练/分析。
+
+
+> **2026-10-22 当前采样已更新**：Budding/Fission 静态配额 10/40/50、AL 候选池 5/40/55，仅一至三模块。下文较早的四/五层配额属于历史描述；新规则、输出字段和失败处理见 [三模块采样说明](EXACT_THREE_MODULE_SAMPLING.md)。
+
+> **Fission 已适配五种通用 AL 策略**：Random、Uncertainty、Power、LCMD、BAIT 共用 `train.py` 闭环。候选先做原生逐株预热，选中后生成完整轨迹；原 BIO/Pattern/缺失标签保持不变，其他 Budding 专用策略仍拒绝。命令、初值成本和验证范围见 [Fission AL](FISSION_ACTIVE_LEARNING.md)。
+
+> **模块整理已完成**：生产实现移至 `utils/active_learning/`，旧 `al_callback.py` 保留兼容入口；15 种策略和别名由 registry 统一管理。初始化元数据对齐与跨轮缓存问题分别修复，HPO 不再静默挂载无效 callback。当前接口和验证见 [拆包说明](AL_PACKAGE_REFACTOR.md)。
+
+> **Power / BAIT / LCMD 已接入**：新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，273 项回归通过；LCMD 使用代理预测特征，不要求预仿真。latent coreset 本轮仅作接口设计说明，未修改模型。官方实际 8 个预置配置的逐项对应、ODE 特征适配和命令见 [Power/BAIT 与官方清单](AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。
+
+> **2026-10-21 旧轨迹池策略归档**：`random/us/is/wrs/vessal/hggs/pial` 已退出训练入口；完整快照保存在 `utils/archive/al_callback_legacy.py`，主文件删除 19 个旧专属方法。当前保留 15 种在线策略及别名（新增 Power、BAIT、LCMD）。
+> **Uncertainty 后续对齐**：当前默认两个独立训练成员，同一输入按官方默认 MSE disagreement + mean + Top-K 选样；支持官方 raw sample variance 分支，停止使用参数加噪。Random 保持固定池随机选。240 项测试通过，见 [Ensemble 对齐](AL_ENSEMBLE_UNCERTAINTY.md)。尚未直接实例化官方全套 Task/ProbModel；以下历史“十大策略”章节也不能作为当前 API 清单。
+> 当前变更、真实算法清单对应关系、231 项验证及待修差异见 [归档与官方核对](AL_ARCHIVAL_AND_OFFICIAL_ALIGNMENT_2026-10-21.md)。
+
+
 > **2026-10-21 标签接入**：保留BIO和ABC，六分类以中性补充分组保存到未来AL快照，暂不参与选样或替换模型头。
 > 在线仿真原BIO不再丢弃；历史快照缺失BIO时明确标记未知。修复追加样本的ABC训练ID全为A的占位，
 > 并在直接建初始集时传入实际ABC目标。其余策略、筛选、配额、归一化规则不变；历史结果未重跑。

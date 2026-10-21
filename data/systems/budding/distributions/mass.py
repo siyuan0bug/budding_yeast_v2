@@ -1,7 +1,10 @@
 """mass amplitude distribution; ranges and draw order preserved."""
 import numpy as np
+from ..catalog import require_mutation
 
 def sample_scaling_factor(mode, g_name=None, *, rng=None):
+    if g_name is not None:
+        require_mutation(g_name, mode)
     rng = np.random if rng is None else rng
     if mode == 'GAL-OE':
         if g_name == 'CDC20':
@@ -30,8 +33,6 @@ def sample_scaling_factor(mode, g_name=None, *, rng=None):
             return 10.0 ** float(rng.uniform(np.log10(0.3), np.log10(1.2)))
         elif g_name == 'NET1':
             return 10.0 ** float(rng.uniform(np.log10(0.15), np.log10(0.6)))
-        elif g_name in ['PPX', 'CDC5', 'CDC5_Proxy']:
-            return 10.0 ** float(rng.uniform(np.log10(0.2), np.log10(0.6)))
         elif g_name == 'SWI5':
             return 10.0 ** float(rng.uniform(np.log10(0.02), np.log10(0.1)))
         else:

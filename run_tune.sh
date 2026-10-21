@@ -23,9 +23,9 @@ PYTHON_BIN="/home/users/zsy/.conda/envs/neuralop/bin/python"
 # ============================================================
 
 # --- 1. 目标模型与损失策略 ---
-MODEL="${MODEL:-biom_refiner_plus}"              # 可选: biom_refiner_plus, biom_refiner_curvature, pure_wno, pure_fno, resnet_film, hyper_fno 等
+MODEL="${MODEL:-biom_refiner_plus}"              # 标准 baseline: fno, wno, mwt, mlp, resnet 等；也可选独立 ours 模型
 LOSS_TYPE="${LOSS_TYPE:-hybrid_mse_rel}"             # 可选: hybrid_mse_rel, triple_dynamic, mse_only
-AL_STRATEGY="${AL_STRATEGY:-none}"                     # 可选: none, al4pde_boundary, al4pde_diversity, rgs 等
+AL_STRATEGY="${AL_STRATEGY:-none}"                     # 调参仅支持 none；主动学习使用 train.py
 
 # --- 2. 数据集配置 ---
 DATA_DIR="${DATA_DIR:-/home/users/zsy/projects/budding_yeast_cell_cycle/mydata/budding_yeast}"
@@ -50,6 +50,10 @@ PRUNE_WARMUP=10                        # 前 N 个 epoch 不剪枝，让模型�
 # 调度与执行逻辑 (以下无需修改)
 # ============================================================
 
+TUNE_ARGS=(--ode_method "${ODE_METHOD:-dopri5}" --ode_rtol "${ODE_RTOL:-1e-3}" --ode_atol "${ODE_ATOL:-1e-4}")
+if [ -n "${SENSITIVITY_PATH:-}" ]; then
+    TUNE_ARGS+=(--sensitivity_path "$SENSITIVITY_PATH" --sensitivity_weight "${SENSITIVITY_WEIGHT:-1.0}")
+fi
 NUM_GPUS=${#GPUS[@]}
 TRIALS_PER_GPU=$(( (TOTAL_TRIALS + NUM_GPUS - 1) / NUM_GPUS ))
 
@@ -129,7 +133,7 @@ for i in "${!GPUS[@]}"; do
         --prune_warmup_epochs "$PRUNE_WARMUP" \
         $CLEANUP_FLAG \
         $RESUME_FLAG \
-        $NO_PRUNE_FLAG > "$LOG_FILE" 2>&1 &
+        "${TUNE_ARGS[@]}" $NO_PRUNE_FLAG > "$LOG_FILE" 2>&1 &
 
     WORKER_PIDS+=($!)
     sleep 1  # 错开启动，彻底杜绝瞬时并发争抢

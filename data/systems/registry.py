@@ -61,7 +61,9 @@ def get_recipe(name):
 
 def resolve_config(config):
     recipe = get_recipe(config.recipe)
-    return replace(config,
+    from .sampling_policy import ratios_for
+    ratios = ratios_for(config.level_ratios, pool=config.parameter_only or recipe.sampler == 'pool')
+    return replace(config,level_ratios=ratios,
         n_samples=recipe.default_samples if config.n_samples is None else config.n_samples,
         seed=recipe.default_seed if config.seed is None else config.seed,
         pilot_samples=recipe.default_pilot if config.pilot_samples is None else config.pilot_samples,

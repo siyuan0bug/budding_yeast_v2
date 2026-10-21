@@ -1,93 +1,47 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""GNOT with official heterogeneous normalized attention and geometric experts.
+
+Only graph batching is replaced by dense temporal query tensors. The two source
+branches encode all initial states and all parameters; neither is a new module.
 """
-GNOT: A General Neural Operator for Multi-Scale PDEs
-====================================================
-- Paper Title: GNOT: A General Neural Operator for Multi-Scale PDEs
-- Authors: Zecheng Zhang, Ruisi Zhang, Weijian Zheng, et al.
-- Conference: ICML 2023
-- Paper Link: https://arxiv.org/abs/2302.14376
-- Official Code: https://github.com/HaoZhr/GNOT
-
-Biochemical Parameter Conditioning Mechanism:
----------------------------------------------
-- Conditioning Method: Cross-Attention Sensor Conditioning + Parameter FiLM
-- Mechanism: Employs continuous geometric pretrained Transformer blocks with linear self-attention
-  and cross-attention between spatial-temporal queries and parameter tokens:
-  Q = Linear(X_query), K, V = MLP(P). Cross-attention allows each time point to dynamically query
-  relevant biochemical parameter constraints.
-- Biological Rationale: Non-local continuous evaluation across time conditioned on mutant genotype.
-"""
-
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
+from .common import joint_condition_grid
+from ._upstream.gnot import MoEGPTConfig, MIOECrossAttentionBlock
 
 
-class LinearCrossAttention(nn.Module):
-    def __init__(self, d_model, n_heads=4, eps=1e-6):
+class Projection(nn.Module):
+    """The residual projection MLP used by the official GNOT."""
+    def __init__(self, input_dim, width, output_dim, layers=2):
         super().__init__()
-        self.d_model = d_model
-        self.n_heads = n_heads
-        self.d_head = d_model // n_heads
-        self.eps = eps
+        self.linear_pre = nn.Linear(input_dim, width)
+        self.linears = nn.ModuleList([nn.Linear(width, width) for _ in range(layers)])
+        self.linear_post = nn.Linear(width, output_dim)
+        self.act = nn.GELU()
 
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
-
-    def forward(self, x, context):
-        B, L, _ = x.shape
-        _, S, _ = context.shape
-        H, D = self.n_heads, self.d_head
-
-        Q = F.elu(self.q_proj(x)).add(1.0).view(B, L, H, D).permute(0, 2, 1, 3)
-        K = F.elu(self.k_proj(context)).add(1.0).view(B, S, H, D).permute(0, 2, 1, 3)
-        V = self.v_proj(context).view(B, S, H, D).permute(0, 2, 1, 3)
-
-        KV = torch.einsum('bhsd,bhsm->bhdm', K, V)
-        K_sum = K.sum(dim=-2, keepdim=True)
-        Z = torch.einsum('bhld,bhid->bhl', Q, K_sum).unsqueeze(-1) + self.eps
-
-        out = torch.einsum('bhld,bhdm->bhlm', Q, KV) / Z
-        out = out.permute(0, 2, 1, 3).contiguous().view(B, L, -1)
-        return self.out_proj(out)
+    def forward(self, x):
+        x = self.act(self.linear_pre(x))
+        for layer in self.linears:
+            x = x + self.act(layer(x))
+        return self.linear_post(x)
 
 
 class GNOT(nn.Module):
-    def __init__(self, num_vars=39, param_dim=141, seq_len=500, pred_len=500,
-                 d_model=128, n_heads=4, n_layers=3, d_ff=256, **kwargs):
+    def __init__(self, num_vars=39, param_dim=141, width=64, n_blocks=4, n_heads=4, n_experts=2):
         super().__init__()
-        self.in_proj = nn.Linear(num_vars * 2, d_model)
-        self.param_encoder = nn.Sequential(
-            nn.Linear(param_dim, d_model * 2),
-            nn.GELU(),
-            nn.Linear(d_model * 2, d_model * 4)  # 4 parameter tokens
-        )
-        self.layers = nn.ModuleList([
-            nn.ModuleDict({
-                'cross_attn': LinearCrossAttention(d_model, n_heads=n_heads),
-                'norm1': nn.LayerNorm(d_model),
-                'ffn': nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model)),
-                'norm2': nn.LayerNorm(d_model)
-            }) for _ in range(n_layers)
-        ])
-        self.out_proj = nn.Linear(d_model, num_vars)
+        if width % n_heads or n_blocks < 1:
+            raise ValueError('width must divide into attention heads; n_blocks must be positive')
+        self.num_vars, self.param_dim = num_vars, param_dim
+        self.trunk = Projection(1 + param_dim, width, width)
+        self.branch = nn.ModuleList([Projection(num_vars, width, width), Projection(param_dim, width, width)])
+        config = MoEGPTConfig(n_embd=width, n_head=n_heads, n_layer=n_blocks,
+                              n_experts=n_experts, space_dim=1, n_inputs=2, n_inner=4)
+        self.blocks = nn.ModuleList([MIOECrossAttentionBlock(config) for _ in range(n_blocks)])
+        self.out = Projection(width, width, num_vars)
 
-    def forward(self, ic_time_grid, params):
-        B, V, F_in, T = ic_time_grid.shape
-        x = ic_time_grid.reshape(B, V * F_in, T).permute(0, 2, 1)  # (B, 500, 78)
-        h = self.in_proj(x)  # (B, 500, d_model)
-
-        # Context tokens from params: (B, 4, d_model)
-        p_tokens = self.param_encoder(params).view(B, 4, -1)
-
-        for layer in self.layers:
-            attn_out = layer['cross_attn'](h, p_tokens)
-            h = layer['norm1'](h + attn_out)
-            h = layer['norm2'](h + layer['ffn'](h))
-
-        out = self.out_proj(h)
-        return out.permute(0, 2, 1).contiguous()
+    def forward(self, x, params):
+        grid = joint_condition_grid(x, params, self.num_vars, self.param_dim, uniform=False).transpose(1, 2)
+        pos = grid[..., -1:]
+        h = self.trunk(grid[..., self.num_vars:])
+        sources = [self.branch[0](grid[:, :1, :self.num_vars]), self.branch[1](params.unsqueeze(1))]
+        for block in self.blocks:
+            h = block(h, sources, pos)
+        return self.out(h).transpose(1, 2).contiguous()

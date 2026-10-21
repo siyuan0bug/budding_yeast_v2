@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1207,7 +1208,52 @@ class HybridAllLoss(HybridPINOCollocationLoss):
         return total_loss
 
 
+class SensitivityLoss(nn.Module):
+    """SC-FNO trajectory MSE plus reference parameter-Jacobian MSE.
+
+    Reference derivatives are d(normalized Y)/d(normalized P), at fixed initial
+    state. Each parameter column is computed by a differentiable JVP; this
+    avoids one reverse pass for every output species/time point.
+    """
+    def __init__(self, sensitivity_weight=1.0):
+        super().__init__()
+        if not math.isfinite(sensitivity_weight) or sensitivity_weight <= 0:
+            raise ValueError('SC-FNO sensitivity_weight must be finite and positive')
+        self.sensitivity_weight = sensitivity_weight
+
+    def forward(self, pred, target, batch_weights=None, lambda_penalty=None, lambda_smooth=None):
+        # Validation uses trajectory error and does not need held-out Jacobians.
+        return F.mse_loss(pred, target)
+
+    def sensitivity_term(self, model, x, params, reference, parameter_indices):
+        indices = parameter_indices
+        if indices.ndim == 2:
+            if not torch.equal(indices, indices[:1].expand_as(indices)):
+                raise ValueError('Sensitivity parameter indices must agree across the batch')
+            indices = indices[0]
+        if indices.ndim != 1 or indices.numel() == 0 or indices.unique().numel() != indices.numel():
+            raise ValueError('Sensitivity parameter indices must be a nonempty unique vector')
+        if ((indices < 0) | (indices >= params.shape[-1])).any():
+            raise ValueError('Sensitivity parameter index out of range')
+        expected = (len(x), x.shape[1], x.shape[-1], indices.numel())
+        if reference.shape != expected or not torch.isfinite(reference).all():
+            raise ValueError(f'Expected finite sensitivity targets with shape {expected}')
+        loss = params.new_zeros(())
+        # Higher precision for the derivative loss also avoids nested BF16
+        # autocast inside FFT/DWT second derivatives.
+        with torch.autocast(device_type=params.device.type, enabled=False):
+            for column, index in enumerate(indices.tolist()):
+                direction = torch.zeros_like(params)
+                direction[:, index] = 1
+                _, derivative = torch.autograd.functional.jvp(
+                    lambda p: model(x, p), params, direction, create_graph=True,
+                )
+                loss = loss + F.mse_loss(derivative, reference[..., column])
+        return self.sensitivity_weight * loss / indices.numel()
+
+
 LOSS_REGISTRY = {
+    'sc_sensitivity': SensitivityLoss,
     'physics_informed': PhysicsInformedLoss,
     'mse_only': MSEOnlyLoss,
     'rel_l2': RelativeL2Loss,

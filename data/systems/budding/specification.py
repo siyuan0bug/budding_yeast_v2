@@ -37,6 +37,8 @@ class BuddingSystem:
         return self._mutations.apply_gene_mutation(*args, rng=rng)
 
     def sample_scaling_factor_sobol(self, mode, gene, u):
+        if gene is not None:
+            catalog.require_mutation(gene, mode)
         from .distributions.quantiles import sample_scaling_factor_sobol
         if self.distribution_profile == 'mutant_aware':
             return sample_scaling_factor_sobol(mode,gene,u)

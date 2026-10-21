@@ -1,0 +1,222 @@
+{
+  "review_date": "2026-10-21",
+  "meaning": "Standard cores with declared task I/O and numerical backend adaptations; not a training performance claim.",
+  "selected": [
+    {
+      "method": "MLP",
+      "registry": "mlp",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/mlp.py",
+      "sha256": "fda07acd9dbf7544a351fa1ddde7e3d41e7fd3c216f693d73b192e83d3467b7a",
+      "note": "Plain concatenated-input MLP."
+    },
+    {
+      "method": "U-Net",
+      "registry": "unet",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/unet.py",
+      "sha256": "3935d90da0faf8e28ddc92c9d9e649763e9f122d742d7527f0bf620afead451d",
+      "note": "Plain temporal encoder/decoder with pooling, transposed convolution and skip concatenation."
+    },
+    {
+      "method": "ResNet",
+      "registry": "resnet",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/resnet.py",
+      "sha256": "7615114d9b4002585a9552fccfa8e810842c7ef7814faef186c93419e6ef1d6e",
+      "note": "Plain residual MLP, no channel attention."
+    },
+    {
+      "method": "Efficient-KAN",
+      "registry": "kan",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/kan.py",
+      "sha256": "78c95c85c9582f2a4eb81bf5ba120011ac3d494a7adf209008c198a595bc42dd",
+      "note": "Pinned efficient-kan B-spline core, pointwise full-state/parameter/time regression."
+    },
+    {
+      "method": "Transformer",
+      "registry": "transformer",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/transformer.py",
+      "sha256": "10fa4aff6a58a5f56bfff05ecae82a20b358906059a98b76a377c9b32cb7a971",
+      "note": "Tau_BNO per-token encoder, RMSNorm and sinusoidal positions; full conditions at every time."
+    },
+    {
+      "method": "Mamba-1",
+      "registry": "mamba",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/mamba.py",
+      "sha256": "1c3598b6ef548908e0d69b4a4b2ad2ddbbbe8fe66baa53546d118c2eca5e4afc",
+      "note": "Tau_BNO regressor with pinned official Mamba-1 initialization and selective scan; reference PyTorch backend without compiled extension."
+    },
+    {
+      "method": "DeepONet",
+      "registry": "deeponet",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/deeponet.py",
+      "sha256": "02bfe3f815ff697a9b0df384c06800aab52fd0810102a0e1a23bff250e6f2f9b",
+      "note": "Branch/trunk with full initial state and parameters."
+    },
+    {
+      "method": "FNO",
+      "registry": "fno",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/fno.py",
+      "sha256": "11781507558407d4b3528131e1ae61e4f54c09a3ee595342f2431e8cd7491a68",
+      "note": "1D temporal spectral/pointwise operator."
+    },
+    {
+      "method": "WNO",
+      "registry": "wno",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/wno.py",
+      "sha256": "e1fc3bdce2aa8397e8bd2de74778c8588bf8e92eba5a1e5a35311d635adee52d",
+      "note": "Coarsest low/detail position-dependent kernels; ptwt backend."
+    },
+    {
+      "method": "MWT",
+      "registry": "mwt",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/mwt.py",
+      "sha256": "dd0d90c5af3165852df9e341af804505163dcdf67d5a0969b561fd262068c957",
+      "note": "Polynomial filters and recursive A/B/C hierarchy."
+    },
+    {
+      "method": "GNOT",
+      "registry": "gnot",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/gnot.py",
+      "sha256": "d2ab990a6d79665d0a25ac2d1a718d9bb7b859b9fa2eda101b16c8c6a46deb66",
+      "note": "Official heterogeneous normalized attention and geometric experts."
+    },
+    {
+      "method": "Transolver",
+      "registry": "transolver",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/transolver.py",
+      "sha256": "902a2b7d2850f6d6695e011e0a54b6bd9a999f02e4db8e712a2acc12b69e94fb",
+      "note": "Official slice, slice-token self-attention, deslice."
+    },
+    {
+      "method": "LNO",
+      "registry": "lno",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/lno.py",
+      "sha256": "7c0e3e3e4a8848bb213187fb955b440a8f086e42c8c9365b928669bbfa753225",
+      "note": "Official PhCA encoder/decoder and latent vanilla attention."
+    },
+    {
+      "method": "NeuralODE",
+      "registry": "neural_ode",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/neural_ode.py",
+      "sha256": "41d3559b17d758ed4dd2e84ebafa91a39966b260ddb52c6a366aa6fee423d8ff",
+      "note": "Learned conditional vector field with actual query times."
+    },
+    {
+      "method": "SC-FNO",
+      "registry": "sc_fno",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/sc_fno.py",
+      "sha256": "d72b72f47c4494a335a0e992d720e825c9e5c0151337d4377e4c78af1d15b554",
+      "note": "Same FNO architecture; training requires sc_sensitivity and explicit reference Jacobians."
+    },
+    {
+      "method": "Bregman-FNO",
+      "registry": "bregman_fno",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/bregman_fno.py",
+      "sha256": "2afc524318c73eef91f62d20aaeae1a988d289def6c252179b4e0e261a84ce4c",
+      "note": "Dual-state postactivation, zero linear updates; configured without optional channel MLP or norm."
+    },
+    {
+      "method": "LaMO",
+      "registry": "lamo",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/lamo.py",
+      "sha256": "ef35f27fc18a40f07c4536db633907d3dc8e678eda49a08952084f61e528ced8",
+      "note": "Official latent slice/Hydra/deslice; exact unfused SSD tensor backend."
+    },
+    {
+      "method": "KoNODE",
+      "registry": "konode",
+      "status": "standard_task_adaptation",
+      "implementation": "models/baselines/konode.py",
+      "sha256": "ddc857c026eb7ff7d5323ee3284d30a575b50b761c5bd889c3c17d44aa2117d0",
+      "note": "Augmented observed state, evolving field weights and Koopman modes."
+    }
+  ],
+  "official_sources": {
+    "baselines/Tau_BNO-main/models/OperatorFree/KAN.py": "e6f327823132551e9a5d8c500dbd456d2164d765ca2c2a25426c970ac89f22c7",
+    "baselines/Tau_BNO-main/models/OperatorFree/TransformerBackbone.py": "7f1293d0158c79e0e4faea6cece7243e87796438e24991a6e5d88fb302a4f5e6",
+    "baselines/Tau_BNO-main/models/OperatorFree/MambaBackbone.py": "107956d037e09e39fa1c6418d375c8d90b7bc2cc21ef983502853e14f157ff6c",
+    "baselines/Tau_BNO-main/models/OperatorFree/NN.py": "de713eb93b119fd296452e8514ca2b6eecb33c506156ef90970e5accf41f3986",
+    "baselines/Tau_BNO-main/models/OperatorFree/layers.py": "de4cf868077e9f12d41f1d6eec1b0a6885192d6a41338cbaac7e02c2862dc786",
+    "baselines/RealPDEBench/realpdebench/model/fno.py": "24b444cbf164323f315768729f0c19d3bbcd1505c292e612177fa92d37ff54a9",
+    "baselines/RealPDEBench/realpdebench/model/MWT_libs/models.py": "bc6a2b738cd5115edb076cb11292ff701604114dfad072ea482c74b46db21468",
+    "baselines/Tau_BNO-main/models/WNO/wno.py": "0f8bf4aaf660192f3798e628c308d9a03382b4d6a6e7721a30f4158a3a570540",
+    "baselines/Tau_BNO-main/models/WNO/wavelet_convolution.py": "6f7b9a4cba243f967c3679f358032dac3db58926e1508e5c7c9d46112762c701",
+    "baselines/Tau_BNO-main/models/MWNO/models.py": "cb6302bcb2099f13dc68231cf9bece4363b3eb1aace826427b0572a0c6ab7547",
+    "baselines/Tau_BNO-main/models/MWNO/utils.py": "a65647803bac3f0ef776d3bec275ded8a7d97b61d76e323679a84969768746f1",
+    "baselines/GNOT/models/mmgpt.py": "4e0440dc129c8649d439755097429b052b7376bdb00d007427a9d80502d8bcf8",
+    "baselines/transolver/Physics_Attention.py": "f7feffd40e21863a2bd5809d9548a3417a7221a817f9e675ea969712c1d45a36",
+    "baselines/LatentNeuralOperator/LNO-PyTorch/ForwardProblem/module/model.py": "0683485a8789b1bf2d29daf981861c0eeb7409712106dd6428ec13da5cf9591a",
+    "baselines/bregmano/neuraloperator/neuralop/layers/fno_block.py": "651aedc71af5bf0d8ef20525b55bec965365a40fca9b14cf6ad2a1d6ab3af2c9",
+    "baselines/LaMO/model/Latent_SSM_unshared.py": "4d9d7c848ec257c4108a2aea630eec2d34ce82c4bd5ebbecb0df8c9121f04011",
+    "baselines/LaMO/model/mamba_2D_v2.py": "d8e0c04d8a5e8d3383202e794c7ab84742e7e3ff504dca51b372e88d65284346",
+    "baselines/KoNODE/main.py": "80a4c6e85031fa9ec80f76c1063d23b73d5bc181aaa2a63220f1b49b84753464",
+    "baselines/SC_Neural_Operators/AMBehroozi-SC_Neural_Operators-3423864/fno_ode /ODEs/ODE1/ode_FNO_IG_EQ_auto_loss.ipynb": "d284b135fc81ce54215d5454ac503d36451577470f798d903a304f89748e70cc"
+  },
+  "pinned_remote_sources": [
+    {
+      "repository": "state-spaces/mamba",
+      "commit": "e9594ce1c732d97440f0332fdc43170a2294dbfa",
+      "path": "mamba_ssm/modules/mamba_simple.py",
+      "url": "https://github.com/state-spaces/mamba/blob/e9594ce1c732d97440f0332fdc43170a2294dbfa/mamba_ssm/modules/mamba_simple.py",
+      "sha256": "a17e4c51b582dc0d4d690a649eba521cd0c1ee3dc8f0473a0967cdc9ec0874e3"
+    },
+    {
+      "repository": "state-spaces/mamba",
+      "commit": "e9594ce1c732d97440f0332fdc43170a2294dbfa",
+      "path": "mamba_ssm/ops/selective_scan_interface.py",
+      "url": "https://github.com/state-spaces/mamba/blob/e9594ce1c732d97440f0332fdc43170a2294dbfa/mamba_ssm/ops/selective_scan_interface.py",
+      "sha256": "a570f4f15a2eebabf62024a9ffb0d1dde04280300405e1632f43809f448bfb1a"
+    },
+    {
+      "repository": "state-spaces/mamba",
+      "commit": "e9594ce1c732d97440f0332fdc43170a2294dbfa",
+      "path": "LICENSE",
+      "url": "https://github.com/state-spaces/mamba/blob/e9594ce1c732d97440f0332fdc43170a2294dbfa/LICENSE",
+      "sha256": "760939b000194d04548ede6a857bbe735d1695d8422ec85955c8e2bd7f4b95c5"
+    },
+    {
+      "repository": "Blealtan/efficient-kan",
+      "commit": "7b6ce1c87f18c8bc90c208f6b494042344216b11",
+      "path": "src/efficient_kan/kan.py",
+      "url": "https://github.com/Blealtan/efficient-kan/blob/7b6ce1c87f18c8bc90c208f6b494042344216b11/src/efficient_kan/kan.py",
+      "sha256": "c2b984359fe483640fcc2313570bbbd2128eede99bdbf0fa586ec8e0e1a1ecb7"
+    },
+    {
+      "repository": "Blealtan/efficient-kan",
+      "commit": "7b6ce1c87f18c8bc90c208f6b494042344216b11",
+      "path": "LICENSE",
+      "url": "https://github.com/Blealtan/efficient-kan/blob/7b6ce1c87f18c8bc90c208f6b494042344216b11/LICENSE",
+      "sha256": "09c34a5fa51d62153d52c2870d0a4491a1d84b980000863a8b9d055adf7e45fc"
+    }
+  ],
+  "retained_core_sources": {
+    "models/baselines/_upstream/__init__.py": "5e7b85bc50f94334e54df3c79fecb7af9014c8aff28347f91d6a2d73ae9faab1",
+    "models/baselines/_upstream/gnot.py": "d861ec3025cf874a1c505a3f37e8497badb7213ed65f13a466e472110a4d7bdf",
+    "models/baselines/_upstream/hydra.py": "97848ec8daa8d3d2761076deed5c13da61b300d6e09a4b032e8e4062dc65006e",
+    "models/baselines/_upstream/kan.py": "ac6fcc94670ecac5ec08caf6fc242a5b983a8064ff623750e49b1e31d32634ad",
+    "models/baselines/_upstream/lno.py": "31164e476fb9fcd88df5df3c5d5edf58bf189b565ce8380b6415c32952728f76",
+    "models/baselines/_upstream/mamba_backbone.py": "0f893164d10a0955abeb48d394075a2e4e66a5cf6c052151f978a42a964f9494",
+    "models/baselines/_upstream/mamba_core.py": "2d2a50fd290e597d5aa4bceea0960698b744dcfe3e8b13cb9f0929ae78075f31",
+    "models/baselines/_upstream/operatorfree_layers.py": "602ef66cfebc7873f1fd7b990f61735cda0e6058ab0c6337d54082b9137e32d7",
+    "models/baselines/_upstream/operatorfree_nn.py": "ecc4d83cdf96feb84569ab62626a423fc58814d7147f78e262a7138d52edc5ce",
+    "models/baselines/_upstream/ssd.py": "9b65017ed8003b45cd697f010a8549f3991a7b2f77c601c1aed99ca1f4b1f067",
+    "models/baselines/_upstream/transformer.py": "0f090f47d3915eb0b2974e9a8fae986b3e09a1843c174e8e2d22e186caaf70fe",
+    "models/baselines/_upstream/transolver.py": "05dc52a09a896893a44c396299ae7591ba0f6ea3737e669a5cf125a247c9c7ed"
+  }
+}

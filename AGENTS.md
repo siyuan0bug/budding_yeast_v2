@@ -18,12 +18,12 @@
   - [3.3 核心生产入口与流水线](#33-核心生产入口与流水线)
 - [四、模型架构体系 (`models/`)](#四模型架构体系-models)
   - [4.1 统一 Forward 接口契约](#41-统一-forward-接口契约)
-  - [4.2 40+ 基线模型体系 (`models/baselines/`)](#42-40-基线模型体系-modelsbaselines)
+  - [4.2 标准基线模型体系 (`models/baselines/`)](#42-40-基线模型体系-modelsbaselines)
   - [4.3 30+ 原创生物算子体系 (`models/ours/`)](#43-30-原创生物算子体系-modelsours)
 - [五、损失函数与物理约束体系 (`utils/losses.py`)](#五损失函数与物理约束体系-utilslossespy)
 - [六、主动学习 (Active Learning) 体系 (`utils/al_callback.py`)](#六主动学习-active-learning-体系-utilsal_callbackpy)
   - [6.1 1M 免预仿真纯参数空间候选池架构](#61-1m-免预仿真纯参数空间候选池架构)
-  - [6.2 10 大生产级 AL4PDE 策略速查](#62-10-大生产级-al4pde-策略速查)
+  - [6.2 当前在线策略与官方对齐状态](#62-当前在线策略与官方对齐状态)
 - [七、数据生成、归一化与生物网络图谱 (`data/`)](#七数据生成归一化与生物网络图谱-data)
   - [7.1 归一化规范与最新实测证据](#71-归一化规范与最新实测证据)
   - [7.2 数据集生成引擎清单](#72-数据集生成引擎清单)
@@ -48,7 +48,7 @@
 |:---|:---|:---|:---|
 | **神经网络模型** | `models/baselines/` 或 `models/ours/` | 如新基线 `mamba_no.py`，新原创 `bio_refiner_v3.py` | 必须在 [models/yeast_lit_module.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/models/yeast_lit_module.py) 的 `MODEL_REGISTRY` 中注册，并提供标准 `forward_ic_time` 接口。 |
 | **损失函数 / 物理约束** | `utils/losses.py` | 如新损失 `AdaptivePhaseLoss` | 必须在 [utils/losses.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/losses.py) 的 `LOSS_REGISTRY` 中注册，支持课程学习权重调度。 |
-| **主动学习策略 / 物理残差** | `utils/al_callback.py` / `utils/ode_residual_engine.py` | 如新 AL4PDE 策略实现 | 必须在 [utils/al_callback.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py) 内部实现并支持 GPU 向量化与超时兜底。 |
+| **主动学习策略 / 物理残差** | `utils/active_learning/` / `utils/ode_residual_engine.py` | 如新 AL4PDE 策略实现 | 策略在 `utils/active_learning/strategies/` 实现并注册到 `registry.py`；统一返回 SelectionPlan，仿真/入库由 engine 驱动。`al_callback.py` 只保留兼容导入。 |
 | **数据生成器 / 空间采样器** | `data/` | 如 `gibbs_sobol_sampler.py`, `bams_dataset_generator.py` | 保持模块化独立运行，支持 `--seed` 与 `--data_dir` 参数。 |
 | **持久生产级分析 / 评测工具** | `scripts/analysis/` 或 `scripts/eval/` | 如 `analyze_experiments.py`, `eval_ensemble_benchmark.py` | 必须使用 `argparse` 提供标准命令行参数，长期保留供科研人员复用。 |
 | **自动化单元测试 / 回归测试** | `tests/` | 如 `test_bio_refiner_causal.py`, `verify_training_loop.py` | 供开发验证与 CI 冒烟测试使用，已被 `.gitignore` 忽略。 |
@@ -58,7 +58,7 @@
 > [!IMPORTANT]
 > **每当向代码库新增功能或产生新的实验结果时，必须在对应的 `docs/` 文档中同步更新：**
 > 1. **新增模型/模块**：在 `models/` 编写并注册新模型后，必须同步在 [docs/1_ARCHITECTURE_AND_MODELS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/1_ARCHITECTURE_AND_MODELS.md) 补充模型架构说明、输入输出、参数量与调用命令。
-> 2. **新增主动学习策略**：在 `utils/al_callback.py` 实现新策略后，必须同步在 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md) 补充数学设计、采样目标函数与实测性能。
+> 2. **新增主动学习策略**：在 `utils/active_learning/strategies/` 实现并注册新策略后，必须同步在 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md) 补充数学设计、采样目标函数与实测性能。
 > 3. **新增损失函数/物理约束**：在 `utils/losses.py` 新增损失后，必须同步在 [docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md) 补充数学公式与梯度特性。
 > 4. **新增数据生成器/归一化**：在 `data/` 编写新生成引擎或验证归一化后，必须同步在 [docs/4_DATASETS_AND_NORMALIZATION.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/4_DATASETS_AND_NORMALIZATION.md) 补充采样空间分布与物理基准。
 > 5. **实验完成/评测出炉**：任何批次实验（如 `run_pipeline.sh`, `run_al_pure_random_1m.sh` 等）运行完毕后，必须运行分析脚本提取关键指标，并同步更新至 [docs/5_BENCHMARK_AND_LEADERBOARD.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/5_BENCHMARK_AND_LEADERBOARD.md)（与对应的专门指南中），严禁只在终端汇报而导致专著文档脱节！
@@ -155,10 +155,12 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 - `params: (B, 141)`，默认是原始动力学参数逐参数 Z-score，**不是 Min-Max**。
 - 返回预测张量：`pred_norm: (B, 39, 500)`。
 
-### 4.2 40+ 基线模型体系 (`models/baselines/`)
-- **神经算子族**：`pure_fno`, `fno1d`, `pure_wno`, `cno1d`, `mwt1d`, `deeponet`, `gcgnet`, `gnot`, `transolver1d`, `transolver3_1d`, `dpot1d`, `sc_fno`, `pno1d`, `mpno1d`, `bregman_fno`, `bregman_wno`, `ncflow`, `iganet_transformer` 等。
-- **时序 Transformer 族**：`itransformer`, `dlinear`, `nlinear`, `linear`, `autoformer`, `informer`, `iinformer`, `flowformer`, `iflowformer`, `reformer`, `ireformer`, `flashformer`, `iflashformer`, `vanilla_transformer`, `fedformer`, `pyraformer` 等。
-- **动力系统基线**：`neural_ode`, `konode`, `koopman_dmd`, `latent_lno`, `lamo`, `wdno`, `icon`, `bampno`, `noble`。
+### 4.2 标准 baseline 体系 (`models/baselines/`)
+- 只保留用户采纳的标准骨干：`mlp`, `resnet`, `unet`, `kan`, `transformer`, `mamba`, `deeponet`, `fno`, `wno`, `mwt`, `gnot`, `transolver`, `lno`, `neural_ode`, `sc_fno`, `bregman_fno`, `lamo`, `konode`。
+- 禁止给 baseline 添加原方法没有的参数调制、图先验、额外跨注意力等模块；只做参数、完整初值和查询时间的输入输出适配。保留原方法自身的注意力、专家和状态空间机制。
+- 已删除的 `pure_*` / `*_ref` / `fno1d` / 时序预测等旧入口不再兼容；不得重新引入别名把修改版冒充标准实现。
+- SC-FNO 必须使用 `sc_sensitivity` 及严格匹配数据/归一化的参考灵敏度文件；无该监督时不得以 SC-FNO 训练。
+- ours 的原 WNO/LNO 使用 `cross_wno` / `cross_lno`。来源和验证见 [BASELINE_SELECTION_AUDIT.md](docs/BASELINE_SELECTION_AUDIT.md)。
 
 ### 4.3 30+ 原创生物算子体系 (`models/ours/`)
 - **`BioRefinerPlus` (`biom_refiner_plus`)**：分层生物通量感知 + 多关系因果图卷积细化器（当前 SOTA 主力）。
@@ -193,23 +195,22 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 
 ## 六、主动学习 (Active Learning) 体系 (`utils/al_callback.py`)
 
+**当前组织**：`utils/active_learning/` 按 engine、pool、prediction/features、oracle、dataset/io、strategies 拆分；旧 `utils/al_callback.py` 为 16 行兼容入口。新增策略只向 registry 注册，CLI/ensemble 需求由同一清单派生。`tune.py` 当前明确仅支持 `--al_strategy none`。接口、归档与验证见 [拆包说明](docs/AL_PACKAGE_REFACTOR.md)。
+
 ### 6.1 1M 免预仿真纯参数空间候选池架构
-在现代 AL4PDE 体系中，候选池由 [generate_1m_pure_random_pool.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/generate_1m_pure_random_pool.py) 生成 100 万组纯参数组合（仅包含参数 $P$ 与初始条件 $X$，无预计算轨迹 $Y$）。这不等于严格盲态：当前 real-envelope 筛选仍保留，用户在 2026-10-19 明确要求本轮只修工程链路、不改筛选规则。
-由 [al_pool_manager.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/data/al_pool_manager.py) 进行内存映射管理，主动学习触发时由模型前向预测并打分，仅对 Top-K 选中的高价值样本调用多进程 ODE 求解器进行实时在线标注。
+当前 `run_al_pure_random_1m.sh` 用 `data/generate.py --recipe budding_pool` 生成参数/初值池，`data/al_pool_manager.py` 选取并仿真初始集；之后由 `train.py` 驱动选样、在线 ODE 仿真和外层冷启动训练。
+当前 real-envelope 筛选仍保留，不能声称完整测试盲态。Fission AL 已支持 Random/Uncertainty/Power/BAIT/LCMD 五种通用策略；其余 Budding 专用策略明确拒绝。候选初值必须逐株预热，入口与成本边界见 [Fission AL](docs/FISSION_ACTIVE_LEARNING.md)。
 
-### 6.2 10 大生产级 AL4PDE 策略速查
-1. **`al4pde_random`**：无偏高维均匀随机采样基线。
-2. **`al4pde_uncertainty`**：MC-Dropout 特征方差预测不确定度。
-3. **`al4pde_diversity`**：相空间 332 维时序形状特征抽取 + GPU 向量化 K-Center/MaxDist 贪心空间覆盖。
-4. **`al4pde_residual`**：流速自适应相对生化物理残差（含 7 大快变量舍弃机制与 $L_{\text{flux}}$ 动态门控）。
-5. **`al4pde_res_div`**：物理残差与几何空间多样性双目标帕累托前沿融合。
-6. **`al4pde_entropy`**：双稳态相空间转移概率香农熵采样。
-7. **`al4pde_bifurcation`**：生物学分岔指标引导采样（周期突变、阻滞跳变、振幅极值突跃）。
-8. **`al4pde_bifurcation_entropy`**：分岔强度与动力学不确定度联合熵。
-9. **`al4pde_bifurcation_diversity`**：分岔边界引导 + 形状空间多样性。
-10. **`al4pde_full_hybrid`**：四维全能混合采样（不确定度 + 残差 + 分岔 + 多样性）。
+### 6.2 当前在线策略与官方对齐状态
+保留原 12 种在线策略：`al4pde_random`、`al4pde_uncertainty`、`al4pde_diversity`、`maal`、`al4pde_mass`、`al4pde_novelty`、`al4pde_residual`、`al4pde_residual_diversity`、`al4pde_bifurcation`、`al4pde_bifurcation_entropy`、`al4pde_event_entropy`、`al4pde_fisher_oed`；四个短别名继续兼容。
 
-*历史遗留策略（`rgs`, `mutant_aware`, `us`, `is`, `wrs`, `vessal`, `hggs`, `pial`）已降级为历史基准，详见 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md)。*
+新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，当前合计 15 种在线策略；Power 复用独立 ensemble，BAIT/LCMD 使用预测轨迹共享投影及实际 bmdal 选择器；LCMD 无 posterior transform。`coreset_maxdist` 尚未实现，不能用输出轨迹替代 latent 冒充支持。官方 8 个预置配置及未移植项见 [清单](docs/AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。
+
+`random/us/is/wrs/vessal/hggs/pial` 已归档至 `utils/archive/al_callback_legacy.py`，主文件和训练入口不再支持这些旧轨迹池策略。归档包含完整原文件，生产代码不可导入它来绕过限制。
+
+当前 uncertainty 已按官方两个独立训练成员和 MSE disagreement/原始方差分支对齐，见 [Ensemble 对齐](docs/AL_ENSEMBLE_UNCERTAINTY.md)；它是项目训练适配，未直接实例化官方 Task/ProbModel。Random 保持固定池。diversity 使用自定义 332 维特征及本地 MaxDist；Fisher 名称对应特征正交化而非 Fisher 信息矩阵；分岔和事件策略是启发式扩展。不要把名称当作官方算法等价性证明。
+
+归档、数值审计与未解决问题见 [官方核对](docs/AL_ARCHIVAL_AND_OFFICIAL_ALIGNMENT_2026-10-21.md)。复查使用 `scripts/analysis/audit_al4pde_alignment.py --output scratch/probes/al_cleanup_2026-10-21/alignment.json`。
 
 ---
 
@@ -228,6 +229,8 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
   checkpoint/启动/自回归/求解保护等当前契约见 [运行链路修复](docs/RUNTIME_CONTRACT_FIX_2026-10-19.md)。
 
 ### 7.2 数据集生成引擎清单
+
+**2026-10-22**：当前 systems 统一静态 10/40/50、AL pool 5/40/55，仅精确 L1–L3，原始生成器仍保留。修改采样前必须阅读 [三模块规则](docs/EXACT_THREE_MODULE_SAMPLING.md)，不得重新引入独立兜底配额或默默截断旧高阶数据。
 **2026-10-19 RNG 后续修复**：`generate_pure_random_dataset.py` 的局部 `RandomState(seed)`
 现显式传入幅度采样、随机等位基因处理、冲突重抽和碰撞救援；显式 RNG 的冲突键按固定顺序遍历。
 新 NPZ 记录 `sampling_seed` / `sampling_rng_contract=pure_random_single_stream_v1`。

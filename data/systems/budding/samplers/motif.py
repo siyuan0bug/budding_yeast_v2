@@ -20,8 +20,8 @@ PARALLEL_DISTAL_PAIRS = [
 ]
 
 MASTER_SWITCH_CLUSTERS = [
-    # G1/S Start Switch cluster (Cln3/Bck2/Cln2/Sic1/Cdh1/SBF)
-    ['CLN2', 'CLN3', 'BCK2', 'SIC1', 'CDH1', 'SBF_MBF'],
+    # G1/S Start Switch cluster (Cln3/Bck2/Cln2/Sic1/Cdh1)
+    ['CLN2', 'CLN3', 'BCK2', 'SIC1', 'CDH1'],
     # Anaphase/Exit Switch cluster (Clb2/Cdc20/Pds1/Cdc6/Sic1/APC_Core)
     ['CLB2', 'CDC20', 'PDS1', 'CDC6', 'SIC1', 'APC_Core']
 ]

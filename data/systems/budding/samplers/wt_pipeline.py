@@ -59,7 +59,7 @@ def prepare_wt_candidates(sampler, config, report):
     D_mat = np.full((n_pilot, 10), np.nan)
     pilot_nan = 0
     for i in range(n_pilot):
-        level = int(np.random.choice([1, 2, 3, 4], p=level_quotas))
+        level = int(np.random.choice([1, 2, 3], p=level_quotas))
         cand = build_candidate(level, samplers, ma=sampler.backend)
         if cand is None:
             continue
@@ -74,9 +74,9 @@ def prepare_wt_candidates(sampler, config, report):
     samplers = make_samplers()
     print(f' -> pilot done in {time.time() - t00:.1f}s | fixed-point NaN rate: {pilot_nan / max(1, n_pilot) * 100:.1f}%', flush=True)
     print(f'\n[Phases 1-3] Sampling {n_synthetic} accepted candidates ...', flush=True)
-    n_l = [int(round(q * n_synthetic)) for q in level_quotas[:3]]
+    n_l = [int(round(q * n_synthetic)) for q in level_quotas[:2]]
     n_l.append(n_synthetic - sum(n_l))
-    level_pool = [lv for lv, cnt in zip([1, 2, 3, 4], n_l) for _ in range(cnt)]
+    level_pool = [lv for lv, cnt in zip([1, 2, 3], n_l) for _ in range(cnt)]
     np.random.shuffle(level_pool)
     ledger2 = Ledger(n_synthetic, nan_cap_frac=nan_cap_frac)
     ledger2.edges = ledger.edges
@@ -126,6 +126,11 @@ def prepare_wt_candidates(sampler, config, report):
         if not cand['gal_conv']:
             stats['gal_nonconv'] += 1
         cand = rescue_wt(cand, sampler, report)
+        from ...sampling_policy import valid_candidate
+        checked = valid_candidate(Candidate(1, 'wt', cand['ovr'], level, metadata={'description':cand['desc']}), 'budding')
+        if checked is None:
+            report['module_count_rejected'] += 1
+            continue
         sig = tuple(sorted(((k, round(v, 10)) for k, v in cand['ovr'].items())))
         if sig in seen_sigs:
             dup_internal += 1

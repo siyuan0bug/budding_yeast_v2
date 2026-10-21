@@ -30,11 +30,13 @@ def apply_gene_mutation(*args,rng=None):
 
 
 def sample_mass_random(level=1):
+    if level not in (1,2,3):raise ValueError('Only L1/L2/L3 are supported')
     from .samplers.random import sample_mass_random as sample
     return sample(level,ma=_MASS_SYSTEM)
 
 
 def sample_mass_mutant(level=1):
+    if level not in (1,2,3):raise ValueError('Only L1/L2/L3 are supported')
     from .samplers.mass import sample_mass_mutant as sample
     return sample(level,ma=_SYSTEM)
 

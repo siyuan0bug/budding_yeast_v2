@@ -20,7 +20,7 @@ for i, a in enumerate(GENE_NAMES):
         if common:
             CONVERGENT_TARGETS[a, b] = sorted(common)
 ANTAG_PAIRS = [(u, v) for u, v, s in MODULE_EDGES if s == '-']
-LOF_MODES = {'KO', 'ts', 'DAmP', 'pLOF', 'db', 'cdc24Δ', 'cdc45Δ', 'spindle_defect'}
+LOF_MODES = {'KO', 'ts', 'DAmP', 'pLOF', 'db'}
 GOF_MODES = {'GAL-OE', 'MC', 'CA', 'APC-A', 'TAB6-1'}
 
 def get_mode_polarity(mode):
@@ -175,7 +175,7 @@ def sample_bams_skeleton_and_modes(level, *, ma):
             g1 = str(np.random.choice([g for g in GENE_NAMES if g != g0]))
             pairs.append((g1, str(np.random.choice(list(GROUP_BY_NAME[g1]['modes'].keys())))))
     else:
-        ki = int(np.random.randint(3, 6)) if level == 3 else int(np.random.randint(4, 7))
+        ki = 3 if level == 3 else 3
         strat_desc = f'L{level}_FluxWalk'
         visited = {g0}
         walk_history = [(g0, s0)]

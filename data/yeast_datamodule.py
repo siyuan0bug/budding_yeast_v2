@@ -28,11 +28,13 @@ class YeastDataModule(pl.LightningDataModule):
         graph_view='hybrid',
         preprocessing_state=None,
         fit_scope=None,
+        sensitivity_path=None,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['preprocessing_state'])
 
         self.dataset_path = dataset_path
+        self.sensitivity_path = sensitivity_path
         self.adj_matrix_path = adj_matrix_path
         self.batch_size_synth = batch_size_synth
         self.batch_size_real = batch_size_real
@@ -406,6 +408,9 @@ class YeastDataModule(pl.LightningDataModule):
         }
         if self._expected_preprocessing is not None:
             assert_compatible(self._expected_preprocessing, self.preprocessing_state())
+        if self.sensitivity_path is not None:
+            from .sensitivity import attach_sensitivities
+            attach_sensitivities(self, self.sensitivity_path)
         self._setup_done = True
 
     def train_dataloader(self):

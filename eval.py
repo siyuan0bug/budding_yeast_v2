@@ -98,7 +98,6 @@ def load_model_from_checkpoint(ckpt_path, device='cpu', *, graph_load_policy='cu
         causal_matrix=hp.get('causal_matrix') if adj_matrix_path is None else None,
         adj_matrix_path=adj_matrix_path,
         graph_view=graph_view or hp.get('graph_view', 'hybrid'), graph_load_policy=graph_load_policy,
-        constructor_contract_version=hp.get('constructor_contract_version', 0),
     )
     model = YeastLitModule(**init_kwargs)
     model.on_load_checkpoint(ckpt)

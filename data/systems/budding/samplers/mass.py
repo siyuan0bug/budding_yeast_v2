@@ -97,7 +97,7 @@ def _sample_convergent(ki, boost=None):
     
     # 2-hop biological pathway fan-in / downstream effector rescue (Tier 2/3 generic prior):
     # 50% chance: if target has downstream targets (_OUT_ALL[target]),
-    # pick one as the downstream effector (e.g., SBF_MBF -> CLN2/CLB5)
+    # pick one as the downstream effector (e.g., CDC14 -> SIC1/CDC6)
     downstream = sorted(_OUT_ALL.get(target, set()) - {a, b, target})
     if downstream and np.random.rand() < 0.50:
         effector = str(np.random.choice(downstream))
@@ -172,13 +172,13 @@ def sample_skeleton(level, boost=None):
         if level == 2:
             ki = 2
         elif level == 3:
-            ki = int(np.random.randint(3, 6))
+            ki = 3
         else:
-            ki = int(np.random.randint(4, 7))
+            ki = 3
         return _sample_random_genes(ki, boost), 'random'
     if level == 2:
         return _sample_L2(boost)
-    ki = int(np.random.randint(3, 6)) if level == 3 else int(np.random.randint(4, 7))
+    ki = 3 if level == 3 else 3
     cls = _L34_PICKER.pick()
     if cls == 'convergent':   return _sample_convergent(ki, boost), cls
     if cls == 'cascade':      return _walk_cascade(ki, boost), cls
@@ -231,9 +231,9 @@ def sample_mass_mutant(level=1, *, ma):
 
     Selection = the structure-aware skeleton inlined in Part 5.5 above
     (all Tier 2/3 sources, zero test-set contact):
-      - gene weights  : uniform over 27 modules (v5.1 R2; degree+1 and engine
+      - gene weights  : uniform over current modules (v5.1 R2; degree+1 and engine
                         P_bio_G retained as ablation arms)
-      - L1            : shuffled 84-cell (gene, mode) grid rotation (coverage)
+      - L1            : shuffled legal (gene, mode) grid rotation (coverage)
       - L2/L3/L4      : 50% structure-class quotas from the 36-edge module
                         graph (C-A/C-B/C-C/C-D; cascade/star/antag_core/
                         orthogonal) + 50% i.i.d. uniform genes (v5.1 R3)

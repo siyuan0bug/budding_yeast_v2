@@ -1,4 +1,10 @@
-# 1. 出芽酵母神经算子代理模型系统架构与 70+ 模型全景 (Architecture & Model Zoo)
+# 1. 出芽酵母神经算子代理模型系统架构与 标准基线与原创模型全景 (Architecture & Model Zoo)
+
+> **2026-10-21 标准 baseline 清理**：`models/baselines` 只保留选定的标准骨干和必要的参数/初值/时间输入输出适配。
+> 入口统一为 `mlp, resnet, unet, kan, transformer, mamba, deeponet, fno, wno, mwt, gnot, transolver, lno, neural_ode, sc_fno, bregman_fno, lamo, konode`。
+> 旧调制版、时序预测版和简化同名版已删除，不保留兼容别名；下方较早的 checkpoint 兼容说明仅代表历史状态。
+> 新增标准一维 U-Net；完整 CLI/调参/训练/checkpoint 验证见 [链路核查](BASELINE_CLI_CHAIN_AUDIT_2026-10-21.md)。
+> 来源、适配范围及 SC-FNO 数据要求见 [当前基线清单](BASELINE_SELECTION_AUDIT.md)。
 
 > **2026-10-21 Fission监控复核**：原BIO/pattern保持不变；无pattern训练目标用-1并跳过分类交叉熵，
 > W&B按Fission自身BIO/pattern选样，显示16变量/300分钟，不套用Budding的监控编号或六分类。
@@ -15,7 +21,7 @@
 > 范围、兼容性与测试见 [运行契约修复](RUNTIME_CONTRACT_FIX_2026-10-19.md)。
 
 > **版本**：v3.0 (2026-10)  
-> **核心定位**：出芽酵母细胞周期动力学代理模型的核心架构设计与模型全景字典。系统基于 **PyTorch Lightning** 框架，涵盖 40+ 经典/前沿基线（Baselines）与 30+ 专为细胞周期系统生物学定制的原创神经算子（Ours）。
+> **核心定位**：出芽酵母细胞周期动力学代理模型的核心架构设计与模型全景字典。系统基于 **PyTorch Lightning** 框架，涵盖选定的 18 个标准基线实现（Baselines）与 30+ 专为细胞周期系统生物学定制的原创神经算子（Ours）。
 
 > **2026-10-18 checkpoint 核验**：参考 `BioRefinerPlus` 的粗预测是
 > `BioMechPathwayOnly`，未启用 NeuralEventTrigger；两个主力 checkpoint 的
@@ -46,10 +52,7 @@
   - [1.1 核心数据流与张量契约 (Tensor Contracts)](#11-核心数据流与张量契约-tensor-contracts)
   - [1.2 PyTorch Lightning 统一调度生命周期](#12-pytorch-lightning-统一调度生命周期)
   - [1.3 前向推理标准接口 `forward_ic_time`](#13-前向推理标准接口-forward_ic_time)
-- [二、40+ 权威基线模型库 (`models/baselines/`)](#二40-权威基线模型库-modelsbaselines)
-  - [2.1 经典与前沿神经算子 (Neural Operators)](#21-经典与前沿神经算子-neural-operators)
-  - [2.2 时序 Transformer 与大模型结构](#22-时序-transformer-与大模型结构)
-  - [2.3 连续动力系统与 Koopman 基线](#23-连续动力系统与-koopman-基线)
+- [二、标准基线模型库 (`models/baselines/`)](#二40-权威基线模型库-modelsbaselines)
 - [三、30+ 原创生物神经算子库 (`models/ours/`)](#三30-原创生物神经算子库-modelsours)
   - [3.1 BioRefiner 进化谱系 (BioRefinerPlus / Attractor / CausalReach)](#31-biorefiner-进化谱系-biorefinerplus--attractor--causalreach)
   - [3.2 HANO 多尺度分层自适应神经算子](#32-hano-多尺度分层自适应神经算子)
@@ -129,54 +132,54 @@ def forward_ic_time(self, x: torch.Tensor, params: torch.Tensor) -> torch.Tensor
 
 ---
 
-## 二、40+ 权威基线模型库 (`models/baselines/`)
+## 二、标准基线模型库 (`models/baselines/`)
 
-代码库在 `models/baselines/` 统一集成了 40 余种经典与前沿基线，所有基线均经过针对 $39 \times 500$ 动力学网格的适配优化：
+当前只保留 18 个具体实现（MLP / ResNet 分别计数），均不添加额外的参数调制、图先验或跨注意力。
+GNOT 原有的异构注意力/专家门控、Transolver 原有的物理注意力等属于原模型自身机制，予以保留。
+所有模型使用完整参数及初值；标准名称不再带 pure / ref / 1d 等重复后缀。
 
-### 2.1 经典与前沿神经算子 (Neural Operators)
-| 模型代号 (`model`) | 类名 | 核心机制与架构 | 论文出处 |
-|:---|:---|:---|:---|
-| `pure_fno` / `fno1d` | `PureFNO_ICLR2021`, `FNO1d_Standard` | 1D 傅里叶神经算子，频域低频截断卷积。 | Li et al., ICLR 2021 |
-| `pure_wno` | `PureWNO_2022` | 离散小波神经算子（DWT+IDWT），具备局部时频多分辨率特性。 | Tripura et al., 2022 |
-| `cno1d` | `CNO1d` | 连续神经算子，基于下采样与连续卷积核。 | Raonic et al., 2023 |
-| `mwt1d` | `MWT1d` | 多小波变换神经算子（Multiwavelet Transformer）。 | Gupta et al., 2021 |
-| `deeponet` | `DeepONet` | 分支网络（Branch Net 处理参数）与主干网络（Trunk Net 处理时空坐标）点积。 | Lu et al., Nat. MI 2021 |
-| `gcgnet` | `GCGNetYeast` | 门控因果图神经算子。 | 2024 |
-| `gnot` | `GNOT` | 通用神经算子 Transformer，支持多参数交叉注意力。 | Hao et al., ICML 2023 |
-| `transolver1d` / `transolver3_1d` | `Transolver1d`, `Transolver3_1d` | 物理注意力 Transformer 神经算子，计算隐式物理切片。 | Wu et al., 2024 |
-| `dpot1d` | `DPOT1d` | 去噪预训练算子 Transformer。 | 2024 |
-| `sc_fno` | `SC_FNO` | 空间-通道解耦傅里叶神经算子。 | SOTA 2025 |
-| `bregman_fno` / `bregman_wno` | `BregmanFNO`, `BregmanWNO` | 基于 Bregman 散度正则化的能量守恒神经算子。 | SOTA 2025 |
-| `ncflow` | `NCFlow` | 神经因果连续流算子。 | 2025 |
-| `iganet_transformer` | `IgaNetTransformer` | 等几何分析（Isogeometric Analysis）增强 Transformer。 | 2025 |
+| 入口 | 源文件 | 保留的核心机制 |
+| --- | --- | --- |
+| `mlp` | `mlp.py` | 全初值、参数、时间拼接后 MLP |
+| `resnet` | `resnet.py` | 同输入的普通残差 MLP |
+| `unet` | `unet.py` | 一维双卷积、池化、转置卷积和 skip 拼接 |
+| `kan` | `kan.py` | efficient-kan 的 B-spline 边函数，逐时间点条件回归 |
+| `transformer` | `transformer.py` | Tau_BNO 多头自注意力 encoder 及逐 token 回归 |
+| `mamba` | `mamba.py` | Tau_BNO 回归骨干及官方 Mamba-1 选择性状态空间 |
+| `deeponet` | `deeponet.py` | branch 编码初值和参数，trunk 编码时间 |
+| `fno` | `fno.py` | 谱卷积 + 点卷积 |
+| `wno` | `wno.py` | 最粗 low/detail 系数位置核 + 点卷积 |
+| `mwt` | `mwt.py` | 多项式滤波、递归 A/B/C 和重建 |
+| `gnot` | `gnot.py` | 官方异构归一化注意力及几何专家 |
+| `transolver` | `transolver.py` | 官方 slice -> slice-token attention -> deslice |
+| `lno` | `lno.py` | 官方 PhCA 编码/解码与潜空间注意力 |
+| `neural_ode` | `neural_ode.py` | 条件向量场和数值积分 |
+| `sc_fno` | `sc_fno.py` | 同 FNO 骨干 + 参考灵敏度训练损失 |
+| `bregman_fno` | `bregman_fno.py` | Bregman 双状态后激活更新 |
+| `lamo` | `lamo.py` | slice / Hydra / deslice，未融合 SSD 计算后端 |
+| `konode` | `konode.py` | Koopman 模式驱动演化向量场权重 |
 
-### 2.2 时序 Transformer 与大模型结构
-| 模型代号 (`model`) | 类名 | 核心机制与参数注入方式 | 论文出处 |
-|:---|:---|:---|:---|
-| `itransformer` | `iTransformer` | 倒置 Transformer（以 39 变量作为 Token，时间步作为通道），FiLM 注入参数。 | Liu et al., ICLR 2024 |
-| `dlinear` / `nlinear` / `linear` | `DLinear`, `NLinear`, `Linear` | 趋势-周期分解单层线性投影基线。 | Zeng et al., AAAI 2023 |
-| `autoformer` | `Autoformer` | 自动相关机制（Auto-Correlation）与时序分解块。 | Wu et al., NeurIPS 2021 |
-| `informer` / `iinformer` | `Informer`, `iInformer` | ProbSparse 自注意力蒸馏机制。 | Zhou et al., AAAI 2021 |
-| `flowformer` / `iflowformer` | `Flowformer`, `iFlowformer` | 基于流形注意力（Flow Attention）的高效时序 Transformer。 | 2022 |
-| `reformer` / `ireformer` | `Reformer`, `iReformer` | 局部敏感哈希（LSH）注意力机制。 | Kitaev et al., ICLR 2020 |
-| `flashformer` / `iflashformer`| `Flashformer`, `iFlashformer` | FlashAttention 极速注意力时序网络。 | 2023 |
-| `vanilla_transformer` | `VanillaTransformer` | 标准时序编码器-解码器架构。 | Vaswani et al., 2017 |
-| `fedformer` | `FEDformer` | 频域增强时序 Transformer（Frequency Enhanced Decomposition）。 | Zhou et al., ICML 2022 |
-| `pyraformer` | `Pyraformer` | 金字塔注意力时序多尺度模型。 | Liu et al., ICLR 2022 |
+新增三类模型的输入输出、固定核心配置、参数量及 Mamba 后端边界见 [适配说明](OPERATORFREE_BASELINES_2026-10-21.md)。`width=64,n_blocks=4,V=39,P=141` 时，KAN / Transformer / Mamba 分别为 **263,680 / 171,687 / 242,343** 个参数。
 
-### 2.3 连续动力系统与 Koopman 基线
-| 模型代号 (`model`) | 类名 | 核心机制 | 论文出处 |
-|:---|:---|:---|:---|
-| `neural_ode` | `NeuralODEModel` | 连续深度伴随神经微分方程（采用 `torchdiffeq` 积分器）。 | Chen et al., NeurIPS 2018 |
-| `konode` | `KoNODE` | Koopman 神经常微分方程（线性隐空间连续演化）。 | 2024 |
-| `koopman_dmd` | `DeepKoopmanOperator` | 深度动态模态分解（Deep Dynamic Mode Decomposition）。 | Lusch et al., Nat. Comm. 2018 |
-| `latent_lno` | `LatentNeuralOperator` | 隐空间 Laplace 神经算子。 | 2023 |
-| `lamo` | `LaMO_RegularGrid` | 大规模多模态代理神经算子。 | 2024 |
-| `wdno` | `WDNO` | 小波分解神经算子。 | 2023 |
-| `icon` | `ICONGPT` | 算子上下文学习（In-Context Operator Learning）。 | Yang et al., NeurIPS 2023 |
-| `noble` | `NOBLE` | 非线性算子双层学习引擎。 | 2024 |
+U-Net 使用 `[全部 y0, 全部 P, t]` 作为输入通道，输出所有变量轨迹。`width=64, n_blocks=4, V=39, P=141` 时共 **10,849,383** 个参数；`n_blocks` 是下采样/上采样层数。时间长度补齐至 `2**n_blocks` 的倍数并在输出裁回，不添加 FiLM、注意力或图模块。
 
----
+`X:(B,V,2,T)` 的特征 0 是重复初值，特征 1 是时间；`P:(B,D)`；输出 `(B,V,T)`。
+训练入口传递真实 T 给 WNO，支持对应分解层数允许的网格长度。FNO/MWT/WNO 要求均匀查询。
+
+```bash
+python train.py --model fno --dataset_name /absolute/path/to/dataset.npz --loss_type hybrid_mse_rel --al_strategy none --width 64 --modes 24 --n_blocks 4
+python train.py --model unet --dataset_name /absolute/path/to/dataset.npz --loss_type hybrid_mse_rel --al_strategy none --width 32 --n_blocks 3
+python train.py --model kan --dataset_name /absolute/path/to/dataset.npz --width 64 --n_blocks 4 --loss_type hybrid_mse_rel --al_strategy none
+# 将 kan 替换为 transformer / mamba，参数不变。
+# 将 fno 分别替换为 wno / mwt / gnot / transolver / lno 等。
+python train.py --model sc_fno --dataset_name /absolute/path/to/dataset.npz --loss_type sc_sensitivity --sensitivity_path /absolute/path/to/reference_sensitivities.npz --al_strategy none
+```
+
+SC-FNO 的监督文件、归一化指纹及初值固定偏导要求见审计文档；没有参考灵敏度时明确拒绝训练，
+不能自动退化为普通 FNO 后继续以 SC-FNO 名称报告。当前 SC-FNO 参考数据路径只支持 one_time、无 AL。
+
+原 ours 的 WNO/LNO 入口改为 `cross_wno` / `cross_lno`，避免与标准 `wno` / `lno` 混淆。
+旧版 checkpoint 不自动转换到标准骨干，旧实验指标也不自动改名为新模型结果。
 
 ## 三、30+ 原创生物神经算子库 (`models/ours/`)
 

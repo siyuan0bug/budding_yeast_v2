@@ -1,4 +1,4 @@
-"""WT-Blind specialized QSS/inversion/ledger algorithms, preserving their own 46-edge topology and strength policy."""
+"""WT-Blind specialized QSS/inversion/ledger algorithms, using its pruned specialized topology and original strength policy."""
 import numpy as np
 import math
 from ..parameters import get_default_params
@@ -14,7 +14,31 @@ TRAJ_MAX = 1000.0
 N_LOG_BANDS = 8
 BOUNDARY_LO, BOUNDARY_HI = (0.5, 2.0)
 MASS_LIMIT = 10.0
-MODULE_EDGES = [('CLN3', 'SBF_MBF', '+'), ('BCK2', 'SBF_MBF', '+'), ('CLN2', 'SBF_MBF', '+'), ('CLB5', 'SBF_MBF', '+'), ('CLB2', 'SBF_MBF', '-'), ('SBF_MBF', 'CLN2', '+'), ('SBF_MBF', 'CLB5', '+'), ('SBF_MBF', 'CDC6', '+'), ('CLB2', 'Mcm1', '+'), ('Mcm1', 'CLB2', '+'), ('Mcm1', 'SWI5', '+'), ('Mcm1', 'CDC20', '+'), ('Mcm1', 'PDS1', '+'), ('CLB2', 'CDC20', '+'), ('CDC20', 'CLB2', '-'), ('CDC20', 'CLB5', '-'), ('CDC20', 'PDS1', '-'), ('CDH1', 'CLB2', '-'), ('CDH1', 'PDS1', '-'), ('CDC14', 'CDH1', '+'), ('CDC14', 'SIC1', '+'), ('CDC14', 'CDC6', '+'), ('CLB2', 'CDH1', '-'), ('CLB5', 'CDH1', '-'), ('CLN2', 'CDH1', '-'), ('CLN3', 'CDH1', '-'), ('SIC1', 'CLB2', '-'), ('SIC1', 'CLB5', '-'), ('CDC6', 'CLB2', '-'), ('CDC6', 'CLB5', '-'), ('SWI5', 'SIC1', '+'), ('SWI5', 'CDC6', '+'), ('NET1', 'CDC14', '-'), ('PPX', 'NET1', '+'), ('CDC15', 'NET1', '+'), ('TEM1', 'CDC15', '+'), ('BUB2', 'TEM1', '-'), ('MAD2', 'CDC20', '-'), ('PDS1', 'ESP1', '-'), ('CDC28', 'SIC1', '+'), ('CDC28', 'CDC6', '+'), ('CDC28', 'CDH1', '+'), ('CDC28', 'SBF_MBF', '+'), ('CDC28', 'ORI_BUD_SPN', '+'), ('CLB2', 'ORI_BUD_SPN', '+'), ('CLB5', 'ORI_BUD_SPN', '+')]
+MODULE_EDGES = [('CLB2', 'CDC20', '+'),
+ ('CDC20', 'CLB2', '-'),
+ ('CDC20', 'CLB5', '-'),
+ ('CDC20', 'PDS1', '-'),
+ ('CDH1', 'CLB2', '-'),
+ ('CDH1', 'PDS1', '-'),
+ ('CDC14', 'CDH1', '+'),
+ ('CDC14', 'SIC1', '+'),
+ ('CDC14', 'CDC6', '+'),
+ ('CLB2', 'CDH1', '-'),
+ ('CLB5', 'CDH1', '-'),
+ ('CLN2', 'CDH1', '-'),
+ ('CLN3', 'CDH1', '-'),
+ ('SIC1', 'CLB2', '-'),
+ ('SIC1', 'CLB5', '-'),
+ ('CDC6', 'CLB2', '-'),
+ ('CDC6', 'CLB5', '-'),
+ ('SWI5', 'SIC1', '+'),
+ ('SWI5', 'CDC6', '+'),
+ ('NET1', 'CDC14', '-'),
+ ('CDC15', 'NET1', '+'),
+ ('TEM1', 'CDC15', '+'),
+ ('BUB2', 'TEM1', '-'),
+ ('MAD2', 'CDC20', '-'),
+ ('PDS1', 'ESP1', '-')]
 GROUP_BY_NAME = {g['name']: g for g in BINDING_GROUPS.values()}
 GENE_NAMES = sorted(GROUP_BY_NAME.keys())
 USE_ENGINE_P_BIO = False
@@ -96,17 +120,108 @@ ALL_PAIRS = [(a, b) for i, a in enumerate(GENE_NAMES) for b in GENE_NAMES[i + 1:
 PAIR_LISTS = {'C-A': [], 'C-B': [], 'C-D': []}
 for a, b in ALL_PAIRS:
     PAIR_LISTS[_pair_class(a, b)].append((a, b))
-STAR_CENTERS = ['CDC28', 'CLB2', 'MDT']
-STAR_LEAVES = {'CDC28': sorted(ADJ['CDC28']), 'CLB2': sorted(ADJ['CLB2']), 'MDT': [n for n in GENE_NAMES if n != 'MDT']}
-_CD28_EPS = ['ec1k2', 'ec1n2', 'ec1b5', 'ec1b2', 'ec1n3', 'ef6k2', 'ef6n2', 'ef6b5', 'ef6b2', 'ef6n3', 'eicdhn2', 'eicdhn3', 'eicdhb5', 'eicdhb2', 'esbfn2', 'esbfn3', 'esbfb5', 'eorib5', 'eorib2', 'ebudn2', 'ebudn3', 'ebudb5']
-TOUCH = {('CLN2', 'KO'): {'ksn2pp'}, ('CLN2', 'GAL-OE'): {'ksn2p', 'ksn2pp'}, ('CLN2', 'MC'): {'ksn2pp'}, ('CLN2', 'ts'): {'ksn2p', 'ksn2pp'}, ('CLN3', 'KO'): {'C0'}, ('CLN3', 'GAL-OE'): {'C0'}, ('CLN3', 'MC'): {'C0'}, ('CLB2', 'KO'): {'ksb2p', 'ksb2pp'}, ('CLB2', 'GAL-OE'): {'ksb2p'}, ('CLB2', 'MC'): {'ksb2p', 'ksb2pp'}, ('CLB2', 'ts'): {'ksb2p', 'ksb2pp'}, ('CLB2', 'db'): {'kdb2P', 'kdb2pp'}, ('CLB2', 'pLOF'): {'ksb2p', 'ksb2pp'}, ('CLB2', 'CA'): {'kdib2'}, ('CLB5', 'KO'): {'ksb5p', 'ksb5pp'}, ('CLB5', 'GAL-OE'): {'ksb5p'}, ('CLB5', 'MC'): {'ksb5p', 'ksb5pp'}, ('CLB5', 'db'): {'kdb5pp'}, ('SIC1', 'KO'): {'ksc1p', 'ksc1pp'}, ('SIC1', 'GAL-OE'): {'ksc1p'}, ('SIC1', 'MC'): {'ksc1p', 'ksc1pp'}, ('SIC1', 'db'): {'kd3c1'}, ('SIC1', 'PM'): {'kd2c1', 'kd3c1'}, ('CDC6', 'KO'): {'ksf6p', 'ksf6pp', 'ksf6ppp'}, ('CDC6', 'GAL-OE'): {'ksf6p'}, ('CDC6', 'MC'): {'ksf6p', 'ksf6pp', 'ksf6ppp'}, ('CDC6', 'DAmP'): {'ksf6p', 'ksf6pp', 'ksf6ppp'}, ('BCK2', 'KO'): {'B0'}, ('BCK2', 'MC'): {'B0'}, ('SWI5', 'KO'): {'ksswip', 'ksswipp'}, ('SWI5', 'GAL-OE'): {'ksswip'}, ('CDC20', 'KO'): {'ks20p', 'ks20pp'}, ('CDC20', 'GAL-OE'): {'ks20p'}, ('CDC20', 'MC'): {'ks20p', 'ks20pp'}, ('CDC20', 'ts'): {'ks20p', 'ks20pp'}, ('CDC20', 'APC-A'): {'ka20pp'}, ('CDC20', 'DAmP'): {'ks20p', 'ks20pp'}, ('CDH1', 'KO'): {'kscdh', 'init_CDH1T', 'init_CDH1'}, ('CDH1', 'CA'): {'kicdhpp', 'kscdh'}, ('CDC14', 'ts'): {'ks14', 'kppc1', 'kppf6', 'kaswi', 'kacdhpp'}, ('CDC14', 'GAL-OE'): {'ks14'}, ('CDC14', 'MC'): {'ks14'}, ('CDC14', 'DAmP'): {'ks14'}, ('NET1', 'TAB6-1'): {'kasrent', 'kasrentp'}, ('NET1', 'GAL-OE'): {'ksnet'}, ('NET1', 'ts'): {'kasrent', 'kasrentp'}, ('NET1', 'DAmP'): {'ksnet'}, ('TEM1', 'KO'): {'Tem1T', 'ka15pp', 'init_Tem1'}, ('TEM1', 'GAL-OE'): {'Tem1T'}, ('TEM1', 'MC'): {'Tem1T'}, ('TEM1', 'ts'): {'Tem1T', 'ka15pp'}, ('TEM1', 'DAmP'): {'Tem1T'}, ('CDC15', 'KO'): {'Cdc15T', 'kkpnetpp', 'init_Cdc15'}, ('CDC15', 'GAL-OE'): {'Cdc15T'}, ('CDC15', 'MC'): {'Cdc15T'}, ('CDC15', 'ts'): {'kkpnetpp'}, ('CDC15', 'DAmP'): {'Cdc15T'}, ('PPX', 'KO'): {'ksppx'}, ('PPX', 'GAL-OE'): {'ksppx'}, ('PPX', 'ts'): {'kppnetpp'}, ('PPX', 'db'): {'kdppxpp'}, ('PDS1', 'KO'): {'ks1pdspp', 'ks2pdspp'}, ('PDS1', 'GAL-OE'): {'kspdsp'}, ('PDS1', 'db'): {'kd2pdspp', 'kd3pdspp'}, ('ESP1', 'ts'): {'kasesp', 'kdiesp'}, ('ESP1', 'GAL-OE'): {'ESP1T'}, ('MAD2', 'CSL'): {'Vi20', 'Vi20_active'}, ('BUB2', 'CKO'): {'kbub2', 'BUB2_active', 'init_BUB2'}, ('SBF_MBF', 'KO'): {'kasbf', 'ksn2pp', 'ksb5pp'}, ('SBF_MBF', 'CA'): {'is_sbf_ca', 'kasbf', 'kisbfpp'}, ('Mcm1', 'ts'): {'kamcm'}, ('Mcm1', 'KO'): {'kamcm'}, ('APC_Core', 'APC-A'): {'ka20pp'}, ('APC_Core', 'ts'): {'ks20p', 'ks20pp', 'kscdh', 'init_CDH1T', 'init_CDH1'}, ('ORI_BUD_SPN', 'perturb'): {'ksori', 'ksbud', 'ksspn'}, ('ORI_BUD_SPN', 'cdc24Δ'): {'ksbud'}, ('ORI_BUD_SPN', 'cdc45Δ'): {'ksori'}, ('ORI_BUD_SPN', 'spindle_defect'): {'ksspn'}, ('MDT', 'MDT'): {'mdt'}, ('CDC5_Proxy', 'KO'): {'ksppx'}, ('CDC5_Proxy', 'db'): {'kdppxpp'}, ('CDC28', 'ts'): set(_CD28_EPS), ('CDC28', 'pLOF'): set(_CD28_EPS), ('SCC1', 'scc1-RR'): {'kasesp'}}
+STAR_CENTERS = ['CLB2', 'MDT']
+STAR_LEAVES = {'CLB2': sorted(ADJ['CLB2']), 'MDT': [n for n in GENE_NAMES if n != 'MDT']}
+TOUCH = {('CLN2', 'KO'): {'ksn2pp'},
+ ('CLN2', 'GAL-OE'): {'ksn2pp', 'ksn2p'},
+ ('CLN2', 'MC'): {'ksn2pp'},
+ ('CLN2', 'ts'): {'ksn2pp', 'ksn2p'},
+ ('CLN3', 'KO'): {'C0'},
+ ('CLN3', 'GAL-OE'): {'C0'},
+ ('CLN3', 'MC'): {'C0'},
+ ('CLB2', 'KO'): {'ksb2p', 'ksb2pp'},
+ ('CLB2', 'GAL-OE'): {'ksb2p'},
+ ('CLB2', 'MC'): {'ksb2p', 'ksb2pp'},
+ ('CLB2', 'ts'): {'ksb2p', 'ksb2pp'},
+ ('CLB2', 'db'): {'kdb2pp', 'kdb2P'},
+ ('CLB2', 'pLOF'): {'ksb2p', 'ksb2pp'},
+ ('CLB2', 'CA'): {'kdib2'},
+ ('CLB5', 'KO'): {'ksb5p', 'ksb5pp'},
+ ('CLB5', 'GAL-OE'): {'ksb5p'},
+ ('CLB5', 'MC'): {'ksb5p', 'ksb5pp'},
+ ('CLB5', 'db'): {'kdb5pp'},
+ ('SIC1', 'KO'): {'ksc1pp', 'ksc1p'},
+ ('SIC1', 'GAL-OE'): {'ksc1p'},
+ ('SIC1', 'MC'): {'ksc1pp', 'ksc1p'},
+ ('SIC1', 'db'): {'kd3c1'},
+ ('SIC1', 'PM'): {'kd2c1', 'kd3c1'},
+ ('CDC6', 'KO'): {'ksf6p', 'ksf6pp', 'ksf6ppp'},
+ ('CDC6', 'GAL-OE'): {'ksf6p'},
+ ('CDC6', 'MC'): {'ksf6p', 'ksf6pp', 'ksf6ppp'},
+ ('CDC6', 'DAmP'): {'ksf6p', 'ksf6pp', 'ksf6ppp'},
+ ('BCK2', 'KO'): {'B0'},
+ ('BCK2', 'MC'): {'B0'},
+ ('SWI5', 'KO'): {'ksswip', 'ksswipp'},
+ ('SWI5', 'GAL-OE'): {'ksswip'},
+ ('CDC20', 'KO'): {'ks20p', 'ks20pp'},
+ ('CDC20', 'GAL-OE'): {'ks20p'},
+ ('CDC20', 'MC'): {'ks20p', 'ks20pp'},
+ ('CDC20', 'ts'): {'ks20p', 'ks20pp'},
+ ('CDC20', 'APC-A'): {'ka20pp'},
+ ('CDC20', 'DAmP'): {'ks20p', 'ks20pp'},
+ ('CDH1', 'KO'): {'init_CDH1T', 'init_CDH1', 'kscdh'},
+ ('CDH1', 'CA'): {'kscdh', 'kicdhpp'},
+ ('CDC14', 'ts'): {'kppf6', 'kacdhpp', 'ks14', 'kppc1', 'kaswi'},
+ ('CDC14', 'GAL-OE'): {'ks14'},
+ ('CDC14', 'MC'): {'ks14'},
+ ('CDC14', 'DAmP'): {'ks14'},
+ ('NET1', 'TAB6-1'): {'kasrent', 'kasrentp'},
+ ('NET1', 'GAL-OE'): {'ksnet'},
+ ('NET1', 'ts'): {'kasrent', 'kasrentp'},
+ ('NET1', 'DAmP'): {'ksnet'},
+ ('TEM1', 'KO'): {'ka15pp', 'init_Tem1', 'Tem1T'},
+ ('TEM1', 'GAL-OE'): {'Tem1T'},
+ ('TEM1', 'MC'): {'Tem1T'},
+ ('TEM1', 'ts'): {'ka15pp', 'Tem1T'},
+ ('CDC15', 'KO'): {'init_Cdc15', 'Cdc15T', 'kkpnetpp'},
+ ('CDC15', 'GAL-OE'): {'Cdc15T'},
+ ('CDC15', 'MC'): {'Cdc15T'},
+ ('CDC15', 'ts'): {'kkpnetpp'},
+ ('PDS1', 'KO'): {'ks2pdspp', 'ks1pdspp'},
+ ('PDS1', 'GAL-OE'): {'kspdsp'},
+ ('PDS1', 'db'): {'kd2pdspp', 'kd3pdspp'},
+ ('ESP1', 'ts'): {'kdiesp', 'kasesp'},
+ ('ESP1', 'GAL-OE'): {'ESP1T'},
+ ('MAD2', 'CSL'): {'Vi20_active', 'Vi20'},
+ ('BUB2', 'CKO'): {'BUB2_active', 'kbub2', 'init_BUB2'},
+ ('APC_Core', 'APC-A'): {'ka20pp'},
+ ('APC_Core', 'ts'): {'init_CDH1T', 'init_CDH1', 'kscdh', 'ks20pp', 'ks20p'},
+ ('MDT', 'MDT'): {'mdt'}}
 
 def touch_set(gene, mode):
     return TOUCH.get((gene, mode), set())
-FOLD_MODES = {('CLN2', 'MC'), ('CLN3', 'MC'), ('BCK2', 'MC'), ('CLB2', 'MC'), ('CLB5', 'MC'), ('SIC1', 'MC'), ('CDC6', 'MC'), ('CDC20', 'MC'), ('CDC14', 'MC'), ('TEM1', 'MC'), ('CDC15', 'MC'), ('CLN2', 'ts'), ('CLB2', 'ts'), ('CDC20', 'ts'), ('CDC14', 'ts'), ('NET1', 'ts'), ('CDC28', 'ts'), ('CDC6', 'DAmP'), ('CDC20', 'DAmP'), ('CDC14', 'DAmP'), ('NET1', 'DAmP'), ('TEM1', 'DAmP'), ('CDC15', 'DAmP'), ('CLB2', 'DAmP'), ('CDC28', 'DAmP'), ('CLB2', 'pLOF'), ('CDC28', 'pLOF'), ('CLB2', 'db')}
+FOLD_MODES = {('BCK2', 'MC'),
+ ('CDC14', 'DAmP'),
+ ('CDC14', 'MC'),
+ ('CDC14', 'ts'),
+ ('CDC15', 'MC'),
+ ('CDC20', 'DAmP'),
+ ('CDC20', 'MC'),
+ ('CDC20', 'ts'),
+ ('CDC6', 'DAmP'),
+ ('CDC6', 'MC'),
+ ('CLB2', 'DAmP'),
+ ('CLB2', 'MC'),
+ ('CLB2', 'db'),
+ ('CLB2', 'pLOF'),
+ ('CLB2', 'ts'),
+ ('CLB5', 'MC'),
+ ('CLN2', 'MC'),
+ ('CLN2', 'ts'),
+ ('CLN3', 'MC'),
+ ('NET1', 'DAmP'),
+ ('NET1', 'ts'),
+ ('SIC1', 'MC'),
+ ('TEM1', 'MC')}
 RESIDUAL_MODES = {'ts', 'DAmP', 'pLOF', 'db'}
 COMPOSITE_ELIGIBLE = ['CLB2', 'CLB5', 'PDS1', 'SIC1', 'CDH1']
-ALLELE_RESIDUAL = {('PPX', 'ts'): ['kppnetpp'], ('CDC5_Proxy', 'ts'): ['kppnetpp'], ('CDC15', 'ts'): ['kkpnetpp'], ('Mcm1', 'ts'): ['kamcm'], ('TEM1', 'ts'): ['Tem1T', 'ka15pp'], ('ESP1', 'ts'): ['kasesp', 'kdiesp'], ('CLB5', 'db'): ['kdb5pp'], ('PDS1', 'db'): ['kd2pdspp', 'kd3pdspp'], ('SIC1', 'db'): ['kd3c1'], ('SIC1', 'PM'): ['kd2c1', 'kd3c1'], ('PPX', 'db'): ['kdppxpp'], ('CDC5_Proxy', 'db'): ['kdppxpp']}
+ALLELE_RESIDUAL = {('CDC15', 'ts'): ['kkpnetpp'],
+ ('TEM1', 'ts'): ['Tem1T', 'ka15pp'],
+ ('ESP1', 'ts'): ['kasesp', 'kdiesp'],
+ ('CLB5', 'db'): ['kdb5pp'],
+ ('PDS1', 'db'): ['kd2pdspp', 'kd3pdspp'],
+ ('SIC1', 'db'): ['kd3c1'],
+ ('SIC1', 'PM'): ['kd2c1', 'kd3c1']}
 
 class LogBandSampler:
     """log10-uniform band sampler with exact per-band quota equalization."""
@@ -340,7 +455,20 @@ def compute_D(p, mdt):
     D[9] = fp_meta['PDS1'] * p['kasesp'] / max(p['kdiesp'] + fp_meta['Vdpds'], EPS)
     return D
 GAL_ALPHA_CAP_MULT = 100.0
-_NATIVE_SCALE_PARAMS = {'CLN2': ('ksn2p', 'ksn2pp'), 'CLN3': ('C0',), 'CLB5': ('ksb5p', 'ksb5pp'), 'CLB2': ('ksb2p', 'ksb2pp'), 'SIC1': ('ksc1p', 'ksc1pp'), 'CDC6': ('ksf6p', 'ksf6pp', 'ksf6ppp'), 'SWI5': ('ksswip', 'ksswipp'), 'CDC20': ('ks20p', 'ks20pp'), 'CDC14': ('ks14',), 'NET1': ('ksnet',), 'TEM1': ('Tem1T',), 'CDC15': ('Cdc15T',), 'PPX': ('ksppx',), 'CDC5_Proxy': ('ksppx',), 'PDS1': ('kspdsp', 'ks1pdspp', 'ks2pdspp'), 'ESP1': ('ESP1T',)}
+_NATIVE_SCALE_PARAMS = {'CLN2': ('ksn2p', 'ksn2pp'),
+ 'CLN3': ('C0',),
+ 'CLB5': ('ksb5p', 'ksb5pp'),
+ 'CLB2': ('ksb2p', 'ksb2pp'),
+ 'SIC1': ('ksc1p', 'ksc1pp'),
+ 'CDC6': ('ksf6p', 'ksf6pp', 'ksf6ppp'),
+ 'SWI5': ('ksswip', 'ksswipp'),
+ 'CDC20': ('ks20p', 'ks20pp'),
+ 'CDC14': ('ks14',),
+ 'NET1': ('ksnet',),
+ 'TEM1': ('Tem1T',),
+ 'CDC15': ('Cdc15T',),
+ 'PDS1': ('kspdsp', 'ks1pdspp', 'ks2pdspp'),
+ 'ESP1': ('ESP1T',)}
 
 def gal_alpha_cap(gene, p_wt):
     """alpha_cap = 100 x gene's native maximum synthesis capacity (Tier 2)."""
@@ -348,7 +476,20 @@ def gal_alpha_cap(gene, p_wt):
     if scale <= 0.0:
         scale = 1.0
     return GAL_ALPHA_CAP_MULT * scale
-GAL_ALPHA_BIO = {'CDC20': (0.5, 12.0), 'CLB2': (0.002, 1.5), 'SIC1': (0.03, 0.36), 'CDC6': (0.1, 0.6), 'CLB5': (0.004, 0.03), 'PDS1': (0.02, 0.25), 'CLN2': (0.03, 0.3), 'CLN3': (1.0, 5.0), 'TEM1': (2.0, 8.0), 'CDC15': (3.0, 20.0), 'ESP1': (1.5, 6.0), 'CDC14': (0.3, 1.2), 'NET1': (0.15, 0.6), 'PPX': (0.2, 0.6), 'CDC5': (0.2, 0.6), 'CDC5_Proxy': (0.2, 0.6), 'SWI5': (0.02, 0.1)}
+GAL_ALPHA_BIO = {'CDC20': (0.5, 12.0),
+ 'CLB2': (0.002, 1.5),
+ 'SIC1': (0.03, 0.36),
+ 'CDC6': (0.1, 0.6),
+ 'CLB5': (0.004, 0.03),
+ 'PDS1': (0.02, 0.25),
+ 'CLN2': (0.03, 0.3),
+ 'CLN3': (1.0, 5.0),
+ 'TEM1': (2.0, 8.0),
+ 'CDC15': (3.0, 20.0),
+ 'ESP1': (1.5, 6.0),
+ 'CDC14': (0.3, 1.2),
+ 'NET1': (0.15, 0.6),
+ 'SWI5': (0.02, 0.1)}
 GAL_BIO_FALLBACK = (2.0, 30.0)
 GAL_STATS = {'eff_guided': 0, 'bio_draw': 0}
 
@@ -394,10 +535,6 @@ def _gal_theta_and_invert(gene, E, p, fpG1, fpM):
         th = max((p['kppnetp'] + p['kppnetpp'] * fpM['PPX'] - p['kkpnetp'] * M_M) / max(p['kkpnetpp'] * M_M, EPS), 0.05)
         frac = fpM['Vac15'] / max(fpM['Vac15'] + p['ki15'], EPS)
         return (th, E * th / max(frac, 0.05))
-    if gene in ('PPX', 'CDC5_Proxy'):
-        th = p['kppnetp'] / max(p['kppnetpp'], EPS)
-        Vdppx = p['kdppxp'] + p['kdppxpp'] * (p['J20ppx'] + fpM['CDC20a']) * p['Jpds'] / (p['Jpds'] + fpM['PDS1'])
-        return (th, E * th * max(Vdppx, EPS))
     if gene == 'PDS1':
         th = p['kdiesp'] / max(p['kasesp'], EPS)
         return (th, E * th * (fpM['Vdpds'] + p['kasesp'] * fpM['ESP1']) - p['ks1pdspp'] * fpM['SBF'] - p['ks2pdspp'] * fpM['MCM1'] - p['kdiesp'] * fpM['PE'])
@@ -474,7 +611,7 @@ def _pair_weight(a, b, boost=None):
 def _sample_L2(boost=None):
     cls = QuotaPicker_picker_L2()
     if cls == 'C-C':
-        center = str(np.random.choice(['CDC28', 'CLB2', 'MDT'], p=[0.4, 0.4, 0.2]))
+        center = str(np.random.choice(STAR_CENTERS, p=[2/3, 1/3]))
         leaves = [l for l in STAR_LEAVES[center]]
         if not leaves:
             return (sample_L2_fallback(boost), 'C-C')
@@ -510,7 +647,7 @@ def _walk_cascade(ki, boost=None):
     return chain
 
 def _sample_star(ki, boost=None):
-    center = str(np.random.choice(['CDC28', 'CLB2', 'MDT'], p=[0.4, 0.4, 0.2]))
+    center = str(np.random.choice(STAR_CENTERS, p=[2/3, 1/3]))
     leaves = [l for l in STAR_LEAVES[center]]
     out = [center]
     pool = list(leaves) if leaves else list(GENE_NAMES)
@@ -556,7 +693,7 @@ def sample_skeleton(level, boost=None):
         return ([_weighted_gene(boost)], 'L1')
     if level == 2:
         return _sample_L2(boost)
-    ki = int(np.random.randint(3, 6)) if level == 3 else int(np.random.randint(4, 7))
+    ki = 3 if level == 3 else 3
     cls = _L34_PICKER.pick()
     if cls == 'cascade':
         return (_walk_cascade(ki, boost), cls)
@@ -573,7 +710,26 @@ def next_L1_cell():
     cell = _L1_GRID[_L1_IDX['i'] % len(_L1_GRID)]
     _L1_IDX['i'] += 1
     return cell
-PRIMARY_COORDS = {'CLN3': [1], 'BCK2': [1], 'CLN2': [1], 'SBF_MBF': [1], 'CDC28': [1, 2], 'CLB5': [1, 2], 'ORI_BUD_SPN': [2, 9], 'Mcm1': [3], 'CLB2': [3, 5], 'SIC1': [3, 5], 'CDC6': [3], 'SWI5': [3], 'CDC20': [4, 5], 'MAD2': [4], 'APC_Core': [4, 5], 'CDH1': [5], 'CDC14': [5, 6], 'ESP1': [10], 'PDS1': [10], 'SCC1': [10], 'NET1': [6, 7], 'TEM1': [6], 'CDC15': [6, 7], 'PPX': [7], 'CDC5_Proxy': [7], 'MDT': [8], 'BUB2': [6]}
+PRIMARY_COORDS = {'CLN3': [1],
+ 'BCK2': [1],
+ 'CLN2': [1],
+ 'CLB5': [1, 2],
+ 'CLB2': [3, 5],
+ 'SIC1': [3, 5],
+ 'CDC6': [3],
+ 'SWI5': [3],
+ 'CDC20': [4, 5],
+ 'MAD2': [4],
+ 'APC_Core': [4, 5],
+ 'CDH1': [5],
+ 'CDC14': [5, 6],
+ 'ESP1': [10],
+ 'PDS1': [10],
+ 'NET1': [6, 7],
+ 'TEM1': [6],
+ 'CDC15': [6, 7],
+ 'MDT': [8],
+ 'BUB2': [6]}
 
 def _sample_mode(gene):
     modes = list(GROUP_BY_NAME[gene]['modes'].keys())
@@ -730,7 +886,72 @@ class Ledger:
             v = D[d]
             flags.append(bool(np.isfinite(v) and BOUNDARY_LO <= v <= BOUNDARY_HI))
         return flags
-SIGN = {('CLN3', 'GAL-OE'): {0: -1}, ('CLN3', 'MC'): {0: -1}, ('CLN3', 'KO'): {0: 1}, ('BCK2', 'MC'): {0: -1}, ('BCK2', 'KO'): {0: 1}, ('CLN2', 'GAL-OE'): {0: -1}, ('CLN2', 'MC'): {0: -1}, ('CLN2', 'ts'): {0: 1}, ('CLN2', 'KO'): {0: 1}, ('SBF_MBF', 'KO'): {0: 1}, ('SBF_MBF', 'CA'): {0: -1}, ('CDC28', 'ts'): {0: 1, 1: -1}, ('CDC28', 'pLOF'): {0: 1, 1: -1}, ('CLB5', 'GAL-OE'): {0: -1, 1: 1}, ('CLB5', 'MC'): {0: -1, 1: 1}, ('CLB5', 'KO'): {0: 1, 1: -1}, ('CLB5', 'db'): {0: -1, 1: 1}, ('ORI_BUD_SPN', 'cdc45Δ'): {1: -1}, ('ORI_BUD_SPN', 'spindle_defect'): {8: -1}, ('ORI_BUD_SPN', 'cdc24Δ'): {}, ('ORI_BUD_SPN', 'perturb'): {}, ('Mcm1', 'ts'): {2: -1}, ('Mcm1', 'KO'): {2: -1}, ('CLB2', 'GAL-OE'): {2: 1, 4: 1}, ('CLB2', 'MC'): {2: 1, 4: 1}, ('CLB2', 'KO'): {2: -1, 4: 1}, ('CLB2', 'ts'): {2: -1, 4: 1}, ('CLB2', 'pLOF'): {2: -1, 4: 1}, ('CLB2', 'DAmP'): {2: -1, 4: 1}, ('CLB2', 'db'): {4: 1}, ('CLB2', 'CA'): {2: 1, 4: 1}, ('SIC1', 'GAL-OE'): {2: -1, 4: -1}, ('SIC1', 'MC'): {2: -1, 4: -1}, ('SIC1', 'KO'): {2: 1, 4: 1}, ('SIC1', 'db'): {2: -1, 4: -1}, ('SIC1', 'PM'): {2: -1, 4: -1}, ('CDC6', 'GAL-OE'): {2: -1}, ('CDC6', 'MC'): {2: -1}, ('CDC6', 'KO'): {2: 1}, ('CDC6', 'DAmP'): {2: 1}, ('SWI5', 'GAL-OE'): {2: -1}, ('SWI5', 'KO'): {2: 1}, ('CDC20', 'GAL-OE'): {3: 1, 4: -1}, ('CDC20', 'MC'): {3: 1, 4: -1}, ('CDC20', 'KO'): {3: -1, 4: 1}, ('CDC20', 'ts'): {3: -1, 4: 1}, ('CDC20', 'DAmP'): {3: -1, 4: 1}, ('CDC20', 'APC-A'): {3: -1, 4: 1}, ('MAD2', 'CSL'): {3: 1}, ('BUB2', 'CKO'): {5: 1}, ('APC_Core', 'APC-A'): {3: -1, 4: 1}, ('APC_Core', 'ts'): {3: -1, 4: 1}, ('CDH1', 'KO'): {4: 1}, ('CDH1', 'CA'): {4: -1}, ('CDC14', 'GAL-OE'): {4: -1, 5: 1}, ('CDC14', 'MC'): {4: -1, 5: 1}, ('CDC14', 'ts'): {4: 1, 5: -1}, ('CDC14', 'DAmP'): {4: 1, 5: -1}, ('ESP1', 'ts'): {9: -1}, ('ESP1', 'GAL-OE'): {9: 1}, ('PDS1', 'GAL-OE'): {9: 1}, ('PDS1', 'KO'): {9: -1}, ('PDS1', 'db'): {9: 1}, ('SCC1', 'scc1-RR'): {9: -1}, ('NET1', 'TAB6-1'): {5: 1, 6: 1}, ('NET1', 'ts'): {5: 1, 6: 1}, ('NET1', 'DAmP'): {5: 1, 6: 1}, ('NET1', 'GAL-OE'): {5: -1, 6: -1}, ('TEM1', 'GAL-OE'): {5: 1}, ('TEM1', 'MC'): {5: 1}, ('TEM1', 'KO'): {5: -1}, ('TEM1', 'ts'): {5: -1}, ('TEM1', 'DAmP'): {5: -1}, ('CDC15', 'GAL-OE'): {6: 1}, ('CDC15', 'MC'): {6: 1}, ('CDC15', 'KO'): {6: -1}, ('CDC15', 'ts'): {6: -1}, ('CDC15', 'DAmP'): {6: -1}, ('PPX', 'GAL-OE'): {6: -1}, ('PPX', 'KO'): {6: 1}, ('PPX', 'ts'): {6: 1}, ('PPX', 'db'): {6: -1}, ('CDC5_Proxy', 'KO'): {6: 1}, ('CDC5_Proxy', 'db'): {6: -1}, ('MDT', 'MDT'): {}}
+SIGN = {('CLN3', 'GAL-OE'): {0: -1},
+ ('CLN3', 'MC'): {0: -1},
+ ('CLN3', 'KO'): {0: 1},
+ ('BCK2', 'MC'): {0: -1},
+ ('BCK2', 'KO'): {0: 1},
+ ('CLN2', 'GAL-OE'): {0: -1},
+ ('CLN2', 'MC'): {0: -1},
+ ('CLN2', 'ts'): {0: 1},
+ ('CLN2', 'KO'): {0: 1},
+ ('CLB5', 'GAL-OE'): {0: -1, 1: 1},
+ ('CLB5', 'MC'): {0: -1, 1: 1},
+ ('CLB5', 'KO'): {0: 1, 1: -1},
+ ('CLB5', 'db'): {0: -1, 1: 1},
+ ('CLB2', 'GAL-OE'): {2: 1, 4: 1},
+ ('CLB2', 'MC'): {2: 1, 4: 1},
+ ('CLB2', 'KO'): {2: -1, 4: 1},
+ ('CLB2', 'ts'): {2: -1, 4: 1},
+ ('CLB2', 'pLOF'): {2: -1, 4: 1},
+ ('CLB2', 'DAmP'): {2: -1, 4: 1},
+ ('CLB2', 'db'): {4: 1},
+ ('CLB2', 'CA'): {2: 1, 4: 1},
+ ('SIC1', 'GAL-OE'): {2: -1, 4: -1},
+ ('SIC1', 'MC'): {2: -1, 4: -1},
+ ('SIC1', 'KO'): {2: 1, 4: 1},
+ ('SIC1', 'db'): {2: -1, 4: -1},
+ ('SIC1', 'PM'): {2: -1, 4: -1},
+ ('CDC6', 'GAL-OE'): {2: -1},
+ ('CDC6', 'MC'): {2: -1},
+ ('CDC6', 'KO'): {2: 1},
+ ('CDC6', 'DAmP'): {2: 1},
+ ('SWI5', 'GAL-OE'): {2: -1},
+ ('SWI5', 'KO'): {2: 1},
+ ('CDC20', 'GAL-OE'): {3: 1, 4: -1},
+ ('CDC20', 'MC'): {3: 1, 4: -1},
+ ('CDC20', 'KO'): {3: -1, 4: 1},
+ ('CDC20', 'ts'): {3: -1, 4: 1},
+ ('CDC20', 'DAmP'): {3: -1, 4: 1},
+ ('CDC20', 'APC-A'): {3: -1, 4: 1},
+ ('MAD2', 'CSL'): {3: 1},
+ ('BUB2', 'CKO'): {5: 1},
+ ('APC_Core', 'APC-A'): {3: -1, 4: 1},
+ ('APC_Core', 'ts'): {3: -1, 4: 1},
+ ('CDH1', 'KO'): {4: 1},
+ ('CDH1', 'CA'): {4: -1},
+ ('CDC14', 'GAL-OE'): {4: -1, 5: 1},
+ ('CDC14', 'MC'): {4: -1, 5: 1},
+ ('CDC14', 'ts'): {4: 1, 5: -1},
+ ('CDC14', 'DAmP'): {4: 1, 5: -1},
+ ('ESP1', 'ts'): {9: -1},
+ ('ESP1', 'GAL-OE'): {9: 1},
+ ('PDS1', 'GAL-OE'): {9: 1},
+ ('PDS1', 'KO'): {9: -1},
+ ('PDS1', 'db'): {9: 1},
+ ('NET1', 'TAB6-1'): {5: 1, 6: 1},
+ ('NET1', 'ts'): {5: 1, 6: 1},
+ ('NET1', 'DAmP'): {5: 1, 6: 1},
+ ('NET1', 'GAL-OE'): {5: -1, 6: -1},
+ ('TEM1', 'GAL-OE'): {5: 1},
+ ('TEM1', 'MC'): {5: 1},
+ ('TEM1', 'KO'): {5: -1},
+ ('TEM1', 'ts'): {5: -1},
+ ('CDC15', 'GAL-OE'): {6: 1},
+ ('CDC15', 'MC'): {6: 1},
+ ('CDC15', 'KO'): {6: -1},
+ ('CDC15', 'ts'): {6: -1},
+ ('MDT', 'MDT'): {}}
 NEUTRAL_LOG_TOL = 0.05
 
 def direction_signs(edits):

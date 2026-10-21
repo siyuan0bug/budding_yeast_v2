@@ -16,8 +16,8 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
 cd "$SCRIPT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/users/zsy/.conda/envs/neuralop/bin/python}"
-POOL_FILE="${POOL_FILE:-/home/users/zsy/mydata/budding_yeast/budding_pool_1000000_seed42_modular.npz}"
-INIT_DATASET="${INIT_DATASET:-/home/users/zsy/mydata/budding_yeast/al_iter0_10000_210m_500s_modular.npz}"
+POOL_FILE="${POOL_FILE:-/home/users/zsy/mydata/budding_yeast/budding_pool_1000000_seed42_exact3.npz}"
+INIT_DATASET="${INIT_DATASET:-/home/users/zsy/mydata/budding_yeast/al_iter0_10000_210m_500s_exact3.npz}"
 EXP_ROOT="./experiments"
 mkdir -p "$EXP_ROOT" /home/users/zsy/mydata/budding_yeast
 

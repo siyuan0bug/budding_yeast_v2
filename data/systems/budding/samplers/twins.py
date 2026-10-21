@@ -10,7 +10,7 @@ def apply_gene_mutation_A(g_name, m_chosen, alpha, p_wt, p_mut, ovr):
     if g_name=='TEM1' and m_chosen=='ts':
         ovr['init_Tem1']=0.0
 
-TARGET_MODES = {'ts', 'db', 'APC-A', 'TAB6-1', 'CA', 'CSL', 'CKO', 'scc1-RR', 'PM'}
+TARGET_MODES = {'ts', 'db', 'APC-A', 'TAB6-1', 'CA', 'CSL', 'CKO', 'PM'}
 
 def sample_twin_mutant_pair(level, defaults, *, ma):
     """

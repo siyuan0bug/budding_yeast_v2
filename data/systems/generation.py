@@ -12,6 +12,7 @@ import random
 import numpy as np
 
 from .contracts import Candidate
+from .sampling_policy import VERSION, draw_candidate, valid_candidate
 from .dataset_io import write_dataset
 from .registry import get_recipe, resolve_config, get_adapter, make_sampler
 from ..simulation_guards import bounded_ordered_map
@@ -22,7 +23,13 @@ def level_schedule(n, ratios, rng, *, rounding='floor', shuffle=True):
     if n < 0 or r.ndim != 1 or len(r) < 1 or not np.isfinite(r).all() or (r < 0).any() or r.sum() <= 0:
         raise ValueError('Sample count and level ratios must be finite, nonnegative and nonempty')
     r = r / r.sum()
-    if rounding == 'motif':
+    if len(r) == 3:
+        exact = n*r
+        counts = np.floor(exact).astype(int)
+        order = np.argsort(-(exact-counts),kind='stable')
+        counts[order[:n-int(counts.sum())]] += 1
+        counts = counts.tolist()
+    elif rounding == 'motif':
         if len(r) != 5:
             raise ValueError('Motif requires five effective level ratios')
         counts = [round(n*x) for x in r[:3]]
@@ -54,7 +61,7 @@ def ensure_candidate(candidate, sampler=None, report=None, references=None, *, a
     report['collisions'] += 1
     description = candidate.metadata.get('description', '')
     if candidate.metadata.get('pairs'):
-        description = '+'.join(f'{g}[{m}]' for g, m in candidate.metadata['pairs'])
+        description = '+'.join(f'{g}:{m}' if adapter.system_id == 'fission' else f'{g}[{m}]' for g,m in candidate.metadata['pairs'])
     rescue_rng = rescue_rng or adapter.rescue_rng(sampler)
     rescue_limit = sampler.config.max_attempts or 30
     for attempt in range(rescue_limit):
@@ -72,25 +79,32 @@ def ensure_candidate(candidate, sampler=None, report=None, references=None, *, a
     raise RuntimeError(f'Collision rescue exhausted for {candidate.name}; no colliding sample was exported')
 
 
-def prepare_candidates(recipe, config, sampler, report):
+def prepare_candidates(recipe, config, sampler, report, start_id=1):
     adapter = get_adapter(recipe.system)
     candidates = adapter.real_candidates(config.include_real and not config.parameter_only)
-    references = adapter.references()
-    count = int(np.ceil(config.n_samples * recipe.queue_multiplier))
+    references = getattr(sampler,'_references',None)
+    if references is None:references = adapter.references()
+    sampler._references = references
+    count = config.n_samples if config.parameter_only else int(np.ceil(config.n_samples * recipe.queue_multiplier))
     schedule = level_schedule(count, config.level_ratios or recipe.ratios, sampler.schedule_rng(),
                               rounding=recipe.quota_rounding, shuffle=recipe.shuffle_levels)
-    level_counts = Counter()
-    for number, level in enumerate(schedule, 1):
-        overrides, description, refinement, pairs = sampler.sample(int(level))
-        display_number = sampler.display_number(level_counts, number, int(level))
-        candidate = Candidate(number, sampler.candidate_name(description, int(level), display_number),
-                              overrides, int(level), refinement=refinement,
-                              metadata={'description': description, 'pairs': pairs})
-        candidate = ensure_candidate(candidate, sampler, report, references)
+    for number, level in enumerate(schedule, start_id):
+        for _ in range(config.max_attempts or 100):
+            candidate = draw_candidate(sampler, int(level), number, report, references)
+            if not config.parameter_only or recipe.system != 'budding':break
+            # Exact input identity, including IC overrides; no undisclosed 1% cutoff.
+            import hashlib
+            row = adapter.parameter_result(candidate, None)
+            signature = hashlib.sha256(np.r_[row.params,row.y_init].astype(np.float64).tobytes()).digest()
+            seen = getattr(sampler,'_pool_seen',None)
+            if seen is None:sampler._pool_seen = seen = set()
+            if signature not in seen:
+                seen.add(signature);break
+            report['pool_duplicates'] += 1
+        else:raise RuntimeError(f'Pool L{level} capacity exhausted; no repeated candidates exported')
         candidates.append(candidate)
-        level_counts[int(level)] += 1
         adapter.add_reference(references, candidate.overrides)
-    report['sampled_synthetic'] = len(schedule)
+    report['sampled_synthetic'] += len(schedule)
     return candidates
 
 
@@ -156,6 +170,7 @@ def generate_dataset(config):
     dict.update(report, recipe=config.recipe,
                 mutation_profile=config.mutation_profile or recipe.mutation,
                 distribution_profile=config.distribution_profile or recipe.distribution,
+                sampling_policy=VERSION,
                 rng_contract='pure_random_single_stream_v1' if recipe.sampler in ('random', 'random_ko_interval')
                 else 'legacy_algorithms_scoped_v1')
     try:
@@ -164,6 +179,9 @@ def generate_dataset(config):
         candidates = adapter.special_candidates(recipe, config, sampler, report)
         if candidates is None:
             candidates = prepare_candidates(recipe, config, sampler, report)
+        else:
+            checked = [valid_candidate(c, recipe.system) for c in candidates]
+            candidates = [c for c in checked if c is not None]
         if config.parameter_only:
             results = [adapter.parameter_result(c, context) for c in candidates]
         else:
@@ -175,22 +193,55 @@ def generate_dataset(config):
             target = Counter(schedule.tolist())
             state_data = {'level_counts': level_counts, 'target': target,
                           'sampler': sampler, 'report': report, 'recipe': recipe}
-            total_candidates = len(candidates)
-            for result in run_simulations(candidates, config, context):
-                report[result.status] += 1
-                report['simulated'] += 1
-                if report['simulated'] % 5000 == 0:
-                    print(f"  [simulate] {report['simulated']}/{total_candidates} "
-                          f"({100*report['simulated']/total_candidates:.0f}%)", flush=True)
-                if result.trajectory is None:
-                    continue
-                if (not np.isfinite(result.trajectory).all()
-                        or result.trajectory.shape != (len(adapter.spec.variable_names), adapter.spec.steps)):
-                    report['invalid_trajectory'] += 1
-                    continue
-                if not adapter.accept_result(result, state_data, config):
-                    continue
-                results.append(result)
+            budget = config.max_attempts_mult * max(1, config.n_samples)
+            attempted = 0
+            next_id = max((c.sample_id for c in candidates), default=0) + 1
+            while True:
+                remaining_budget = max(0,budget-attempted)
+                real_candidates = [c for c in candidates if c.is_real]
+                candidates = real_candidates + [c for c in candidates if not c.is_real][:remaining_budget]
+                for result in run_simulations(candidates, config, context):
+                    report[result.status] += 1
+                    report['simulated'] += 1
+                    real = result.candidate.is_real
+                    if not real:attempted += 1
+                    if result.trajectory is None:continue
+                    if (not np.isfinite(result.trajectory).all()
+                            or result.trajectory.shape != (len(adapter.spec.variable_names), adapter.spec.steps)):
+                        report['invalid_trajectory'] += 1
+                        continue
+                    checked = valid_candidate(result.candidate, recipe.system)
+                    if checked is None:
+                        report['module_count_rejected_after_simulation'] += 1
+                        continue
+                    result.candidate = checked
+                    level = result.candidate.level
+                    if not real and level_counts[level] >= target[level]:continue
+                    if not adapter.accept_result(result, state_data, config):continue
+                    results.append(result)
+                    if not real:level_counts[level] += 1
+                missing = {level: target[level]-level_counts[level] for level in target
+                           if level_counts[level]<target[level]}
+                if not missing:break
+                if attempted >= budget:
+                    raise RuntimeError(f'Valid-trajectory quota not filled; missing by level: {missing}; '
+                                       f'attempted {attempted}/{budget}. No partial dataset exported')
+                deficit = sum(missing.values())
+                refill = replace(config,n_samples=min(deficit,budget-attempted),include_real=False,
+                                 level_ratios=tuple(missing.get(level,0)/deficit for level in (1,2,3)))
+                report['refill_rounds'] += 1
+                # Preserve WT ledger construction rather than silently bypassing it.
+                candidates = adapter.special_candidates(recipe, refill, sampler, report)
+                if candidates is None:
+                    candidates = prepare_candidates(recipe,refill,sampler,report,start_id=next_id)
+                else:
+                    candidates = [replace(c,sample_id=next_id+i,
+                        name=f'{c.name}_refill{report["refill_rounds"]}') for i,c in enumerate(candidates)]
+                next_id += len(candidates)
+                if not candidates:
+                    raise RuntimeError(f'No refill candidates for missing quotas {missing}')
+            dict.update(report, requested_level_counts=dict(target), saved_level_counts=dict(level_counts),
+                        simulation_attempt_budget=budget)
         results = adapter.finalize(results, config, recipe)
         report['saved_real'] = sum(r.candidate.is_real for r in results)
         if config.include_real and not config.parameter_only:

@@ -103,13 +103,12 @@ class BuddingAdapter:
             accepted = sum(state['level_counts'].values())
             if accepted >= config.n_samples:
                 return False
-            if state['level_counts'][level] >= state['target'][level] and accepted < config.n_samples - 100:
+            if state['level_counts'][level] >= state['target'][level]:
                 return False
             if (compute_trajectory_curvature(result.trajectory) < config.curv_thresh
                     and state['sampler'].rng.rand() > config.flat_prob):
                 state['report']['flatline_filtered'] += 1
                 return False
-            state['level_counts'][level] += 1
         return True
 
     def finalize(self, results, config, recipe):
@@ -202,6 +201,7 @@ class BuddingSampler:
         return row
 
     def sample(self, level):
+        if level not in (1,2,3):raise ValueError('Only L1/L2/L3 are supported')
         m, kind, rng, backend = self.module, self.recipe.sampler, self.rng, self.backend
         refinement = None
         if kind in ('random', 'random_ko_interval'):
@@ -233,6 +233,10 @@ class BuddingSampler:
             overrides, desc, refinement = m.sample_bams_mutant_task(level, ma=backend)
             if not self.config.enable_bisection:
                 refinement = None
+        elif kind == 'wt_blind':
+            cand = m.build_candidate(level, m.make_samplers(), ma=backend)
+            if cand is None:return {}, '', None, None
+            return cand['ovr'], cand['desc'], None, cand['genes_modes']
         else:
             raise ValueError(f'Unsupported Budding sampler: {kind}')
         return overrides, desc, refinement, None

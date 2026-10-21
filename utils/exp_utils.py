@@ -70,6 +70,9 @@ def generate_hparams_signature(
     elif modes is not None:
         parts.append(f"m{modes}")
 
+    if kwargs.get('n_blocks') is not None:
+        parts.append(f"d{kwargs['n_blocks']}")
+
     if batch_size is not None:
         parts.append(f"b{batch_size}")
 
@@ -90,8 +93,6 @@ def generate_hparams_signature(
         parts.append(f"rterms{kwargs['relation_graph_version']}")
     if kwargs.get('module_graph_version'):
         parts.append(f"mdir{kwargs['module_graph_version']}")
-    if kwargs.get('constructor_contract_version'):
-        parts.append(f"ctor{kwargs['constructor_contract_version']}")
     if kwargs.get('runtime_contract_version'):
         parts.append(f"runtime{kwargs['runtime_contract_version']}")
     if kwargs.get('normalization_fit_scope') == 'train_synthetic':

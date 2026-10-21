@@ -47,13 +47,9 @@ OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'deep_genot
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
-# 27 Gene Groups in MASS v4.4
-GENE_GROUPS = [
-    'CLN2', 'CLN3', 'CLB2', 'CLB5', 'SIC1', 'CDC6', 'BCK2', 'SWI5', 'CDC20',
-    'CDH1', 'CDC14', 'NET1', 'TEM1', 'CDC15', 'PPX', 'PDS1', 'ESP1', 'MAD2',
-    'BUB2', 'SBF_MBF', 'Mcm1', 'APC_Core', 'ORI_BUD_SPN', 'MDT', 'CDC5_Proxy',
-    'CDC28', 'SCC1'
-]
+# Follow the current synthetic catalog instead of retaining removed controls.
+from budding_yeast_v2.data.systems.budding.catalog import GENE_NAMES
+GENE_GROUPS = list(GENE_NAMES)
 
 # Real Mutants Master Definitions from Chen (2004) Appendix B Table S5
 from budding_yeast_v2.data.systems.budding.api import REAL_MUTANTS, get_default_params

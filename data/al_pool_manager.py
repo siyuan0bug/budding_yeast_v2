@@ -29,7 +29,7 @@ for p in [_script_dir, _v2_root, _repo_root]:
 from budding_yeast_v2.data.systems.budding import api as ma
 
 
-def select_initial_kmeans(pool_path, n_samples=10000, seed=42):
+def select_initial_kmeans(pool_path, n_samples=10000, seed=42, _indices=None):
     """
     Selects n_samples representatives from the candidate pool using MiniBatchKMeans
     in the asinh(Z) normalized parameter space.
@@ -37,9 +37,25 @@ def select_initial_kmeans(pool_path, n_samples=10000, seed=42):
     print(f"\n[AL Pool Manager] Loading candidate pool from {pool_path}...")
     t0 = time.time()
     pool_data = np.load(pool_path, allow_pickle=True)
+    if _indices is None:
+        from budding_yeast_v2.data.systems.generation import level_schedule
+        from budding_yeast_v2.data.systems.sampling_policy import STATIC_RATIOS, VERSION
+        if str(pool_data.get('sampling_policy','')) != VERSION or 'module_counts' not in pool_data:
+            raise ValueError('Regenerate the pool with exact L1/L2/L3 metadata before initial selection')
+        counts = pool_data['module_counts']
+        pool_data.close()
+        quotas = np.bincount(level_schedule(n_samples,STATIC_RATIOS,np.random.RandomState(seed)),minlength=4)
+        selected=[]
+        for level in (1,2,3):
+            indices=np.flatnonzero(counts==level)
+            if len(indices)<quotas[level]:raise ValueError(f'Insufficient L{level} candidates for initial dataset')
+            if quotas[level]:
+                selected.extend(indices[select_initial_kmeans(pool_path,int(quotas[level]),seed+level,_indices=indices)])
+        return np.asarray(selected,dtype=np.int64)
     params = pool_data['params']  # (N, 141)
     p_mean = pool_data['p_mean']  # (141,)
     p_std = pool_data['p_std']    # (141,)
+    if _indices is not None:params=params[_indices]
     n_pool = params.shape[0]
 
     print(f"  |-- Pool loaded: {n_pool} samples, {params.shape[1]} parameters ({time.time() - t0:.2f}s)")
@@ -219,6 +235,22 @@ def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
     labels_arr = np.array(all_labels)
     pattern_labels_arr = np.array(all_patterns)
 
+    # Preserve the historical direct packaging API; tag auditable current inputs.
+    from budding_yeast_v2.data.systems.sampling_policy import VERSION, valid_candidate
+    from budding_yeast_v2.data.systems.contracts import Candidate
+    sampling_fields={}
+    checked=[]
+    for name in synth_trajs:
+        try:level=int(str(name).rsplit('_L',1)[1].split('_')[0])
+        except (IndexError,ValueError):break
+        candidate=valid_candidate(Candidate(1,str(name),{},level),'budding')
+        if candidate is None:break
+        checked.append(candidate)
+    else:
+        levels=[row.level for row in checked]
+        sampling_fields=dict(sampling_policy=np.array(VERSION),
+            levels=np.array([0]*len(real_trajs)+levels,dtype=np.int16),
+            module_counts=np.array([-1]*len(real_trajs)+levels,dtype=np.int16))
     out_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(out_dir, exist_ok=True)
 
@@ -236,7 +268,7 @@ def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
         system_id=np.array('budding'),
         variable_names=np.array(ma.VARIABLE_NAMES),
         time_grid=np.linspace(0,210,500),
-        artifact_kind=np.array('trajectory_dataset')
+        artifact_kind=np.array('trajectory_dataset'), **sampling_fields
     )
 
     print("=" * 80)
@@ -246,6 +278,34 @@ def package_and_export_al_dataset(output_path, synth_results, num_workers=40):
     print(f" Trajectory Shape   : {data_arr.shape}")
     print(f" Parameters Shape   : {params_arr.shape}")
     print("=" * 80, flush=True)
+
+
+def build_initial_dataset(pool_path, output_path, n_initial=10000, seed=42, num_workers=40):
+    """Stratified KMeans, same-level failure replacement, one final real benchmark."""
+    from collections import Counter
+    from budding_yeast_v2.data.systems.generation import level_schedule
+    from budding_yeast_v2.data.systems.sampling_policy import STATIC_RATIOS
+    selected=select_initial_kmeans(pool_path,n_initial,seed)
+    with np.load(pool_path,allow_pickle=True) as archive:
+        counts=archive['module_counts'];names=archive['mutant_names']
+    targets=Counter(level_schedule(n_initial,STATIC_RATIOS,np.random.RandomState(seed)).tolist())
+    mapping={str(name):int(level) for name,level in zip(names,counts)}
+    used=set();combined=({}, {}, {}, {})
+    rng=np.random.RandomState(seed)
+    while True:
+        used.update(map(int,selected))
+        rows=simulate_selected_tasks(selected,pool_path,num_workers)
+        for destination,source in zip(combined,rows):destination.update(source)
+        got=Counter(mapping[name] for name in combined[0])
+        missing={level:targets[level]-got[level] for level in targets if got[level]<targets[level]}
+        if not missing:break
+        if len(used)>=30*n_initial:raise RuntimeError(f'Initial valid quota exhausted: {missing}')
+        selected=[]
+        for level,number in missing.items():
+            available=np.array([i for i in np.flatnonzero(counts==level) if int(i) not in used])
+            if len(available)<number:raise RuntimeError(f'Initial pool exhausted at L{level}: missing {number}')
+            selected.extend(rng.choice(available,number,replace=False))
+    return package_and_export_al_dataset(output_path,combined,num_workers=num_workers)
 
 
 if __name__ == '__main__':
@@ -262,6 +322,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.action == 'init_kmeans':
-        sel_idx = select_initial_kmeans(args.pool_path, n_samples=args.n_initial, seed=args.seed)
-        sim_res = simulate_selected_tasks(sel_idx, args.pool_path, num_workers=args.num_workers)
-        package_and_export_al_dataset(args.output_dataset, sim_res, num_workers=args.num_workers)
+        build_initial_dataset(args.pool_path,args.output_dataset,args.n_initial,args.seed,args.num_workers)

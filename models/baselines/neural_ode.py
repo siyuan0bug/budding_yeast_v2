@@ -19,6 +19,7 @@ Biochemical Parameter Conditioning Mechanism:
 
 import torch
 import torch.nn as nn
+from .common import joint_condition_grid
 
 try:
     from torchdiffeq import odeint
@@ -27,16 +28,15 @@ except ImportError:
 
 
 class DerivativeMLP(nn.Module):
-    def __init__(self, state_dim=39, param_dim=141, hidden_dim=128):
+    def __init__(self, state_dim=39, param_dim=141, hidden_dim=128, n_blocks=2):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim + param_dim + 1, hidden_dim),
-            nn.Softplus(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Softplus(),
-            nn.Linear(hidden_dim, state_dim)
-        )
-        nn.init.zeros_(self.net[-1].weight)
+        if n_blocks < 1:
+            raise ValueError('n_blocks must be positive')
+        layers = [nn.Linear(state_dim + param_dim + 1, hidden_dim), nn.Softplus()]
+        for _ in range(n_blocks - 1):
+            layers.extend((nn.Linear(hidden_dim, hidden_dim), nn.Softplus()))
+        self.net = nn.Sequential(*layers, nn.Linear(hidden_dim, state_dim))
+        nn.init.normal_(self.net[-1].weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, t, y, params):
@@ -50,7 +50,7 @@ class DerivativeMLP(nn.Module):
 
 class NeuralODEModel(nn.Module):
     def __init__(self, num_vars=39, param_dim=141, hidden_dim=128,
-                 method='dopri5', rtol=1e-3, atol=1e-4):
+                 method='dopri5', rtol=1e-3, atol=1e-4, n_blocks=2):
         super().__init__()
         if odeint is None:
             raise ImportError("Please install torchdiffeq first: pip install torchdiffeq")
@@ -58,12 +58,13 @@ class NeuralODEModel(nn.Module):
         self.num_vars = num_vars
         self.param_dim = param_dim
         self.hidden_dim = hidden_dim
+        self.n_blocks = n_blocks
         self.method = method
         self.rtol = rtol
         self.atol = atol
 
         self.derivative_net = DerivativeMLP(
-            state_dim=num_vars, param_dim=param_dim, hidden_dim=hidden_dim
+            state_dim=num_vars, param_dim=param_dim, hidden_dim=hidden_dim, n_blocks=n_blocks
         )
 
     def forward(self, ic_time_grid, params):
@@ -71,7 +72,11 @@ class NeuralODEModel(nn.Module):
 
         y0 = ic_time_grid[:, :, 0, 0]
 
-        t_grid = torch.linspace(0, 1, T, device=ic_time_grid.device)
+        joint_condition_grid(ic_time_grid, params, self.num_vars, self.param_dim, uniform=False)
+        times = ic_time_grid[:, 0, 1, :]
+        if not torch.equal(times, times[:1].expand_as(times)):
+            return torch.cat([self.forward(ic_time_grid[i:i+1], params[i:i+1]) for i in range(B)])
+        t_grid = times[0]
 
         pred_y = odeint(
             lambda t, y: self.derivative_net(t, y, params),

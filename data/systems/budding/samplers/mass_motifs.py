@@ -74,7 +74,7 @@ def sample_mass_mutant(level=1, *, ma):
                 ovr['mdt'] = 150.0
         elif motif_type == 'ANAPHASE_SEPARASE':
             driver = ('PDS1', 'db') if np.random.rand() < 0.5 else ('CDC20', 'ts')
-            suppressors_pool = [('ESP1', np.random.choice(['GAL-OE', 'MC', 'ts'])), ('NET1', np.random.choice(['ts', 'TAB6-1'])), ('SCC1', 'scc1-RR'), ('MAD2', 'CSL'), ('BUB2', 'CKO')]
+            suppressors_pool = [('ESP1', np.random.choice(['GAL-OE', 'MC', 'ts'])), ('NET1', np.random.choice(['ts', 'TAB6-1'])), ('MAD2', 'CSL'), ('BUB2', 'CKO')]
             k_supp = np.random.randint(1, min(level, len(suppressors_pool) + 1))
             chosen_indices = np.random.choice(len(suppressors_pool), size=k_supp, replace=False)
             selected_mut_pairs = [driver] + [suppressors_pool[idx] for idx in chosen_indices]

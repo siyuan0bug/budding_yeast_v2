@@ -1,87 +1,60 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-LaMO: Large Mesh Operator using Mamba/State-Space Models
-========================================================
-- Paper Title: LaMO: Large Mesh Operator using Mamba/State-Space Models
-- Authors: Ziyi Wu, et al.
-- Conference: NeurIPS 2024 (Spotlight)
-- Paper Link: https://arxiv.org/abs/2410.03844
-- Official Code: https://github.com/Wuziyi616/LaMO
+"""LaMO slice/Hydra/deslice operator using the upstream unfused Hydra core.
 
-Biochemical Parameter Conditioning Mechanism:
----------------------------------------------
-- Conditioning Method: Pure PyTorch Bidirectional Selective Scan (SSM) + Parameter FiLM
-- Mechanism: Implements continuous state-space modeling (SSM) using discrete-time recurrence:
-  h_t = A h_{t-1} + B x_t, y_t = C h_t + D x_t, computed via vectorized bidirectional scans.
-  Kinetic parameters P (141-dim) modulate SSM state transition parameters and hidden representations
-  via FiLM affine parameters: gamma(P), beta(P) = Linear(P).chunk(2).
-- Biological Rationale: Linear time complexity O(T) with recurrent state memory perfectly matches continuous biological ODE integration.
+The small latent sequence uses exact reference SSD recurrence instead of a
+compiled Mamba scan. No approximate SSM replacement or parameter modulation.
 """
-
-import math
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
+from .common import joint_condition_grid
+from ._upstream.hydra import Hydra
 
 
-class BiDirectionalSSM(nn.Module):
-    """Pure PyTorch Vectorized Bidirectional Selective Scan (zero CUDA compilation dependency)."""
-    def __init__(self, d_model, d_state=16):
+class LatentSSM(nn.Module):
+    def __init__(self, width, heads=4, slices=32, state_dim=64):
         super().__init__()
-        self.d_model = d_model
-        self.d_state = d_state
-        self.A = nn.Parameter(torch.randn(d_model, d_state) * 0.1)
-        self.B = nn.Linear(d_model, d_state)
-        self.C = nn.Linear(d_state, d_model)
-        self.D = nn.Parameter(torch.ones(d_model))
-        self.in_proj = nn.Linear(d_model, d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
+        if width % heads or heads % 2:
+            raise ValueError('LaMO width must divide into an even number of heads')
+        self.heads, self.dim_head, self.slices = heads, width // heads, slices
+        self.temperature = nn.Parameter(torch.ones(1, heads, 1, 1) * .5)
+        self.in_project_x = nn.Linear(width, width)
+        self.in_project_fx = nn.Linear(width, width)
+        self.in_project_slice = nn.Linear(self.dim_head, slices)
+        nn.init.orthogonal_(self.in_project_slice.weight)
+        self.hydra = Hydra(width, d_state=state_dim, d_conv=3, expand=1,
+                           headdim=self.dim_head, ngroups=2, use_mem_eff_path=False)
+        self.to_out = nn.Linear(width, width)
 
     def forward(self, x):
-        # x: (B, L, D)
-        B, L, D = x.shape
-        u = self.in_proj(x)
-        # Vectorized recurrent scan approximation
-        # Forward pass
-        h = torch.zeros(B, D, self.d_state, device=x.device)
-        ys = []
-        A_decay = torch.sigmoid(self.A)  # (D, d_state) in [0, 1]
-        for t in range(L):
-            u_t = u[:, t, :]  # (B, D)
-            b_t = self.B(u_t)  # (B, d_state)
-            h = h * A_decay.unsqueeze(0) + torch.einsum('bd,bs->bds', u_t, b_t)
-            y_t = self.C(h.mean(dim=1)) + u_t * self.D
-            ys.append(y_t)
-        y = torch.stack(ys, dim=1)  # (B, L, D)
-        return self.out_proj(y)
+        b, n, width = x.shape
+        values = self.in_project_fx(x).reshape(b,n,self.heads,self.dim_head).transpose(1,2)
+        features = self.in_project_x(x).reshape(b,n,self.heads,self.dim_head).transpose(1,2)
+        weights = (self.in_project_slice(features) / self.temperature).softmax(-1)
+        tokens = torch.einsum('bhnc,bhng->bhgc', values, weights)
+        tokens = tokens / (weights.sum(2).unsqueeze(-1) + 1e-5)
+        tokens = tokens.transpose(1,2).reshape(b,self.slices,width)
+        tokens = self.hydra(tokens).reshape(b,self.slices,self.heads,self.dim_head).transpose(1,2)
+        out = torch.einsum('bhgc,bhng->bhnc', tokens, weights).transpose(1,2).reshape(b,n,width)
+        return self.to_out(out)
 
 
-class LaMO_RegularGrid(nn.Module):
-    def __init__(self, num_vars=39, param_dim=141, seq_len=500, pred_len=500,
-                 d_model=128, n_layers=3, **kwargs):
+class LaMO(nn.Module):
+    def __init__(self, num_vars=39, param_dim=141, width=64, n_blocks=4, n_heads=4, n_slices=32):
         super().__init__()
-        self.in_proj = nn.Linear(num_vars * 2, d_model)
-        self.ssm_layers = nn.ModuleList([
-            BiDirectionalSSM(d_model=d_model) for _ in range(n_layers)
+        if n_blocks < 1:
+            raise ValueError('n_blocks must be positive')
+        self.num_vars, self.param_dim = num_vars, param_dim
+        self.stem = nn.Sequential(nn.Linear(num_vars+param_dim+1,width*2),nn.GELU(),nn.Linear(width*2,width))
+        self.blocks = nn.ModuleList([
+            nn.ModuleDict({'norm1':nn.LayerNorm(width),'ssm':LatentSSM(width,n_heads,n_slices),
+                           'norm2':nn.LayerNorm(width),
+                           'mlp':nn.Sequential(nn.Linear(width,width*2),nn.GELU(),nn.Linear(width*2,width))})
+            for _ in range(n_blocks)
         ])
-        self.norms = nn.ModuleList([
-            nn.LayerNorm(d_model) for _ in range(n_layers)
-        ])
-        self.film = nn.Linear(param_dim, d_model * 2)
-        self.out_proj = nn.Linear(d_model, num_vars)
+        self.head = nn.Sequential(nn.LayerNorm(width),nn.Linear(width,num_vars))
 
-    def forward(self, ic_time_grid, params):
-        B, V, F_in, T = ic_time_grid.shape
-        x = ic_time_grid.reshape(B, V * F_in, T).permute(0, 2, 1)  # (B, 500, 78)
-        h = self.in_proj(x)
-
-        gamma, beta = self.film(params).chunk(2, dim=-1)
-        h = (1.0 + gamma.unsqueeze(1)) * h + beta.unsqueeze(1)
-
-        for ssm, norm in zip(self.ssm_layers, self.norms):
-            res = h
-            h = norm(F.gelu(ssm(h)) + res)
-
-        out = self.out_proj(h)
-        return out.permute(0, 2, 1).contiguous()
+    def forward(self, x, params):
+        h = self.stem(joint_condition_grid(x,params,self.num_vars,self.param_dim,uniform=False).transpose(1,2))
+        for block in self.blocks:
+            h = h + block['ssm'](block['norm1'](h))
+            h = h + block['mlp'](block['norm2'](h))
+        return self.head(h).transpose(1,2).contiguous()

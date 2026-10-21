@@ -47,7 +47,7 @@ class FissionAdapter:
         return sampler.rng
 
     def pairs_from_description(self, description):
-        return None
+        return [tuple(part.split(':',1)) for part in description.split('+')]
 
     def parameter_result(self, candidate, context):
         params = param_vector({**WT_parameters(), **candidate.overrides})
@@ -98,7 +98,7 @@ class FissionAdapter:
                 or config.mode_freq not in ('class', 'flat')):
             raise ValueError('Fission uses its own profile and supports class/flat mode frequencies')
         if config.parameter_only:
-            raise ValueError('Fission initial states require per-mutant warmup; parameter-only pools are Budding-only')
+            raise ValueError('Fission inputs require per-mutant warmup; use python -m budding_yeast_v2.data.systems.fission.al_pool')
 
     def handles_derived(self, recipe):
         return False
@@ -123,13 +123,14 @@ class FissionSampler:
         self.sobol = None
         self.module = fission
         fission.MODE_FREQ = config.mode_freq
-        fission._L1_GRID[:] = [(m, mode) for m in fission.SAMPLING_MODULES
+        fission._L1_GRID[:] = [(m, mode) for m in fission.SAMPLING_MODULES if m != 'Growth'
                                for mode in fission.SAMPLING_MODULES[m]['modes']]
         np.random.RandomState(config.seed).shuffle(fission._L1_GRID)
         fission._L1_IDX['i'] = 0
         self.rng = np.random.default_rng(config.seed)
 
     def sample(self, level):
+        if level not in (1,2,3):raise ValueError('Only L1/L2/L3 are supported')
         overrides, desc = self.module.sample_random_mutant(level, self.rng)
         return overrides, desc, None, None
 

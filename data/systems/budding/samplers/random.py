@@ -83,7 +83,7 @@ def sample_mass_random(level=1, *, ma):
 
     Level -> number of mutated binding groups (ki), identical to the standard
     exploratory branch of mass_dataset_generator.sample_mass_mutant:
-      L1: ki=1 | L2: ki=2 | L3: ki=3~5 | L4: ki=4~6
+      L1: ki=1 | L2: ki=2 | L3: ki=3; higher levels disabled by the public sampler
 
     Returns:
         (ovr_dict, mutant_description_str) — 与 sample_mass_mutant 返回格式严格一致
@@ -98,9 +98,9 @@ def sample_mass_random(level=1, *, ma):
     elif level == 2:
         ki = 2
     elif level == 3:
-        ki = np.random.randint(3, 6)
+        ki = 3
     else:
-        ki = np.random.randint(4, 7)
+        ki = 3
     group_keys = list(ma.BINDING_GROUPS.keys())
     group_weights = [ma.BINDING_GROUPS[k]['P_bio_G'] for k in group_keys]
     selected_g_keys = np.random.choice(group_keys, size=min(ki, len(group_keys)), replace=False, p=group_weights)
@@ -161,9 +161,9 @@ def sample_mass_random_dist(level=1, *, ma):
     elif level == 2:
         ki = 2
     elif level == 3:
-        ki = int(np.random.randint(3, 6))
+        ki = 3
     else:
-        ki = int(np.random.randint(4, 7))
+        ki = 3
     group_keys = list(ma.BINDING_GROUPS.keys())
     group_weights = [ma.BINDING_GROUPS[k]['P_bio_G'] for k in group_keys]
     group_weights = np.array(group_weights) / sum(group_weights)

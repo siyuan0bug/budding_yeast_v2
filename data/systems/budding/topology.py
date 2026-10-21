@@ -1,34 +1,40 @@
-"""MA 54-edge module graph and derived distances/pair classes; separate from the 39-state graph."""
+"""Pruned MA module graph and derived distances/pair classes; separate from the 39-state graph."""
 import numpy as np
 from .catalog import GROUP_BY_NAME, GENE_NAMES
 
-MODULE_EDGES = [
-    ('CLN3','SBF_MBF','+'), ('BCK2','SBF_MBF','+'), ('CLN2','SBF_MBF','+'),
-    ('CLB5','SBF_MBF','+'), ('CLB2','SBF_MBF','-'),
-    ('SBF_MBF','CLN2','+'), ('SBF_MBF','CLB5','+'), ('SBF_MBF','CDC6','+'),
-    ('CLB2','Mcm1','+'), ('Mcm1','CLB2','+'), ('Mcm1','SWI5','+'),
-    ('Mcm1','CDC20','+'), ('Mcm1','PDS1','+'),
-    ('CLB2','CDC20','+'), ('CDC20','CLB2','-'), ('CDC20','CLB5','-'),
-    ('CDC20','PDS1','-'),
-    ('CDH1','CLB2','-'), ('CDH1','PDS1','-'),
-    ('CDC14','CDH1','+'), ('CDC14','SIC1','+'), ('CDC14','CDC6','+'),
-    ('CLB2','CDH1','-'), ('CLB5','CDH1','-'), ('CLN2','CDH1','-'),
-    ('CLN3','CDH1','-'),
-    ('SIC1','CLB2','-'), ('SIC1','CLB5','-'),
-    ('CDC6','CLB2','-'), ('CDC6','CLB5','-'),
-    ('SWI5','SIC1','+'), ('SWI5','CDC6','+'),
-    ('NET1','CDC14','-'), ('PPX','NET1','+'), ('CDC15','NET1','+'),
-    ('TEM1','CDC15','+'), ('BUB2','TEM1','-'), ('MAD2','CDC20','-'),
-    ('PDS1','ESP1','-'),
-    ('CDC28','SIC1','+'), ('CDC28','CDC6','+'), ('CDC28','CDH1','+'),
-    ('CDC28','SBF_MBF','+'), ('CDC28','ORI_BUD_SPN','+'),
-    ('CLB2','ORI_BUD_SPN','+'), ('CLB5','ORI_BUD_SPN','+'),
-    # v6.0: APC_Core biological regulation edges (resolved graph disconnection)
-    ('APC_Core','CLB2','-'), ('APC_Core','PDS1','-'),
-    ('CDC20','APC_Core','+'), ('CDH1','APC_Core','+'),
-    # v6.1: Direct ODE regulation edges (Chen 2004 Eq 17 & Eq 19)
-    ('CLB2','SWI5','-'), ('CLB2','SIC1','-'), ('CLB5','SIC1','-'), ('CLN2','SIC1','-'),
-]
+MODULE_EDGES = [('CLB2', 'CDC20', '+'),
+ ('CDC20', 'CLB2', '-'),
+ ('CDC20', 'CLB5', '-'),
+ ('CDC20', 'PDS1', '-'),
+ ('CDH1', 'CLB2', '-'),
+ ('CDH1', 'PDS1', '-'),
+ ('CDC14', 'CDH1', '+'),
+ ('CDC14', 'SIC1', '+'),
+ ('CDC14', 'CDC6', '+'),
+ ('CLB2', 'CDH1', '-'),
+ ('CLB5', 'CDH1', '-'),
+ ('CLN2', 'CDH1', '-'),
+ ('CLN3', 'CDH1', '-'),
+ ('SIC1', 'CLB2', '-'),
+ ('SIC1', 'CLB5', '-'),
+ ('CDC6', 'CLB2', '-'),
+ ('CDC6', 'CLB5', '-'),
+ ('SWI5', 'SIC1', '+'),
+ ('SWI5', 'CDC6', '+'),
+ ('NET1', 'CDC14', '-'),
+ ('CDC15', 'NET1', '+'),
+ ('TEM1', 'CDC15', '+'),
+ ('BUB2', 'TEM1', '-'),
+ ('MAD2', 'CDC20', '-'),
+ ('PDS1', 'ESP1', '-'),
+ ('APC_Core', 'CLB2', '-'),
+ ('APC_Core', 'PDS1', '-'),
+ ('CDC20', 'APC_Core', '+'),
+ ('CDH1', 'APC_Core', '+'),
+ ('CLB2', 'SWI5', '-'),
+ ('CLB2', 'SIC1', '-'),
+ ('CLB5', 'SIC1', '-'),
+ ('CLN2', 'SIC1', '-')]
 
 GENE_WEIGHT_ARM = 'uniform'      # 'uniform' (v5.1 default) | 'degree' | 'engine'
 

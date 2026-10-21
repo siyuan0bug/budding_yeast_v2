@@ -13,23 +13,13 @@ from budding_yeast_v2.data.preprocessing_contract import (
     validate_preprocessing_state, assert_compatible, resolve_checkpoint_norm,
     resolve_checkpoint_fit_scope,
 )
-from budding_yeast_v2.models.baselines.configuration import constructor_kwargs
 from budding_yeast_v2.models.ours.graph_contracts import (
     resolve_variable_graph, set_graph_load_policy, variable_graph_report, fixed_graph_report,
 )
 from budding_yeast_v2.models.ours.relation_graph_contracts import configure_relation_view
 
-from budding_yeast_v2.models.baselines import (
-    PureFNO_ICLR2021, PureWNO_2022, FNO1d_Standard, UNet1d,
-    GalerkinTransformer1d, CNO1d, MWT1d, Transolver1d, Transolver3_1d, DPOT1d,
-    GCGNetYeast, DeepONet, NeuralODEModel, ResNetFiLM,
-    iTransformer, DLinear, NLinear, Linear, Autoformer, Informer,
-    iInformer, Flowformer, iFlowformer, Reformer, iReformer,
-    Flashformer, iFlashformer, VanillaTransformer, FEDformer, Pyraformer,
-    GNOT, LatentNeuralOperator, LaMO_RegularGrid, DeepKoopmanOperator, WDNO,
-    ICONGPT, BAMPNO, G_FNO, NOBLE,
-    SC_FNO, PNO1d, MPNO1d, KoNODE, BregmanFNO, BregmanWNO, NCFlow, IgaNetTransformer
-)
+from budding_yeast_v2.models.baselines import BASELINE_REGISTRY, build_baseline
+
 
 from budding_yeast_v2.models.ours import (
     NIPSYeastFNO, UltimateFNO, NIPSYeastWNO, NIPSYeastLNO,
@@ -59,80 +49,19 @@ from budding_yeast_v2.utils.metrics import relative_l2_loss
 
 
 MODEL_REGISTRY = {
-    'pure_fno': PureFNO_ICLR2021,
-    'pure_wno': PureWNO_2022,
-    'fno1d': FNO1d_Standard,
-    'fno1d_standard': FNO1d_Standard,
-    'unet1d': UNet1d,
-    'unet': UNet1d,
-    'galerkin_transformer1d': GalerkinTransformer1d,
-    'galerkin_transformer': GalerkinTransformer1d,
-    'galerkin': GalerkinTransformer1d,
-    'cno1d': CNO1d,
-    'cno': CNO1d,
-    'mwt1d': MWT1d,
-    'mwt': MWT1d,
-    'transolver1d': Transolver1d,
-    'transolver': Transolver1d,
-    'transolver3_1d': Transolver3_1d,
-    'transolver3': Transolver3_1d,
-    'dpot1d': DPOT1d,
-    'dpot': DPOT1d,
-    'itransformer': iTransformer,
-    'dlinear': DLinear,
-    'nlinear': NLinear,
-    'linear': Linear,
-    'autoformer': Autoformer,
-    'informer': Informer,
-    'iinformer': iInformer,
-    'flowformer': Flowformer,
-    'iflowformer': iFlowformer,
-    'reformer': Reformer,
-    'ireformer': iReformer,
-    'flashformer': Flashformer,
-    'iflashformer': iFlashformer,
-    'vanilla_transformer': VanillaTransformer,
-    'fedformer': FEDformer,
-    'pyraformer': Pyraformer,
-    'gnot': GNOT,
-    'latent_lno': LatentNeuralOperator,
-    'lamo': LaMO_RegularGrid,
-    'koopman_dmd': DeepKoopmanOperator,
-    'koopman': DeepKoopmanOperator,
-    'wdno': WDNO,
-    'icon': ICONGPT,
-    'bampno': BAMPNO,
-    'gfno': G_FNO,
-    'g_fno': G_FNO,
-    'noble': NOBLE,
-    # New SOTA 2025 Baselines
-    'sc_fno': SC_FNO,
-    'pno1d': PNO1d,
-    'pno': PNO1d,
-    'mpno1d': MPNO1d,
-    'mpno': MPNO1d,
-    'konode': KoNODE,
-    'bregman_fno': BregmanFNO,
-    'bregman_wno': BregmanWNO,
-    'ncflow': NCFlow,
-    'iganet_transformer': IgaNetTransformer,
-    'iganet': IgaNetTransformer,
+    **BASELINE_REGISTRY,
     'cross_fno': NIPSYeastFNO,
     'ultimate_fno': UltimateFNO,
-    'wno': NIPSYeastWNO,
-    'lno': NIPSYeastLNO,
+    'cross_wno': NIPSYeastWNO,
+    'cross_lno': NIPSYeastLNO,
     'hyper_fno': HyperFNO,
     'channel_hyper_fno': ChannelHyperFNO,
-    'resnet_film': ResNetFiLM,
-    'deeponet': DeepONet,
     'hp_fno': hpYeastFNO,
-    'neural_ode': NeuralODEModel,
     'graph_resnet_film': GraphResNetFiLM,
     'gated_graph_resnet_film': GatedGraphResNetFiLM,
     'multiscale_diffgraph': MultiScaleDiffGraphNet,
     'dualpath_spectralgraph': DualPathSpectralGraphNet,
     'bio_statespace_graph': BioStateSpaceGraphNet,
-    'gcgnet': GCGNetYeast,
     'bio_hetero_causal_graph': BioHeteroCausalGraphNet,
     'hetero_graph_resnet_film': HeteroGraphResNetFiLM,
     'hetero_graph_dualpath': HeteroGraphDualPathNet,
@@ -195,7 +124,7 @@ MODEL_REGISTRY = {
 
 
 SINGLE_VARIABLE_GRAPH_MODELS = frozenset({
-    'ultimate_fno', 'cross_fno', 'wno', 'lno', 'channel_hyper_fno',
+    'ultimate_fno', 'cross_fno', 'cross_wno', 'cross_lno', 'channel_hyper_fno',
     'graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph',
     'dualpath_spectralgraph', 'bio_statespace_graph',
     'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
@@ -221,30 +150,18 @@ RELATION_GRAPH_MODELS = frozenset({
 })
 MODULE_DIRECTION_REPAIRED_MODELS = frozenset({'biom_refiner_dynamic_plus'})
 
-GENERIC_BASELINE_MODELS = frozenset({
-    'transolver3_1d', 'transolver3', 'itransformer', 'dlinear', 'nlinear', 'linear',
-    'autoformer', 'informer', 'iinformer', 'flowformer', 'iflowformer', 'reformer',
-    'ireformer', 'flashformer', 'iflashformer', 'vanilla_transformer', 'fedformer',
-    'pyraformer', 'gnot', 'latent_lno', 'lamo', 'koopman_dmd', 'koopman', 'wdno',
-    'icon', 'bampno', 'gfno', 'g_fno', 'noble',
-})
-
-# Architectures whose computation does not encode Budding-specific pools/events.
-FISSION_MODELS = GENERIC_BASELINE_MODELS | frozenset({
-    'pure_fno','fno1d','fno1d_standard','unet1d','unet','pure_wno','cno1d','cno','mwt1d','mwt',
-    'galerkin_transformer1d','galerkin_transformer','galerkin','transolver1d','transolver','dpot1d','dpot',
-    'resnet_film','hyper_fno','cross_fno','wno','lno','channel_hyper_fno',
+# Standard baselines have no Budding-specific graph or event prior.
+FISSION_MODELS = frozenset(BASELINE_REGISTRY) | frozenset({
+    'hyper_fno','cross_fno','cross_wno','cross_lno','channel_hyper_fno',
     'graph_resnet_film','gated_graph_resnet_film','multiscale_diffgraph','dualpath_spectralgraph',
-    'bio_statespace_graph','sc_fno','bregman_fno','bregman_wno','pno1d','pno','mpno1d','mpno',
-    'konode','ncflow','iganet_transformer','iganet','deeponet','neural_ode','gcgnet','ultimate_fno',
-    'biom_refiner_plus',
+    'bio_statespace_graph','ultimate_fno','biom_refiner_plus',
 })
 
 
 class YeastLitModule(pl.LightningModule):
     def __init__(
         self,
-        model_name='pure_fno',
+        model_name='fno',
         num_vars=39,
         param_dim=141,
         modes=24,
@@ -285,7 +202,9 @@ class YeastLitModule(pl.LightningModule):
         graph_view='hybrid',
         graph_load_policy='current',
         adj_matrix_path=None,
-        constructor_contract_version=1,
+        seq_len=500,
+        wavelet_level=3,
+        sensitivity_weight=1.0,
         system_id=None,
     ):
         super().__init__()
@@ -296,7 +215,7 @@ class YeastLitModule(pl.LightningModule):
             resolve_system(self.system_id,num_vars=num_vars,param_dim=param_dim)
         self.hparams.system_id=self.system_id
         if self.system_id=='fission' and model_name not in FISSION_MODELS:
-            raise ValueError(f'{model_name} embeds Budding-specific biology; use a supported Fission architecture such as fno1d, cross_fno or graph_resnet_film')
+            raise ValueError(f'{model_name} embeds Budding-specific biology; use a supported Fission architecture such as fno, cross_fno or graph_resnet_film')
 
         if model_name in SINGLE_VARIABLE_GRAPH_MODELS:
             if causal_matrix is not None and (adj_matrix is not None or adj_matrix_path is not None):
@@ -317,43 +236,24 @@ class YeastLitModule(pl.LightningModule):
         elif adj_matrix is not None or adj_matrix_path is not None or causal_matrix is not None:
             raise ValueError(f'{model_name} does not accept a single variable graph override')
 
+        if model_name not in MODEL_REGISTRY:
+            raise ValueError(f'Unknown or removed model {model_name!r}; standard baselines: {tuple(BASELINE_REGISTRY)}')
         ModelClass = MODEL_REGISTRY[model_name]
 
-        if model_name == 'ultimate_fno':
+        if model_name in BASELINE_REGISTRY:
+            self.model = build_baseline(model_name, num_vars=num_vars, param_dim=param_dim,
+                width=width, n_blocks=n_blocks, modes=modes, wavelet=wavelet,
+                seq_len=seq_len, level=wavelet_level,
+                ode_method=ode_method, ode_rtol=ode_rtol, ode_atol=ode_atol)
+        elif model_name == 'ultimate_fno':
             self.model = ModelClass(causal_matrix=causal_matrix, param_dim=param_dim, modes=modes)
         elif model_name == 'cross_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
                                     width=width, n_blocks=n_blocks, adj_matrix=adj_matrix)
-        elif model_name == 'pure_fno':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes, width=width)
-        elif model_name in ('fno1d', 'fno1d_standard'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
-                                    width=width, n_blocks=n_blocks)
-        elif model_name in ('unet1d', 'unet'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
-                                    n_blocks=n_blocks)
-        elif model_name in ('galerkin_transformer1d', 'galerkin_transformer', 'galerkin'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
-                                    n_blocks=n_blocks)
-        elif model_name in ('cno1d', 'cno'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
-                                    n_blocks=n_blocks)
-        elif model_name in ('mwt1d', 'mwt'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
-                                    n_blocks=n_blocks)
-        elif model_name in ('transolver1d', 'transolver'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
-                                    n_blocks=n_blocks)
-        elif model_name in ('dpot1d', 'dpot'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, hidden_size=width,
-                                    modes=modes, depth=n_blocks)
-        elif model_name == 'pure_wno':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
-                                    n_blocks=n_blocks, wavelet=wavelet)
-        elif model_name == 'wno':
+        elif model_name == 'cross_wno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width,
                                     n_blocks=n_blocks, adj_matrix=adj_matrix, wavelet=wavelet)
-        elif model_name == 'lno':
+        elif model_name == 'cross_lno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
                                     width=width, n_blocks=n_blocks, adj_matrix=adj_matrix)
         elif model_name == 'hyper_fno':
@@ -363,9 +263,6 @@ class YeastLitModule(pl.LightningModule):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes,
                                     width=width, n_layers=n_blocks, d_lambda=d_lambda,
                                     adj_matrix=adj_matrix)
-        elif model_name == 'resnet_film':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
-                                    width=width, n_blocks=n_blocks, d_lambda=d_lambda)
         elif model_name in ('graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph', 'bio_statespace_graph'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, n_blocks=n_blocks, d_lambda=d_lambda,
@@ -374,19 +271,8 @@ class YeastLitModule(pl.LightningModule):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, modes=modes, n_blocks=n_blocks, d_lambda=d_lambda,
                                     adj_matrix=adj_matrix)
-        elif model_name == 'deeponet':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
-                                    p_basis=width, hidden_dim=width * 2)
         elif model_name == 'hp_fno':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, modes=modes, width=width)
-        elif model_name == 'neural_ode':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, hidden_dim=width,
-                                    method=ode_method, rtol=ode_rtol, atol=ode_atol)
-        elif model_name == 'gcgnet':
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, t_steps=500,
-                                    patch_len=25, width=width, d_ff=width * 2,
-                                    n_heads=4, e_layers=n_blocks if n_blocks > 0 else 2,
-                                    rank=16)
         elif model_name in ('bio_hetero_causal_graph', 'hetero_graph_resnet_film'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, n_blocks=n_blocks, d_lambda=d_lambda)
@@ -396,53 +282,27 @@ class YeastLitModule(pl.LightningModule):
         elif model_name in ('dyrfo', 'dynamic_reaction_flux_operator', 'pc_bio_operator', 'physics_constrained_biochemical_operator'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, n_blocks=n_blocks)
-        elif model_name in ('st_hyperno', 'spectral_temporal_hybrid_operator',
-                            'biom_full', 'biom_net', 'bio_mechanistic_operator',
-                            'biom_event', 'biom_titration', 'biom_pathway',
-                            'biom_refiner', 'bio_refiner',
-                            'biom_refiner_curvature', 'biom_refiner_curv',
-                            'biom_refiner_pyramid', 'biom_refiner_pyr',
-                            'biom_refiner_causal_base',
-                            'biom_refiner_causal_curvature', 'biom_refiner_causal_curv',
-                            'biom_refiner_causal_pyramid', 'biom_refiner_causal_pyr'):
+        elif model_name in ('st_hyperno', 'spectral_temporal_hybrid_operator', 'biom_full', 'biom_net', 'bio_mechanistic_operator', 'biom_event', 'biom_titration', 'biom_pathway', 'biom_refiner', 'bio_refiner', 'biom_refiner_curvature', 'biom_refiner_curv', 'biom_refiner_pyramid', 'biom_refiner_pyr', 'biom_refiner_causal_base', 'biom_refiner_causal_curvature', 'biom_refiner_causal_curv', 'biom_refiner_causal_pyramid', 'biom_refiner_causal_pyr'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks)
-        elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
-                            'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic',
-                            'biom_mass_action_refiner', 'biom_mass_action',
-                            'biom_refiner_attractor', 'bio_refiner_attractor',
-                            'biom_refiner_causal_reach', 'bio_refiner_causal_reach',
-                            'biom_refiner_attractor_plus', 'bio_refiner_attractor_plus',
-                            'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn',
-                            'biom_refiner_causal_plus', 'biom_refiner_causal',
-                            'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal',
-                            'biom_refiner_latch_causal_plus', 'biom_refiner_latch_causal',
-                            'biom_refiner_dynamic_plus',
-                            'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
+        elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_mass_action_refiner', 'biom_mass_action', 'biom_refiner_attractor', 'bio_refiner_attractor', 'biom_refiner_causal_reach', 'bio_refiner_causal_reach', 'biom_refiner_attractor_plus', 'bio_refiner_attractor_plus', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_latch_causal_plus', 'biom_refiner_latch_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks,
                                     adj_matrix=adj_matrix)
         elif model_name in ('hano', 'hano_no_event', 'hano_no_flux', 'hano_no_graph', 'hano_refine', 'hano_dual'):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     width=width, n_blocks=n_blocks)
-        elif model_name in ('sc_fno', 'bregman_fno'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width, modes=modes)
-        elif model_name in ('bregman_wno',):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width, wavelet=wavelet)
-        elif model_name in ('pno1d', 'pno', 'mpno1d', 'mpno', 'konode', 'ncflow', 'iganet_transformer', 'iganet'):
-            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim, width=width)
-        elif model_name in GENERIC_BASELINE_MODELS:
-            resolved = constructor_kwargs(ModelClass, num_vars=num_vars, param_dim=param_dim,
-                                          width=width, n_blocks=n_blocks, version=constructor_contract_version)
-            self.model = ModelClass(**resolved)
-            self.hparams['resolved_constructor'] = resolved
         else:
             raise ValueError(f"Unknown model_name: {model_name}")
 
         configure_relation_view(self.model, graph_view)
         set_graph_load_policy(self.model, graph_load_policy)
         loss_class = LOSS_REGISTRY[loss_type]
-        if loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel', 'gradnorm_hybrid',
+        if loss_type == 'sc_sensitivity':
+            if model_name != 'sc_fno':
+                raise ValueError('sc_sensitivity is the SC-FNO training loss; use model=sc_fno')
+            self.criterion = loss_class(sensitivity_weight=sensitivity_weight)
+        elif loss_type in ('mse_only', 'mse_smooth', 'h1', 'rel_l2', 'hybrid_mse_rel', 'gradnorm_hybrid',
                          'phase_derivative', 'soft_dtw', 'hybrid_phase_deriv', 'hybrid_soft_dtw',
                          'triple_dynamic', 'hybrid_phase_dtw'):
             self.criterion = loss_class(num_vars=num_vars) if loss_type=='gradnorm_hybrid' else loss_class()
@@ -579,16 +439,9 @@ class YeastLitModule(pl.LightningModule):
             checkpoint['preprocessing_contract'] = copy.deepcopy(self._preprocessing_state)
 
     def on_load_checkpoint(self, checkpoint):
-        # Older generic baselines swallowed width/depth in **kwargs. Recreate
-        # their real architecture, rather than loading into newly resized layers.
+        # Baseline names now refer to standard architectures; old modified
+        # checkpoints are intentionally not reconstructed under these names.
         hp = checkpoint.get('hyper_parameters', {})
-        if self.hparams.model_name in GENERIC_BASELINE_MODELS and 'constructor_contract_version' not in hp:
-            resolved = constructor_kwargs(MODEL_REGISTRY[self.hparams.model_name],
-                num_vars=self.hparams.num_vars, param_dim=self.hparams.param_dim,
-                width=self.hparams.width, n_blocks=self.hparams.n_blocks, version=0)
-            self.model = MODEL_REGISTRY[self.hparams.model_name](**resolved)
-            self.hparams.constructor_contract_version = 0
-            self.hparams.resolved_constructor = resolved
         recorded = (checkpoint.get('preprocessing_contract') is not None or hp.get('norm_type') is not None
                     or checkpoint.get('datamodule_hyper_parameters', {}).get('norm_type') is not None)
         self.norm_type = resolve_checkpoint_norm(checkpoint) if recorded else self.norm_type
@@ -635,6 +488,11 @@ class YeastLitModule(pl.LightningModule):
         return decode_y(y_norm, self.mean_y, self.std_y, self.norm_type, self.s_c)
 
     def on_train_start(self):
+        if self.hparams.model_name == 'sc_fno':
+            if self.hparams.loss_type != 'sc_sensitivity':
+                raise ValueError('SC-FNO requires loss_type=sc_sensitivity and reference sensitivity targets')
+            if self.hparams.rollout_type != 'one_time':
+                raise ValueError('SC-FNO sensitivity targets currently use the one_time trajectory contract')
         # 统计量注入兜底 (setup 时 datamodule 统计量可能尚未就绪)
         self._inject_model_stats()
         if self.trainer.datamodule is not None:
@@ -774,7 +632,11 @@ class YeastLitModule(pl.LightningModule):
         return trajectory
 
     def training_step(self, batch, batch_idx):
-        if len(batch) == 4:
+        sensitivity_batch = batch if isinstance(batch, dict) else None
+        if sensitivity_batch is not None:
+            x, p, y = (batch[key] for key in ('x', 'p', 'y'))
+            pat_id = batch.get('pattern')
+        elif len(batch) == 4:
             x, p, y, pat_id = batch
         else:
             x, p, y = batch
@@ -848,7 +710,12 @@ class YeastLitModule(pl.LightningModule):
         else:
             out_full = self.forward_ic_time(x, p)
 
-            if self.hparams.loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
+            if self.hparams.model_name == 'sc_fno':
+                if self.hparams.loss_type != 'sc_sensitivity' or sensitivity_batch is None:
+                    raise ValueError('SC-FNO training requires sc_sensitivity loss and sensitivity targets')
+                loss = self.criterion(out_full, y) + self.criterion.sensitivity_term(
+                    self.model, x, p, batch['sensitivity_targets'], batch['sensitivity_indices'])
+            elif self.hparams.loss_type in ('pinn_residual', 'pino', 'hybrid_pino_colloc', 'hybrid_all'):
                 self.criterion.set_epoch(curr_ep)
                 loss = self.criterion(out_full, y, p, weights, lam_pen, lam_sm)
                 if hasattr(self.criterion, '_last_loss_components'):

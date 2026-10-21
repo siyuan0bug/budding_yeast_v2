@@ -9,6 +9,7 @@ import random
 import numpy as np
 
 from ..contracts import Candidate, SimulationResult
+from ..sampling_policy import VERSION, STATIC_RATIOS, valid_candidate
 from ..dataset_io import read_dataset, write_dataset
 from ..generation import level_schedule, ensure_candidate, run_simulations
 from ..registry import make_sampler, candidate_name, get_recipe
@@ -20,7 +21,7 @@ from .samplers.rescue import parse_pairs
 def _report(config):
     return Counter({'collisions':0,'rescued':0,'recipe':config.recipe,
                     'mutation_profile':'mutant_aware','distribution_profile':'mutant_aware',
-                    'rng_contract':'paired_legacy_algorithms_v1','collision_policy':'rescue'})
+                    'rng_contract':'paired_legacy_algorithms_v1','sampling_policy':VERSION,'collision_policy':'rescue'})
 
 
 def _real_candidates(include):
@@ -28,6 +29,8 @@ def _real_candidates(include):
 
 
 def _save(path,results,config,report,mutation='mutant_aware',distribution='mutant_aware',dtype='float32'):
+    if config.include_real and not config.source and sum(r.candidate.is_real for r in results)!=126:
+        raise RuntimeError('Incomplete paired/source real benchmark; refusing export')
     report=dict(report,saved_real=sum(r.candidate.is_real for r in results),
                 saved_synthetic=sum(not r.candidate.is_real for r in results),
                 mutation_profile=mutation,distribution_profile=distribution)
@@ -116,13 +119,36 @@ def generate_twins(config):
     report=_report(config)
     left=_real_candidates(config.include_real)
     right=[replace(c,overrides=dict(c.overrides)) for c in left]
-    schedule=level_schedule(config.n_samples,config.level_ratios or (.25,)*4,np.random)
-    for number,level in enumerate(schedule,1):
-        b,a,desc=sample_twin_mutant_pair(int(level),sampler.backend.defaults(),ma=sampler.backend)
-        x,y=_twin_rescue(b,a,desc,int(level),number,sampler,report)
-        left.append(x);right.append(y)
-    a,b=_paired_results(left,right,config)
-    report['paired_failures']=len(left)-len(a)
+    schedule=level_schedule(config.n_samples,config.level_ratios or STATIC_RATIOS,np.random)
+    # Simulate in parallel BATCHES; refill failures at the same module count.
+    target=Counter(schedule.tolist());accepted_counts=Counter()
+    pending_levels=list(schedule);number=0;attempted=0
+    base_left,base_right=left,right
+    left,right=[],[]
+    while True:
+        pending_left,pending_right=list(base_left),list(base_right)
+        base_left,base_right=[],[]
+        for level in pending_levels:
+            for draw in range(100):
+                number+=1
+                b,a,desc=sample_twin_mutant_pair(int(level),sampler.backend.defaults(),ma=sampler.backend)
+                x,y=_twin_rescue(b,a,desc,int(level),number,sampler,report)
+                x,y=valid_candidate(x,'budding'),valid_candidate(y,'budding')
+                if x is not None and y is not None:break
+            else:raise RuntimeError('Cannot draw a twin pair with the requested module count')
+            pending_left.append(x);pending_right.append(y)
+        a,b=_paired_results(pending_left,pending_right,config)
+        attempted+=len(pending_levels)
+        report['paired_failures']+=len(pending_left)-len(a)
+        left.extend(a);right.extend(b)
+        for row in a:
+            if not row.candidate.is_real:accepted_counts[row.candidate.level]+=1
+        missing={level:target[level]-accepted_counts[level] for level in target if accepted_counts[level]<target[level]}
+        if not missing:break
+        if attempted>=config.max_attempts_mult*max(1,config.n_samples):
+            raise RuntimeError(f'Twin valid quota exhausted: {missing}')
+        pending_levels=[level for level,number_missing in missing.items() for _ in range(number_missing)]
+    a,b=left,right
     return {'mutant_aware':_save(config.output,a,config,report),
             'mass':_save(config.paired_output,b,config,report,'mass','mass')}
 
@@ -168,6 +194,9 @@ def _source_rows(config):
         candidate=Candidate(int(archive['sample_id'][i]) if 'sample_id' in archive else (-i-1 if is_real else i+1),
                             name,overrides,level,is_real,
                             pair_id=int(archive['pair_id'][i]) if 'pair_id' in archive else -1,metadata=metadata)
+        checked=valid_candidate(candidate,'budding')
+        if checked is None:raise ValueError('Source contains unsupported/unknown or >3-module synthetic rows; regenerate source')
+        candidate=checked
         _,y0,_,_=backend.prepare_initial_conditions(overrides)
         if not np.allclose(archive['data'][i,:,0],y0,rtol=1e-6,atol=1e-9):
             raise ValueError('Source initial state does not match canonical MA biology; regenerate it explicitly')
@@ -245,42 +274,60 @@ def generate_bams_ablation(config):
     real=[r for r in rows if r.candidate.is_real] if config.include_real else []
     synthetic=[r for r in rows if not r.candidate.is_real]
     if len(synthetic)<config.n_samples:raise ValueError('Source has fewer synthetic samples than the requested control budget')
+    target=Counter(level_schedule(config.n_samples,config.level_ratios or STATIC_RATIOS,np.random).tolist())
+    grouped={level:[r for r in synthetic if r.candidate.level==level] for level in (1,2,3)}
+    if any(len(grouped[level])<target[level] for level in target):
+        raise ValueError('Source cannot supply the requested per-level control quotas')
+    control=[row for level in (1,2,3) for row in grouped[level][:target[level]]]
     count=max(1,config.n_samples//5) if config.n_samples else 0
-    base=real+synthetic[:config.n_samples-count]
+    replace_schedule=level_schedule(count,(0,target[2],target[3]),np.random) if count else []
+    replacement_counts=Counter(replace_schedule)
+    base=real+[row for level in (1,2,3) for row in grouped[level][:target[level]-replacement_counts[level]]]
     sampler=make_sampler(get_recipe('budding_random'),config)
     report=_report(config)
     left,right=[],[]
     next_sample_id=max(0,max((r.candidate.sample_id for r in rows),default=0))+1
     next_pair_id=max((r.candidate.pair_id for r in rows),default=-1)+1
-    for i in range(count):
-        a,b,desc=targeted_pair(i)
-        # A shared carbon change is a valid rescue for this diagnostic pair and
-        # preserves the hard-KO versus hypomorphic treatment.
-        if real_mutants.is_duplicate_real_mutant(a,sampler.backend.defaults()) or real_mutants.is_duplicate_real_mutant(b,sampler.backend.defaults()):
-            report['collisions']+=1
-            rescued=False
-            for mdt in (150.,160.,90.):
-                a,b=dict(a,mdt=mdt),dict(b,mdt=mdt)
-                if not real_mutants.is_duplicate_real_mutant(a,sampler.backend.defaults()) and not real_mutants.is_duplicate_real_mutant(b,sampler.backend.defaults()):
-                    rescued=True;report['rescued']+=1;break
-            if not rescued:raise RuntimeError('Targeted paired rescue failed without altering the ablation treatment')
-        skeleton=TARGETED_SKELETONS[i%len(TARGETED_SKELETONS)]
-        genes=[item[0] if isinstance(item,tuple) else item for item in skeleton['lofs']]+[g for g,_ in skeleton['gofs']]
-        level=len(set(genes))
-        left.append(Candidate(next_sample_id+i,f'BAMS_TARGET_HARD_{i}_{desc}',a,level,pair_id=next_pair_id+i))
-        right.append(Candidate(next_sample_id+i,f'BAMS_TARGET_HYPO_{i}_{desc}',b,level,pair_id=next_pair_id+i))
-    a,b=_paired_results(left,right,config)
-    report['paired_failures']=len(left)-len(a)
+    skeleton_levels=[]
+    for skeleton in TARGETED_SKELETONS:
+        genes=[g[0] if isinstance(g,tuple) else g for g in skeleton['lofs']]+[g for g,_ in skeleton['gofs']]
+        skeleton_levels.append(len(set(genes)))
+    pending_levels=list(replace_schedule);number=0;attempted=0;got=Counter()
+    while pending_levels:
+        pending_left,pending_right=[],[]
+        for level in pending_levels:
+            eligible=[j for j,k in enumerate(skeleton_levels) if k==level]
+            for attempt in range(config.max_attempts_mult):
+                index=eligible[(number+attempt)%len(eligible)]
+                a,b,desc=targeted_pair(index)
+                if real_mutants.is_duplicate_real_mutant(a,sampler.backend.defaults()) or real_mutants.is_duplicate_real_mutant(b,sampler.backend.defaults()):
+                    report['collisions']+=1
+                    for mdt in (150.,160.,90.):
+                        a,b=dict(a,mdt=mdt),dict(b,mdt=mdt)
+                        if not real_mutants.is_duplicate_real_mutant(a,sampler.backend.defaults()) and not real_mutants.is_duplicate_real_mutant(b,sampler.backend.defaults()):
+                            report['rescued']+=1;break
+                    else:continue
+                skeleton=TARGETED_SKELETONS[index]
+                pairs=[g if isinstance(g,tuple) else (g,'KO') for g in skeleton['lofs']]+list(skeleton['gofs'])
+                metadata={'pairs':pairs,'description':desc}
+                x=Candidate(next_sample_id+number,f'BAMS_TARGET_HARD_{number}_{desc}',a,int(level),pair_id=next_pair_id+number,metadata=metadata)
+                y=replace(x,name=f'BAMS_TARGET_HYPO_{number}_{desc}',overrides=b)
+                pending_left.append(x);pending_right.append(y);number+=1
+                break
+            else:raise RuntimeError(f'Targeted pair collision rescue exhausted at L{level}')
+        a_rows,b_rows=_paired_results(pending_left,pending_right,config)
+        left.extend(a_rows);right.extend(b_rows)
+        report['paired_failures']+=len(pending_left)-len(a_rows)
+        attempted+=len(pending_left)
+        for row in a_rows:got[row.candidate.level]+=1
+        pending_levels=[level for level,needed in replacement_counts.items() for _ in range(needed-got[level])]
+        if pending_levels and attempted>=config.max_attempts_mult*max(1,count):
+            raise RuntimeError('Targeted paired valid quotas exhausted')
     report['diagnostic_targeted']=True
     profiles=_source_profiles(archive,report)
-    if not a:
-        mixed=profiles
-    elif not any(not result.candidate.is_real for result in base):
-        mixed=('mutant_aware','mutant_aware')
-    else:
-        mixed=tuple(p if p=='mutant_aware' else 'mixed' for p in profiles)
-    return {'control':_save(output,real+synthetic[:config.n_samples],config,report,*profiles),
-            'hard':_save(hard,base+a,config,report,*mixed),'hypo':_save(hypo,base+b,config,report,*mixed)}
+    mixed=tuple(p if p=='mutant_aware' else 'mixed' for p in profiles) if left else profiles
+    return {'control':_save(output,real+control,config,report,*profiles),
+            'hard':_save(hard,base+left,config,report,*mixed),'hypo':_save(hypo,base+right,config,report,*mixed)}
 
 
 def generate_derived(config):

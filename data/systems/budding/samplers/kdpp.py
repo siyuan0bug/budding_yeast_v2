@@ -3,7 +3,7 @@ import numpy as np
 from scipy.linalg import expm
 
 class GraphDiffusionKDPP:
-    """k-DPP Sampler based on 54-edge regulatory network diffusion kernel."""
+    """k-DPP Sampler based on current regulatory network diffusion kernel."""
 
     def __init__(self, tau=0.5, max_k=6, seed=42, *, ma):
         self.ma = ma
@@ -120,7 +120,7 @@ def sample_kdpp_mutant(level, kdpp_sampler, rng=np.random, *, ma):
 class SignedDirectedGraphKDPP:
     """
     k-DPP Sampler incorporating directed regulatory feedback loops and convergent fan-in.
-    Purely derived from the 54-edge ODE topology without any test-set awareness.
+    Purely derived from the current module topology without any test-set awareness.
     """
 
     def __init__(self, tau=0.5, max_k=6, seed=42, *, ma):

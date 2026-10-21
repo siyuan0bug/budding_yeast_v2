@@ -5,8 +5,8 @@ import time
 
 class GibbsBoltzmannGraphSampler:
     """
-    Exact Gibbs-Boltzmann sampler on the 27-gene budding yeast regulatory network.
-    Precomputes normalized categorical distributions over all combinations of size k in {2, 3, 4, 5}.
+    Exact Gibbs-Boltzmann sampler on the current budding yeast module network.
+    Precomputes normalized categorical distributions over all combinations of size k in {2, 3}.
     Sampling per candidate combination is exact and O(1).
     """
 
@@ -50,7 +50,7 @@ class GibbsBoltzmannGraphSampler:
 
     def _precompute_gibbs_tables(self):
         t0 = time.time()
-        for k in [2, 3, 4, 5]:
+        for k in [2, 3]:
             combs = np.array(list(itertools.combinations(range(self.N), k)), dtype=np.int32)
             pairs = list(itertools.combinations(range(k), 2))
             num_pairs = len(pairs)

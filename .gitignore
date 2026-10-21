@@ -39,6 +39,14 @@ model_visualizations/
 # 4. Experimental checkpoints & big directories
 experiments/
 archive/
+!/utils/archive/
+/utils/archive/*
+!/utils/archive/*.py
+!/utils/archive/README.md
+!/scripts/analysis/archive/
+/scripts/analysis/archive/*
+!/scripts/analysis/archive/*.py
+!/scripts/analysis/archive/README.md
 scratch/
 tests/
 

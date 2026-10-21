@@ -29,33 +29,21 @@ class DeepONet(nn.Module):
     - Trunk Network: Learns continuous time-domain basis functions over the time grid t in [0, 1].
     - Output: One-shot tensor contraction producing the entire (B, 39, 500) trajectory.
     """
-    def __init__(self, num_vars=39, param_dim=141, p_basis=128, hidden_dim=256):
+    def __init__(self, num_vars=39, param_dim=141, p_basis=128, hidden_dim=256, n_blocks=3):
         super().__init__()
         self.num_vars = num_vars
         self.p_basis = p_basis
 
-        # Branch Network: maps (parameters + initial conditions) -> basis weights per variable
-        in_branch = param_dim + num_vars
-        self.branch_net = nn.Sequential(
-            nn.Linear(in_branch, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, num_vars * p_basis)
-        )
-
-        # Trunk Network: maps time coordinate t -> continuous basis functions
-        self.trunk_net = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, p_basis)
-        )
+        if n_blocks < 1:
+            raise ValueError('n_blocks must be positive')
+        self.n_blocks = n_blocks
+        def dense(input_dim, output_dim):
+            layers = [nn.Linear(input_dim, hidden_dim), nn.GELU()]
+            for _ in range(n_blocks - 1):
+                layers.extend((nn.Linear(hidden_dim, hidden_dim), nn.GELU()))
+            return nn.Sequential(*layers, nn.Linear(hidden_dim, output_dim))
+        self.branch_net = dense(param_dim + num_vars, num_vars * p_basis)
+        self.trunk_net = dense(1, p_basis)
 
         # Learnable per-variable bias
         self.bias = nn.Parameter(torch.zeros(num_vars))

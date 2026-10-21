@@ -22,6 +22,8 @@ from typing import Dict, Any
 # 确保能从父目录导入 budding_yeast_v2 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from budding_yeast_v2.utils.active_learning.registry import CLI_STRATEGIES
+
 import torch
 import numpy as np
 import optuna
@@ -34,7 +36,7 @@ try:
 except ImportError:
     from optuna.integration.pytorch_lightning import PyTorchLightningPruningCallback
 
-from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
+from budding_yeast_v2.models.yeast_lit_module import YeastLitModule, MODEL_REGISTRY
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.preprocessing_contract import TRAIN_FIT_SCOPE
 from budding_yeast_v2.utils.metrics import calculate_metrics
@@ -54,11 +56,24 @@ def sample_model_aware_hparams(trial: optuna.Trial, model_name: str) -> Dict[str
         "weight_decay": weight_decay,
         "warmup_epochs": warmup_epochs,
         "max_epochs": max_epochs,
-        "n_blocks": trial.suggest_int("n_blocks", 2, 6),
+        "n_blocks": trial.suggest_int("n_blocks", 2, 4 if model_name == "unet" else 6),
     }
 
     # 2. 模型专属架构参数采样
-    if "wno" in m_lower:
+    if model_name == "unet":
+        # Encoder channels double at each level; keep the search practical.
+        hparams["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+        hparams["width"] = trial.suggest_categorical("width", [16, 32, 64])
+        hparams["modes"] = 24
+        hparams["wavelet"] = "haar"
+    elif model_name in ('kan', 'transformer', 'mamba'):
+        # Spline bases, attention matrices and the unfused selective scan need
+        # smaller batches than pointwise MLPs; do not search unused Fourier modes.
+        hparams["batch_size"] = trial.suggest_categorical("batch_size", [16, 32, 64])
+        hparams["width"] = trial.suggest_categorical("width", [32, 64, 128])
+        hparams["modes"] = 24
+        hparams["wavelet"] = "haar"
+    elif model_name == "wno":
         # WNO 大 Batch 易 OOM (小波张量树展开)，严格约束 batch_size
         hparams["batch_size"] = trial.suggest_categorical("batch_size", [64, 128])
         hparams["width"] = trial.suggest_categorical("width", [32, 64])
@@ -71,17 +86,17 @@ def sample_model_aware_hparams(trial: optuna.Trial, model_name: str) -> Dict[str
         hparams["width"] = trial.suggest_categorical("width", [64, 128, 192])
         hparams["modes"] = trial.suggest_categorical("modes", [16, 24, 32])
         hparams["wavelet"] = "haar"
-    elif "fno" in m_lower:
+    elif "fno" in m_lower or model_name == "mwt":
         # FNO 算子轻量高效 (支持探索激进大 batch 256, 512, 1024, 2048)
         hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024, 2048])
         hparams["width"] = trial.suggest_categorical("width", [32, 64, 128])
         hparams["modes"] = trial.suggest_categorical("modes", [16, 24, 32, 48, 64])
         hparams["wavelet"] = "haar"
     else:
-        # ResNetFiLM / DeepONet / UNet1D / 其它基线 (支持大 batch 256, 512, 1024, 2048)
+        # MLP / ResNet / DeepONet / other selected baselines (支持大 batch 256, 512, 1024, 2048)
         hparams["batch_size"] = trial.suggest_categorical("batch_size", [256, 512, 1024, 2048])
         hparams["width"] = trial.suggest_categorical("width", [64, 128, 256])
-        hparams["modes"] = trial.suggest_categorical("modes", [16, 32])
+        hparams["modes"] = 24  # fixed placeholder; not an HPO dimension for non-spectral models
         hparams["wavelet"] = "haar"
 
     return hparams
@@ -128,7 +143,9 @@ def bind_study_dataset(study, dm):
 
 
 def make_objective(args):
-    """返回 objective 闭包"""
+    """Return a static-data HPO objective; AL uses the outer training driver."""
+    if args.al_strategy != 'none':
+        raise ValueError('HPO requires --al_strategy none; use train.py for active learning')
 
     def objective(trial: optuna.Trial) -> float:
         # 1. 采样模型感知超参
@@ -146,6 +163,7 @@ def make_objective(args):
             use_adj_matrix=False,
             norm_type=getattr(args, 'norm_type', 'log1p'),
             fit_scope=TRAIN_FIT_SCOPE,
+            sensitivity_path=args.sensitivity_path,
         )
 
         model_numpy_state=np.random.get_state()
@@ -174,6 +192,9 @@ def make_objective(args):
                 modes=hp.get("modes", 32),
                 width=hp["width"],
                 n_blocks=hp["n_blocks"],
+                seq_len=datamodule.T_STEPS,
+                wavelet_level=hp.get('level',3),
+                sensitivity_weight=args.sensitivity_weight,
                 wavelet=hp.get("wavelet", "haar"),
                 loss_type=args.loss_type,
                 lr=hp["lr"],
@@ -202,25 +223,8 @@ def make_objective(args):
         pruner_cb = PyTorchLightningPruningCallback(trial, monitor="val_loss_synth")
         callbacks = [checkpoint_callback, pruner_cb]
 
-        # 5. 主动学习回调 (若指定)
-        if args.al_strategy != "none":
-            from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
-            callbacks.append(
-                ActiveLearningCallback(
-                    trigger_every_n_epochs=args.al_trigger_epoch,
-                    strategy=args.al_strategy,
-                    num_add=args.al_num_add,
-                    perturbation=args.al_perturbation,
-                    mae_threshold=args.al_mae_threshold,
-                    initial_train_size=args.al_initial_train_size,
-                    initial_selection=args.al_initial_selection,
-                    diversity_weight=args.al_diversity_weight,
-                    pool_subset_size=args.al_pool_subset_size,
-                    uncertainty_metric=args.al_uncertainty_metric,
-                    random_seed=args.seed,
-                )
-            )
-
+        # AL acquisition requires train.py's outer retraining loop. HPO is
+        # explicitly static until that driver is shared with the tuner.
         # 6. 训练
         trainer = pl.Trainer(
             max_epochs=hp["max_epochs"],
@@ -229,7 +233,7 @@ def make_objective(args):
             accelerator="cuda" if torch.cuda.is_available() else "cpu",
             devices=1,
             precision="bf16-mixed",
-            reload_dataloaders_every_n_epochs=args.al_trigger_epoch if args.al_strategy != "none" else 0,
+            reload_dataloaders_every_n_epochs=0,
             num_sanity_val_steps=0,
             enable_progress_bar=False,  # 避免多卡并行互相抢占终端刷新
         )
@@ -311,27 +315,43 @@ def make_objective(args):
 
 def format_pipeline_experiment_line(model: str, loss_type: str, al_strategy: str, dataset_path: str,
                                    dataset_tag: str, p: Dict[str, Any], gpu_id: int = 0) -> str:
-    """生成可以直接粘贴到 run_pipeline.sh 中的标准 17 列格式行"""
-    width = p.get("width", 128)
-    modes = p.get("modes", 32)
-    bs = p.get("batch_size", 512)
-    epochs = p.get("max_epochs", 100)
-    lr = p.get("lr", 1.7e-3)
-    warmup = p.get("warmup_epochs", 10)
-    tag = f"{dataset_tag}_{model}_optuna"
-    
-    # 格式: MODEL LOSS_TYPE USE_ADJ DATASET_PATH DATASET_TAG MODES WIDTH BATCH_SIZE EPOCHS AL_STRATEGY LR WARMUP AL_NUM_ADD AL_PERTURBATION AL_MAE_THRESHOLD ROLLOUT_TYPE GPU_ID
-    line = f'"{model} {loss_type} false ${{DATASET_{dataset_tag.upper()}}} {tag} {modes} {width} {bs} {epochs} {al_strategy} {lr:.2e} {warmup} 0 0 0 one_time {gpu_id}"'
-    return line
+    """Generate the pipeline's 16 positional columns plus explicit training flags."""
+    if model not in MODEL_REGISTRY:
+        raise ValueError(f'Unknown/removed model: {model}')
+    if any(c.isspace() for c in dataset_path):
+        raise ValueError('The pipeline row format requires dataset paths without whitespace; use train.py directly')
+    values = [model,loss_type,'false',dataset_path,str(p.get('modes',24)),str(p.get('width',64)),
+              str(p.get('batch_size',64)),str(p.get('max_epochs',100)),al_strategy,
+              str(p.get('lr',1e-3)),str(p.get('warmup_epochs',10)),'0','0','0','one_time',str(gpu_id)]
+    extras = {'n_blocks':p.get('n_blocks',4),'weight_decay':p.get('weight_decay',1e-4),
+              'dataset_tag':dataset_tag}
+    if model == 'wno':
+        extras.update(wavelet=p.get('wavelet','haar'),wavelet_level=p.get('level',3))
+    if model in ('neural_ode','konode'):
+        extras.update(ode_method=p.get('ode_method','dopri5'),ode_rtol=p.get('ode_rtol',1e-3),ode_atol=p.get('ode_atol',1e-4))
+    if model == 'sc_fno':
+        if not p.get('sensitivity_path'):
+            raise ValueError('SC-FNO exported command requires sensitivity_path')
+        extras.update(sensitivity_path=p['sensitivity_path'],sensitivity_weight=p.get('sensitivity_weight',1.0))
+    for name,value in extras.items():
+        if any(c.isspace() for c in str(value)):
+            raise ValueError(f'Pipeline extra {name} contains whitespace; use train.py directly')
+        values.append(f'--{name}={value}')
+    # Double-quoted shell array entry; reject shell expansions in literal values.
+    if any(any(c in value for c in ('"','`','$','\\')) for value in values):
+        raise ValueError('Pipeline row contains shell expansion characters; use train.py directly')
+    return '"' + ' '.join(values) + '"'
 
 
 def main():
     parser = argparse.ArgumentParser(description="Optuna Distributed Multi-GPU HPO")
 
     # 模型与数据集
-    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--sensitivity_path", type=str, default=None)
+    parser.add_argument("--sensitivity_weight", type=float, default=1.0)
+    parser.add_argument("--model", type=str, required=True, choices=tuple(MODEL_REGISTRY))
     parser.add_argument("--system", choices=("auto", "budding", "fission"), default="auto")
-    parser.add_argument("--al_strategy", type=str, default="none")
+    parser.add_argument("--al_strategy", type=str, default="none", choices=CLI_STRATEGIES)
     parser.add_argument("--loss_type", type=str, default="hybrid_mse_rel")
     parser.add_argument("--dataset_name", type=str, required=True)
     parser.add_argument("--data_dir", type=str, default="/home/users/zsy/mydata/budding_yeast")
@@ -347,15 +367,6 @@ def main():
     parser.add_argument("--ode_atol", type=float, default=1e-4)
 
     # AL 参数
-    parser.add_argument("--al_trigger_epoch", type=int, default=10)
-    parser.add_argument("--al_num_add", type=int, default=5000)
-    parser.add_argument("--al_perturbation", type=float, default=0.1)
-    parser.add_argument("--al_mae_threshold", type=float, default=0.1)
-    parser.add_argument("--al_initial_train_size", type=int, default=5000)
-    parser.add_argument("--al_initial_selection", type=str, default="kmeans")
-    parser.add_argument("--al_diversity_weight", type=float, default=0.5)
-    parser.add_argument("--al_pool_subset_size", type=int, default=10000)
-    parser.add_argument("--al_uncertainty_metric", type=str, default="variance")
 
     # 搜索与并发配置
     parser.add_argument("--n_trials", type=int, default=50, help="该 Worker 进程执行的 trial 数")
@@ -371,6 +382,12 @@ def main():
     parser.add_argument("--worker_id", type=int, default=0, help="多卡并行 Worker 序号")
 
     args = parser.parse_args()
+    if args.model == 'sc_fno' and (args.loss_type != 'sc_sensitivity' or not args.sensitivity_path):
+        parser.error('sc_fno requires --loss_type sc_sensitivity --sensitivity_path <reference.npz>')
+    if args.sensitivity_path and args.model != 'sc_fno':
+        parser.error('--sensitivity_path is reserved for sc_fno')
+    if args.al_strategy != 'none':
+        parser.error('HPO currently supports --al_strategy none only; use train.py for the AL outer loop')
 
     pl.seed_everything(args.seed + args.worker_id, workers=True)
     os.makedirs(args.save_dir, exist_ok=True)
@@ -444,7 +461,10 @@ def main():
             print(f"\n  🥇 Rank #{rank} (Trial #{t.number}) -> Real MAE: {t.value:.4f} | Corr: {t.user_attrs.get('real_corr', 'N/A')}")
             print(f"     Params: {t.params}")
             line = format_pipeline_experiment_line(args.model, args.loss_type, args.al_strategy,
-                                                 args.dataset_name, dataset_tag, t.params)
+                                                 os.path.join(args.data_dir,args.dataset_name), dataset_tag,
+                                                 dict(t.params, ode_method=args.ode_method, ode_rtol=args.ode_rtol,
+                                                      ode_atol=args.ode_atol,sensitivity_path=args.sensitivity_path,
+                                                      sensitivity_weight=args.sensitivity_weight))
             print(f"     📋 对应的 run_pipeline.sh 配置行:")
             print(f"     {line}")
             top_k_records.append({
