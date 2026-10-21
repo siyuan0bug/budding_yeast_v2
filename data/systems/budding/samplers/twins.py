@@ -1,7 +1,7 @@
 """Original paired skeleton/shared-dose construction; two profiles share canonical biology."""
 import numpy as np
-from ..systems.budding.distributions.mass import sample_scaling_factor as sample_scaling_factor_A
-from ..systems.budding.mutations.mass import apply_gene_mutation as _apply_mass_mutation
+from ..distributions.mass import sample_scaling_factor as sample_scaling_factor_A
+from ..mutations.mass import apply_gene_mutation as _apply_mass_mutation
 
 
 def apply_gene_mutation_A(g_name, m_chosen, alpha, p_wt, p_mut, ovr):

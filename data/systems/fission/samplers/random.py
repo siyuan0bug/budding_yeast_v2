@@ -1,7 +1,7 @@
 """Original Fission L1 rotation and random module selection."""
 import numpy as np
-from ..systems.fission.catalog import SAMPLING_MODULES, MODE_CLASS, MODE_CLASS_QUOTA
-from ..systems.fission.distributions import _strength
+from ..catalog import SAMPLING_MODULES, MODE_CLASS, MODE_CLASS_QUOTA
+from ..distributions import _strength
 
 MODE_FREQ = 'class'        # 由 --mode_freq 覆盖 (class = 配额; flat = 均匀)
 

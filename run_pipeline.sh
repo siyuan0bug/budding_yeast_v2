@@ -90,6 +90,13 @@ DATASET_PURE_RANDOM_DIST_TWIN_A="${DATA_DIR}/budding_twins_100000_seed42_modular
 DATASET_MASS_100000_BLIND="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels.npz"
 
 DATASET_MASS_100000_BLIND_S5="${DATA_DIR}/wb_mass_100000_dataset_210min_500steps_dual_labels_s5mode.npz"
+
+# ====== 裂殖酵母 (Sveiczer 2000) 数据集 ======
+# 生成命令: python data/generate.py --recipe fission_random --samples 50000 --seed 20000 \
+#           --workers 60 --data_dir /home/users/zsy/mydata/budding_yeast
+# 组成: 20 Real Mutants + 50000 合成样本 (L1/L2/L3 = 45/35/20), 16 变量 x 500 步 (0-300 min)
+# 数据集 tag: fission_random_50000_seed20000_modular (脚本自动由文件名生成并传给 --dataset_tag)
+DATASET_FISSION_RANDOM_50000="${DATA_DIR}/fission_random_50000_seed20000_modular.npz"
 # 旧版 MASS v3 数据集 (已注释归档)
 #DATASET_MASS_V3="${DATA_DIR}/massv3_dataset_210min_500steps_dual_labels.npz"
 # mutant_aware 策略专用: atlas CSV (含 lhs_MAE_min, lhs_n_samples 列)
@@ -182,9 +189,18 @@ EXPERIMENTS=(
     #   - GPU 1: biom_refiner_attractor_plus (双吸引子 + 因果调控图可达性旗舰算子)
     #   - GPU 2: biom_refiner_causal_reach (生物调控图因果可达性算子)
     # ==============================================================================
-    "biom_refiner_attractor hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
-    "biom_refiner_attractor_plus hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
-    "biom_refiner_causal_reach hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+    #"biom_refiner_attractor hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
+    #"biom_refiner_attractor_plus hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    #"biom_refiner_causal_reach hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
+
+    # ==============================================================================
+    # 🌟🌟🌟 裂殖酵母 Fission 基准: 50,000 合成 + 20 Real Mutants 🌟🌟🌟
+    # 数据集 tag: fission_random_50000_seed20000_modular
+    # 配置对齐 biom_refiner_plus 经典基准: hybrid_mse_rel, m24, w192, b256, ep100, lr8.8e-4, wm8
+    # 硬件分配: 原定 GPU 5 = fno1d, GPU 6 = biom_refiner_plus; 因 cxn 独占任务长期占用, 临时改用空闲 GPU 1/2
+    # ==============================================================================
+    "fno1d hybrid_mse_rel false ${DATASET_FISSION_RANDOM_50000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 1"
+    "biom_refiner_plus hybrid_mse_rel false ${DATASET_FISSION_RANDOM_50000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 2"
 
     # [已归档注释]
     #"biom_refiner_bifurcate hybrid_bifurcate false ${DATASET_MUTANT_AWARE_PURE_RANDOM_100000} 24 192 256 100 none 8.8e-4 8 0 0 0 one_time 0"
@@ -861,7 +877,7 @@ for gpu in "${ALL_GPUS[@]}"; do
                 fi
 
                 # 单卡并发数上限规则 (若设了 MAX_CONCURRENT_PER_GPU > 0，或独占卡强制为 1)
-                local max_c=$MAX_CONCURRENT_PER_GPU
+                max_c=$MAX_CONCURRENT_PER_GPU
                 [ "$is_exclusive" -eq 1 ] && max_c=1
                 if [ "$max_c" -gt 0 ] && [ "${#ACTIVE_PIDS[@]}" -ge "$max_c" ]; then
                     sleep 5

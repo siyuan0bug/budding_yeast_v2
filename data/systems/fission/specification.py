@@ -1,5 +1,5 @@
 """Fission dimensions/scales are independent of Budding's 39/141 contract."""
-from ...generation.contracts import SystemSpec
+from ..contracts import SystemSpec
 from .constants import VAR_NAMES, TF_MIN, N_T, MASS_UNIT
 from .parameters import EXPORT_KEYS
 

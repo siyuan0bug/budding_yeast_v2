@@ -8,14 +8,13 @@ import random
 
 import numpy as np
 
-from .contracts import Candidate, SimulationResult
-from .io import read_dataset, write_dataset
-from .policies import level_schedule, parse_pairs
-from .runner import ensure_candidate, run_simulations, _parameter_result
-from ..sampling.factory import Sampler
-from ..systems.budding.specification import BuddingSystem, SPEC
-from ..systems.budding import real_mutants
-from ..recipes import get_recipe
+from ..contracts import Candidate, SimulationResult
+from ..dataset_io import read_dataset, write_dataset
+from ..generation import level_schedule, ensure_candidate, run_simulations
+from ..registry import make_sampler, candidate_name, get_recipe
+from .specification import BuddingSystem, SPEC
+from . import real_mutants
+from .samplers.rescue import parse_pairs
 
 
 def _report(config):
@@ -74,7 +73,7 @@ def _paired_results(left,right,config):
 
 def _twin_rescue(ovr_b,ovr_a,desc,level,number,sampler,report):
     """Change a colliding form once, then rebuild both arms on that shared form."""
-    from ..sampling.twins import TARGET_MODES, apply_gene_mutation_A, sample_scaling_factor_A
+    from .samplers.twins import TARGET_MODES, apply_gene_mutation_A, sample_scaling_factor_A
     backend=sampler.backend
     initial=Candidate(number,f'MASS_{desc}_L{level}_{number}',ovr_b,level,pair_id=number,
                       metadata={'description':desc})
@@ -105,7 +104,7 @@ def _twin_rescue(ovr_b,ovr_a,desc,level,number,sampler,report):
 
 
 def generate_twins(config):
-    from ..sampling.twins import sample_twin_mutant_pair
+    from .samplers.twins import sample_twin_mutant_pair
     if not config.paired_output:
         output=Path(config.output)
         config=replace(config,paired_output=str(output.with_name(output.stem+'_mass.npz')))
@@ -113,7 +112,7 @@ def generate_twins(config):
         raise ValueError('Twins explicitly compare the two existing profiles; do not override one arm')
     _check_outputs([config.output,config.paired_output],config)
     recipe=get_recipe('budding_random')
-    sampler=Sampler(recipe,config)
+    sampler=make_sampler(recipe,config)
     report=_report(config)
     left=_real_candidates(config.include_real)
     right=[replace(c,overrides=dict(c.overrides)) for c in left]
@@ -216,8 +215,7 @@ def generate_ko_mirror(config):
     results=list(run_simulations(tasks,config,None))
     if any(r.trajectory is None for r in results):
         raise RuntimeError('KO mirror re-simulation failed; refusing new parameters paired with old trajectories')
-    from ..sampling.factory import candidate_name
-    sampler=Sampler(get_recipe('budding_random'),config)
+    sampler=make_sampler(get_recipe('budding_random'),config)
     report=_report(config)
     for i,result in zip(indices,results):
         candidate=replace(result.candidate,metadata=dict(result.candidate.metadata,
@@ -238,7 +236,7 @@ def generate_ko_mirror(config):
 
 
 def generate_bams_ablation(config):
-    from ..sampling.targeted_ablation import targeted_pair, TARGETED_SKELETONS
+    from .samplers.targeted_ablation import targeted_pair, TARGETED_SKELETONS
     output=Path(config.output)
     hard=output.with_name(output.stem+'_hard.npz')
     hypo=output.with_name(output.stem+'_hypo.npz')
@@ -249,7 +247,7 @@ def generate_bams_ablation(config):
     if len(synthetic)<config.n_samples:raise ValueError('Source has fewer synthetic samples than the requested control budget')
     count=max(1,config.n_samples//5) if config.n_samples else 0
     base=real+synthetic[:config.n_samples-count]
-    sampler=Sampler(get_recipe('budding_random'),config)
+    sampler=make_sampler(get_recipe('budding_random'),config)
     report=_report(config)
     left,right=[],[]
     next_sample_id=max(0,max((r.candidate.sample_id for r in rows),default=0))+1

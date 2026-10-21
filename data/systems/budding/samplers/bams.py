@@ -1,7 +1,7 @@
 """Original signed walks and bifurcation bisection; refined overrides remain paired with their trajectory."""
 import numpy as np
-from ..systems.budding.catalog import GENE_NAMES, GROUP_BY_NAME
-from ..systems.budding.topology import MODULE_EDGES
+from ..catalog import GENE_NAMES, GROUP_BY_NAME
+from ..topology import MODULE_EDGES
 
 ADJ = {n: set() for n in GENE_NAMES}
 EDGES_OUT = {n: [] for n in GENE_NAMES}

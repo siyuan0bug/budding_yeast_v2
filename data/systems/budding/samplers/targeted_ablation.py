@@ -1,8 +1,8 @@
 """Original targeted BAMS diagnostic skeletons and paired KO/hypomorph assignments."""
 import numpy as np
-from ..systems.budding.parameters import get_default_params
-from ..systems.budding.distributions.mutant_aware import sample_scaling_factor
-from ..systems.budding.mutations.mutant_aware import apply_gene_mutation
+from ..parameters import get_default_params
+from ..distributions.mutant_aware import sample_scaling_factor
+from ..mutations.mutant_aware import apply_gene_mutation
 
 TARGETED_SKELETONS = [{'desc': 'M15_mc', 'lofs': ['CLN3', 'BCK2'], 'gofs': [('CLN2', 'MC')]}, {'desc': 'M15_gal', 'lofs': ['CLN3', 'BCK2'], 'gofs': [('CLN2', 'GAL-OE')]}, {'desc': 'M16', 'lofs': ['CLN3', 'BCK2', 'SIC1'], 'gofs': []}, {'desc': 'M13', 'lofs': ['CLN3', 'BCK2'], 'gofs': []}, {'desc': 'M22_mc', 'lofs': ['CLN2', 'CLN3'], 'gofs': [('CLB5', 'MC')]}, {'desc': 'M23_gal', 'lofs': ['CLN2', 'CLN3'], 'gofs': [('CLB5', 'GAL-OE')]}, {'desc': 'M24_mc', 'lofs': ['CLN2', 'CLN3'], 'gofs': [('BCK2', 'MC')]}, {'desc': 'M20', 'lofs': ['CLN2', 'CLN3', 'SIC1'], 'gofs': []}, {'desc': 'M33', 'lofs': ['CLN2', 'CDH1'], 'gofs': [('SIC1', 'GAL-OE'), ('CLN2', 'GAL-OE')]}, {'desc': 'M31', 'lofs': ['CLN2'], 'gofs': [('SIC1', 'GAL-OE'), ('CLN2', 'GAL-OE')]}, {'desc': 'M42', 'lofs': ['SIC1', 'CDC6', 'CDH1'], 'gofs': [('CDC20', 'GAL-OE')]}, {'desc': 'M58', 'lofs': [('CLB2', 'db')], 'gofs': [('SIC1', 'GAL-OE')]}, {'desc': 'M53', 'lofs': ['SIC1'], 'gofs': [('CLB2', 'GAL-OE')]}, {'desc': 'M124', 'lofs': [], 'gofs': [('APC_Core', 'APC-A'), ('CLB2', 'GAL-OE')]}, {'desc': 'M76', 'lofs': ['CDC20', 'PDS1', 'CLB5'], 'gofs': []}]
 

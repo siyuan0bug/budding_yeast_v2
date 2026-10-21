@@ -15,7 +15,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT.parent))
 from budding_yeast_v2.data.systems.budding import catalog,topology
 from budding_yeast_v2.data.systems.budding.specification import BuddingSystem
-from budding_yeast_v2.data.sampling import common
+from budding_yeast_v2.data.systems.budding.samplers import common
 
 
 def canonical(value):
@@ -124,13 +124,13 @@ def audit(seeds,draws):
         bb=[b.pick([1.,3.,2.] if i%5==0 else None) for i in range(draws*4)]
         add(f'quota_picker.{seed}',identical((aa,a.counts,sa),(bb,b.counts,np.random.get_state())))
     # Retain each specialized graph; do not silently force WT-Blind's 46 edges to 54.
-    for source,target,keys in [('bams_dataset_generator','sampling.bams',['MODULE_EDGES','ADJ','EDGES_OUT','EDGES_IN','CONVERGENT_TARGETS','ANTAG_PAIRS','_L1_GRID']),
-                               ('mass_wt_blind_sampler','sampling.wt_blind',['MODULE_EDGES','P_BIO','ADJ','DIST','FOLD_MODES','ALLELE_RESIDUAL','_L1_GRID']),
+    for source,target,keys in [('bams_dataset_generator','systems.budding.samplers.bams',['MODULE_EDGES','ADJ','EDGES_OUT','EDGES_IN','CONVERGENT_TARGETS','ANTAG_PAIRS','_L1_GRID']),
+                               ('mass_wt_blind_sampler','systems.budding.samplers.wt_blind',['MODULE_EDGES','P_BIO','ADJ','DIST','FOLD_MODES','ALLELE_RESIDUAL','_L1_GRID']),
                                ('fission_random_sampler','systems.fission.catalog',['SAMPLING_MODULES'])]:
         a=importlib.import_module('budding_yeast_v2.data.'+source)
         b=importlib.import_module('budding_yeast_v2.data.'+target)
         for key in keys:add(source+'.'+key,identical(getattr(a,key),getattr(b,key)))
-    manifest=json.loads((ROOT/'data/generation/archived_generators.json').read_text())
+    manifest=json.loads((ROOT/'data/systems/archived_generators.json').read_text())
     add('all_31_archived_generators_unchanged',all(hashlib.sha256((ROOT/p).read_bytes()).hexdigest()==h for p,h in manifest.items()))
     return dict(seeds=seeds,draws_per_cell=draws,mode_draw_checks=mode_checks,
                 checks=len(results),passed=sum(r['equal'] for r in results),results=results)

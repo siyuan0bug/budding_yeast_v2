@@ -5,6 +5,10 @@ budding_yeast_v2.data module
 公共生物接口来自 systems.budding；历史生成器保留供显式历史对照。
 """
 
+from .systems.compat import install_legacy_imports as _install_legacy_imports
+
+_install_legacy_imports()
+
 from .systems.budding.api import (
     get_default_params,
     mutant_rules,

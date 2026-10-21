@@ -3,6 +3,15 @@
 当前生产入口：`python data/generate.py`。31 个旧生成/LHS 文件原地原样留存，
 生产导入不依赖它们；显式新旧对照审计仍可以导入旧版。旧 NPZ 无需转换。
 
+## 当前实现位置
+
+统一命令不变：`python data/generate.py ...`；该文件只启动转发。
+全部新实现都在 `data/systems/`：`generation.py` 管CLI和执行，`dataset_io.py` 管导出，
+`contracts.py` 管数据结构，`registry.py` 管系统与recipe注册。
+具体配置位于 `systems/budding/recipes.py`、`systems/fission/recipes.py`，
+采样算法位于各自的 `samplers/`。原sampling/recipes/generation三个目录已经移除；
+旧Python导入集中兼容，原始31个生成脚本仍原地保留。详细职责见 [整理说明](DATA_GENERATION_REFACTOR_2026-10-20.md)。
+
 ## 文件名
 
 使用 `--data_dir DIR` 自动命名：`<recipe>_<N>_seed<seed>_modular.npz`。

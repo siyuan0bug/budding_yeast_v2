@@ -24,11 +24,11 @@ from scipy.stats import qmc
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT.parent))
-from budding_yeast_v2.data.generation.contracts import GenerationConfig
-from budding_yeast_v2.data.generation.runner import prepare_candidates
-from budding_yeast_v2.data.recipes import RECIPES
-from budding_yeast_v2.data.sampling.factory import Sampler
-from budding_yeast_v2.data.sampling import common
+from budding_yeast_v2.data.systems.contracts import GenerationConfig
+from budding_yeast_v2.data.systems.generation import prepare_candidates
+from budding_yeast_v2.data.systems.registry import RECIPES
+from budding_yeast_v2.data.systems.registry import make_sampler
+from budding_yeast_v2.data.systems.budding.samplers import common
 from budding_yeast_v2.data.systems.budding import real_mutants
 from budding_yeast_v2.data.systems.budding.specification import BuddingSystem
 
@@ -106,7 +106,7 @@ def raw_stream(name,seed,count,new):
     cfg=GenerationConfig(name,n_samples=count,seed=seed,mode_freq=recipe.mode_freq)
     kernel=None
     if new:
-        sampler=Sampler(recipe,cfg);rng=sampler.rng;kernel=sampler.kernel
+        sampler=make_sampler(recipe,cfg);rng=sampler.rng;kernel=getattr(sampler, 'kernel', None)
     else:
         rng=np.random.default_rng(seed) if recipe.system=='fission' else np.random.RandomState(seed)
         if recipe.sampler in ('gibbs','gibbs_sobol'):kernel=old.GibbsBoltzmannGraphSampler(seed=seed)
@@ -198,7 +198,7 @@ def new_driver(name,seed,count):
     recipe=RECIPES[name]
     cfg=GenerationConfig(name,n_samples=count,seed=seed,include_real=False,mode_freq=recipe.mode_freq)
     np.random.seed(seed);random.seed(seed)
-    sampler=Sampler(recipe,cfg)
+    sampler=make_sampler(recipe,cfg)
     rows=[]
     original=sampler.sample
     def capture(level):
@@ -206,9 +206,9 @@ def new_driver(name,seed,count):
         kind=recipe.sampler
         result=overrides if kind=='motif' else ((overrides,description,'') if kind=='pool' else ((overrides,description,refinement) if kind=='bams' else (overrides,description)))
         uses_rng=kind in ('random','random_ko_interval','gibbs','gibbs_sobol','kdpp','kdpp_curvature','motif','pool','fission_random')
-        rows.append(record(level,result,sampler.rng if uses_rng else None,sampler.kernel))
+        rows.append(record(level,result,sampler.rng if uses_rng else None,getattr(sampler, 'kernel', None)))
         return overrides,description,refinement,pairs
-    with patch.object(sampler,'sample',capture),patch('budding_yeast_v2.data.generation.runner.ensure_candidate',side_effect=lambda candidate,*args: candidate):
+    with patch.object(sampler,'sample',capture),patch('budding_yeast_v2.data.systems.generation.ensure_candidate',side_effect=lambda candidate,*args: candidate):
         prepare_candidates(recipe,cfg,sampler,Counter())
     return rows
 
@@ -230,7 +230,7 @@ def special_stream(kind,seed,count,new,fold='tier2',mode='flat'):
     old=module(source);reset(old,seed,mode)
     backend=BuddingSystem('mass','mass') if kind=='wt' else BuddingSystem()
     if kind=='wt':
-        target=module('sampling.wt_blind') if new else old
+        target=module('systems.budding.samplers.wt_blind') if new else old
         reset(target,seed,mode);target.FOLD_DIST=fold
         bands=target.make_samplers()
     rows=[]
@@ -246,9 +246,9 @@ def special_stream(kind,seed,count,new,fold='tier2',mode='flat'):
             candidate=target.build_candidate(level,bands,ma=backend) if new else target.build_candidate(level,bands)
             result=candidate
         elif kind=='twins':
-            result=module('sampling.twins').sample_twin_mutant_pair(level,backend.defaults(),ma=backend) if new else old.sample_twin_mutant_pair(level,backend.defaults())
+            result=module('systems.budding.samplers.twins').sample_twin_mutant_pair(level,backend.defaults(),ma=backend) if new else old.sample_twin_mutant_pair(level,backend.defaults())
         else:
-            a,b,_=module('sampling.targeted_ablation').targeted_pair(i)
+            a,b,_=module('systems.budding.samplers.targeted_ablation').targeted_pair(i)
             rows.append({'result':[plain(a),plain(b)]});continue
         rows.append({'result':plain(result),'rng':rng_state(np.random)})
     return rows,rng_state(np.random)
@@ -256,8 +256,8 @@ def special_stream(kind,seed,count,new,fold='tier2',mode='flat'):
 
 def wt_driver(seed,new):
     """Execute the real pilot/ledger loop, stopping before ODE/export."""
-    source=module('sampling.wt_pipeline') if new else module('mass_wt_blind_sampler')
-    target=module('sampling.wt_blind') if new else source
+    source=module('systems.budding.samplers.wt_pipeline') if new else module('mass_wt_blind_sampler')
+    target=module('systems.budding.samplers.wt_blind') if new else source
     reset(target,seed,'flat')
     fn=source.prepare_wt_candidates if new else source.generate_wt_blind_dataset
     lines,start=inspect.getsourcelines(fn)
@@ -274,7 +274,7 @@ def wt_driver(seed,new):
             raise Captured()
         return trace
     cfg=GenerationConfig('budding_wt_blind',n_samples=16,pilot_samples=32,seed=seed,mode_freq='flat',include_real=False)
-    sampler=Sampler(RECIPES[cfg.recipe],cfg) if new else None
+    sampler=make_sampler(RECIPES[cfg.recipe],cfg) if new else None
     previous=sys.gettrace()
     with patch.object(real_mutants,'is_duplicate_real_mutant',return_value=False),redirect_stdout(io.StringIO()),ExitStack() as stack:
         if not new:stack.enter_context(patch.object(source,'is_duplicate_real_mutant',return_value=False))

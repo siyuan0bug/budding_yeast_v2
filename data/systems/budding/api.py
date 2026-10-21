@@ -30,17 +30,17 @@ def apply_gene_mutation(*args,rng=None):
 
 
 def sample_mass_random(level=1):
-    from ...sampling.random import sample_mass_random as sample
+    from .samplers.random import sample_mass_random as sample
     return sample(level,ma=_MASS_SYSTEM)
 
 
 def sample_mass_mutant(level=1):
-    from ...sampling.mass import sample_mass_mutant as sample
+    from .samplers.mass import sample_mass_mutant as sample
     return sample(level,ma=_SYSTEM)
 
 
 def __getattr__(name):
-    from ...sampling import common,mass
+    from .samplers import common, mass
     if name=='MODE_FREQ':return common.MODE_FREQ
     for module in (parameters,states,ode,simulation,phenotypes,real_mutants,catalog,topology,common,mass):
         if hasattr(module,name):return getattr(module,name)

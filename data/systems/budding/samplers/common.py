@@ -1,6 +1,6 @@
 """Original L1 rotation, mode weighting and conflict resolution shared by graph strategies."""
 import numpy as np
-from ..systems.budding.catalog import GROUP_BY_NAME, GENE_NAMES, MODE_CLASS, MODE_CLASS_QUOTA, GENE_ROLE, ROLE_AFFINITY, touch_set
+from ..catalog import GROUP_BY_NAME, GENE_NAMES, MODE_CLASS, MODE_CLASS_QUOTA, GENE_ROLE, ROLE_AFFINITY, touch_set
 MODE_FREQ = "class"
 
 _L1_GRID = [(g, m) for g in GENE_NAMES for m in GROUP_BY_NAME[g]['modes']]

@@ -2,37 +2,40 @@
 
 本次增加模块化生成入口 `data/generate.py`，同时完整保留原有脚本。旧命令继续执行旧代码；新命令执行拆分后的实现。没有覆盖正式 NPZ，也没有更改训练、归一化或数据切分代码。
 
+> **2026-10-21 最终目录落地**：新框架统一在 `data/systems/`。
+> 公共配置/协议为 `contracts.py`，注册和查配置为 `registry.py`，生成与CLI解析为 `generation.py`，
+> 校验导出为 `dataset_io.py`；Budding/Fission 各自的 `recipes.py`、`adapter.py`、`samplers/` 管系统专属规则。
+> `data/generate.py` 只保留启动转发。原 `data/sampling/`、`data/recipes/`、`data/generation/` 目录已移除，
+> 旧Python导入由 `systems/compat.py` 惰性映射到同一个真实模块，兼容Sampler、状态赋值与旧pickle路径。
+> 31个原始生成器原地保留；归档哈希清单现位于 `systems/archived_generators.json`。
+> 同时修复Fission增量去重、混合格式seed汇总及Fission采样审计接口，命令和默认配置保持不变。
+
 后续按要求将两个 real 定义模块统一命名为 `real_mutants.py`。超时、配对、派生数据校验等最终复查修正见 [最终复查说明](DATA_GENERATION_FINAL_REVIEW_2026-10-20.md)。
 
 ## 文件分别负责什么
 
 一次生成按以下顺序进行：选配置 → 抽取基因和突变模式 → 修改参数 → 碰撞救援 → ODE 仿真 → 表型判定 → 保存 NPZ。
 
-| 位置 | 存放内容 | 什么时候修改这里 |
-| --- | --- | --- |
-| `data/systems/budding/states.py` | 39 个变量的名称、顺序和 WT 初始状态 | 调整变量或初值 |
-| `data/systems/budding/parameters.py` | WT 参数及固定的 141 维参数顺序 | 调整生化参数 |
-| `data/systems/budding/ode.py` | ODE、GK 函数和事件条件 | 调整方程或事件触发条件 |
-| `data/systems/budding/simulation.py` | 参数与初值组装、积分、事件重置、插值 | 调整数值仿真流程 |
-| `data/systems/budding/phenotypes.py` | viability 和 pattern 标签 | 调整表型定义 |
-| `data/systems/budding/real_mutants.py` | 126 个 real mutant 的名称及参数/初值覆盖规则 | 调整实验基准 |
-| `data/systems/budding/catalog.py` | 基因、合法突变模式、每种模式涉及哪些参数 | 添加基因或突变模式 |
-| `data/systems/budding/mutations/` | `mass.py` 与 `mutant_aware.py` 两套“如何修改参数”的实现 | 调整某种突变的参数映射 |
-| `data/systems/budding/distributions/` | 两套“突变强度怎么抽”的实现及 Sobol 逆分布 | 调整概率、范围或分布 |
-| `data/systems/budding/topology.py` | 常用模块图与图运算 | 调整通用模块图 |
-| `data/systems/budding/graph.py` | 从拆分后的方程/事件源码构建变量关系图 | 检查模型公式与变量图的一致性 |
-| `data/systems/budding/specification.py` | 把上述模块组合成一个 Budding 系统，选择两套突变/分布实现 | 接入公共生成流程 |
-| `data/systems/fission/` | Fission 自己的变量、参数、方程、预热、分裂事件、突变目录及 real mutant | 修改 Fission 生物系统 |
-| `data/sampling/` | Random、Gibbs、Sobol、k-DPP、Motif、BAMS、WT-Blind 等“怎么选择候选”的算法 | 添加或调整采样算法 |
-| `data/generation/contracts.py` | 候选、仿真结果、运行设置的数据结构 | 增加需跨步骤传递的信息 |
-| `data/generation/policies.py` | 层级配额、突变描述解析、碰撞救援 | 调整候选处理规则 |
-| `data/generation/runner.py` | 把采样、救援、并行仿真和导出连接起来 | 调整公共执行流程 |
-| `data/generation/derived.py` | Twins、KO mirror、BAMS 成对消融 | 调整依赖源数据或成对结果的流程 |
-| `data/generation/io.py` | NPZ 校验、元数据和原子写入 | 调整输出格式 |
-| `data/recipes/__init__.py` | 每个数据集使用什么算法、两套实现选哪套、各层级比例 | 添加一种数据集组合 |
-| `data/generate.py` | 统一命令行入口 | 增加命令行选项 |
+| 位置 | 内容与修改时机 |
+| --- | --- |
+| `data/generate.py` | 稳定命令入口，只转发到共享生成模块 |
+| `systems/contracts.py` | SystemSpec、候选、结果、运行配置、Recipe及adapter协议 |
+| `systems/registry.py` | 唯一系统注册、recipe查找、默认配置解析和sampler创建 |
+| `systems/generation.py` | CLI参数解析、配额、候选救援调度、并行仿真、结果收集 |
+| `systems/dataset_io.py` | NPZ校验、元数据与原子导出 |
+| `systems/compat.py` | 旧框架导入兼容，不复制实现或模块状态 |
+| `systems/{budding,fission}/recipes.py` | 各系统的数据集组合、配额、默认样本数与seed |
+| `systems/{budding,fission}/adapter.py` | 各系统的sampler组装、上下文、碰撞及结果过滤 |
+| `systems/{budding,fission}/samplers/` | 各自的选模块算法与救援；Budding含Random/Gibbs/Sobol/k-DPP/Motif/BAMS等 |
+| `systems/{budding,fission}/states.py`、`parameters.py`、`ode.py` | 变量、基础参数、方程与事件 |
+| `systems/{budding,fission}/simulation.py`、`phenotypes.py` | 各自的初值处理、仿真及原生标签 |
+| `systems/{budding,fission}/real_mutants.py` | 各系统的真实基准定义 |
+| `systems/budding/mutations/`、`distributions/` | MASS与mutant_aware两套合成突变赋值和幅度分布 |
+| `systems/budding/derived.py` | Twins、KO mirror和BAMS配对派生数据 |
 
-例如，只修改 MC 的幅度分布，就修改对应的 `distributions/*.py`；不需要在每个 k-DPP、Motif 或 Random 文件中重复修改。Budding 和 Fission 分别维护自己的生物模型，共用候选/结果结构、并行调度和导出代码。Fission 当前接入其原有 Random 算法；没有把 Budding 专用图算法直接套到 Fission 上。
+例如，只修改 MC 的幅度分布，就修改对应的 `distributions/*.py`；不需要在每个 k-DPP、Motif 或 Random 文件中重复修改。Budding 和 Fission 分别维护自己的生物模型和采样算法，共用候选/结果结构、并行调度和导出代码。Fission 当前接入其原有 Random 算法；没有把 Budding 专用图算法直接套到 Fission 上。
+
+`data/systems/generation.py` 不再包含 `system == 'budding' / 'fission'` 字符串分支：系统上下文、碰撞去重、救援、仿真、结果过滤、real 数量校验和派生数据入口都由对应 `adapter` 提供。新增系统时只需实现协议并在 `systems/registry.py` 注册，不需要修改共享 runner。
 
 ## real mutant 和两套突变实现
 
@@ -64,7 +67,7 @@ LHS 与 `real_mutants_only.py` 原样留存，未迁移到新配置。
 | `generate_bams_ablation_datasets.py` | `budding_bams_ablation` | 保留共享基底，增加配对诊断样本 |
 | `fission_random_sampler.py` | `fission_random` | Fission 自己的突变和分布 |
 
-旧 MASS 的定向 motif 与新版 MASS 的结构选择分别保留在 `sampling/mass_motifs.py`、`sampling/mass.py`。WT-Blind 的专用强度策略保留，`--wt-fold-dist tier2` 为默认值，也可选择旧有的 `flat` 策略；其模式频率默认 `flat`，可用 `s5`。
+旧 MASS 的定向 motif 与新版 MASS 的结构选择分别保留在 `systems/budding/samplers/mass_motifs.py`、`systems/budding/samplers/mass.py`。WT-Blind 的专用强度策略保留，`--wt-fold-dist tier2` 为默认值，也可选择旧有的 `flat` 策略；其模式频率默认 `flat`，可用 `s5`。
 
 ## 如何运行
 
@@ -98,13 +101,13 @@ python data/generate.py --recipe budding_ko_mirror \
   --source /tmp/budding_kdpp_modular.npz --output /tmp/budding_kdpp_mirror.npz
 ```
 
-新入口统一默认 `--samples 100000 --seed 42`；Fission 和百万参数池的样本数/seed 如需沿用旧值，显式传入。`--samples` 是请求的合成候选数，real 默认额外添加，`--no-real` 可关闭。数值失败、质量过滤和曲率门控可能使实际导出的样本数减少；NPZ 中记录请求数与实际数。
+各recipe继承各自默认值：普通Budding通常为100000/seed42，Fission为1000/seed20000，参数池为1000000/seed42；完整列表用 `--list` 查看。`--samples` 是请求的合成候选数，real 默认额外添加，`--no-real` 可关闭。数值失败、质量过滤和曲率门控可能使实际导出的样本数减少；NPZ 中记录请求数与实际数。
 
 默认拒绝覆盖已有输出，只有显式 `--overwrite` 才允许覆盖。派生数据始终禁止覆盖源文件。Twins 使用两侧共同的成功行，保证配对；BAMS 消融同时输出 control、`_hard.npz` 和 `_hypo.npz`。KO mirror 若重算失败则报错，不保存“新参数配旧轨迹”。
 
 ## 保持一致的范围与明确差异
 
-1. **旧代码原样保留**：迁移前 `data/` 下 44 个 Python 文件的 SHA256 保存在 `data/generation/legacy_sources.json`，测试逐文件校验。旧入口没有改成转发，因此仍可独立作为历史对照。
+1. **旧代码原样保留**：迁移前 `data/` 下 44 个 Python 文件的 SHA256 保存在 `data/systems/legacy_sources.json`，测试逐文件校验。旧入口没有改成转发，因此仍可独立作为历史对照。
 2. **基础生物模型严格对照**：Budding 按 mutant_aware；Fission 按 fission_random_sampler。参数、变量顺序、求解公式、事件与标签算法从原代码拆出；不运行旧脚本来冒充模块化实现。
 3. **按用户要求统一的行为**：新流程使用 MA 的 Budding real 初值，合成候选碰撞后统一尝试换突变形式或碳源救援。原来直接丢弃碰撞的分支不再沿用。因此这些分支之后的完整样本序列不保证等同旧文件。救援上限默认 30 次，耗尽时报错，不输出碰撞候选。
 4. **随机数边界**：普通算法保留原有抽样方式和调用次序，运行前设种子，完成后恢复调用方的全局 RNG。BAMS 工作者内的二分探测使用 seed 与 sample_id 派生的随机流，避免依赖进程完成顺序；不能据此保证与旧进程随机状态下的整批 BAMS 输出逐字节相同。Fission 每次运行重新构造 L1 网格，修复旧实现同进程重复调用时从已洗牌网格开始的问题。
@@ -113,7 +116,15 @@ python data/generate.py --recipe budding_ko_mirror \
 
 Budding 输出维度仍为 `N × 39 × 500`、参数 141 维、210 min；Fission 为 `N × 16 × 500`、参数 58 维、300 min，保留原质量单位换算。Fission 初值来自预热，不用 Budding 的固定初值逻辑。
 
-## 验证及证据
+## 本次收口验证（2026-10-21）
+
+393 项独立回归测试通过，额外覆盖增量索引前后边界、全局状态别名、旧Sampler/pickle导入、混合指标格式和CLI清单。最终核验确认 31 个原始生成脚本、18 套生成配置均未改变；381 项突变规则审计和 105 项采样审计通过。Budding/Fission 均完成小规模双进程生成及数据读取验证。验证记录位于 `scratch/probes/systems_consolidation_2026-10-21/verification.json`。
+突变/分布审计381/381，采样/RNG审计105/105通过。Budding与Fission均实际双进程生成小文件并成功校验。
+全部18个recipe字段/默认值对照收口前快照一致；不改生物方程、原标签、突变/分布或救援强度策略。
+去重修复恢复原allclose判据，对曾漏判的重复候选会触发救援，因此未来新生成序列可能与漏洞版本不同；
+不改写既有数据或实验。证据保存在 `scratch/probes/systems_consolidation_2026-10-21/`。
+
+## 前期验证及证据
 
 后续已补充采样算法、两套突变分布和功能模块的独立核验，并修正迁移遗漏，见 [采样一致性报告](SAMPLER_EQUIVALENCE_AUDIT_2026-10-20.md)。
 

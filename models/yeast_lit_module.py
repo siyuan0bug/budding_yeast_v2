@@ -237,6 +237,7 @@ FISSION_MODELS = GENERIC_BASELINE_MODELS | frozenset({
     'graph_resnet_film','gated_graph_resnet_film','multiscale_diffgraph','dualpath_spectralgraph',
     'bio_statespace_graph','sc_fno','bregman_fno','bregman_wno','pno1d','pno','mpno1d','mpno',
     'konode','ncflow','iganet_transformer','iganet','deeponet','neural_ode','gcgnet','ultimate_fno',
+    'biom_refiner_plus',
 })
 
 

@@ -9,7 +9,7 @@ import numpy as np
 
 
 def write_dataset(path, spec, results, config, report, *, parameter_only=False, dtype='float64'):
-    from ..recipes import resolve_config
+    from .registry import resolve_config
     config=resolve_config(config)
     path=Path(path).expanduser().resolve()
     if path.suffix != '.npz':

@@ -4,12 +4,12 @@ import math
 import numpy as np
 from .wt_blind import *
 from . import wt_blind as w
-from ..generation.contracts import Candidate
-from ..generation.policies import parse_pairs
+from ...contracts import Candidate
+from .rescue import parse_pairs
 
 
 def rescue_wt(cand, sampler, report):
-    from ..generation.runner import ensure_candidate
+    from ...generation import ensure_candidate
     candidate=Candidate(1,'wt_candidate',dict(cand['ovr']),cand['level'],metadata={'description':cand['desc']})
     fixed=ensure_candidate(candidate,sampler,report)
     if fixed.overrides==cand['ovr']:
@@ -34,7 +34,7 @@ def rescue_wt(cand, sampler, report):
 def prepare_wt_candidates(sampler, config, report):
     n_synthetic=config.n_samples
     if n_synthetic==0:
-        from ..systems.budding.real_mutants import real_tasks
+        from ..real_mutants import real_tasks
         return [Candidate(-i-1,n,o,0,True) for i,(n,o) in enumerate(real_tasks())] if config.include_real else []
     n_pilot=config.pilot_samples
     level_quotas=config.level_ratios or sampler.recipe.ratios
@@ -180,8 +180,8 @@ def prepare_wt_candidates(sampler, config, report):
             print(f"  |-- attempts={attempts} accepted={len(accepted)} | dup_blocked={blocked_dup} | dup_internal={dup_internal} | nan={ledger.nan_count} | backlog={('ON' if backlog_mode else 'off')} | acc_rate={(np.mean(accept_window[-100:]) if accept_window else 1):.2f}", flush=True)
     print(f" -> accepted {len(accepted)} in {attempts} attempts ({blocked_dup} real-dup-blocked, {dup_internal} internal-dup-blocked, {stats['nan_rejected']} NaN-capped, {stats['gal_nonconv']} GAL non-converged)", flush=True)
 
-    from ..systems.budding.real_mutants import real_tasks
-    from .factory import candidate_name
+    from ..real_mutants import real_tasks
+    from ...factory import candidate_name
     candidates=[Candidate(-i-1,n,o,0,True) for i,(n,o) in enumerate(real_tasks())] if config.include_real else []
     for i,cand in enumerate(accepted,1):
         name=candidate_name('wt_blind',cand['desc'],cand['level'],i)

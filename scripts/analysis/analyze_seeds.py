@@ -22,7 +22,11 @@ def analyze_seeds(eval_root="/home/users/zsy/budding_yeast_v2/eval_result"):
         all_metrics = []
         for p in json_paths:
             with open(p, 'r') as f:
-                all_metrics.append(json.load(f)['all_39_vars'])
+                data = json.load(f)
+            # 兼容 Budding (all_39_vars) 与 Fission (all_16_vars), 旧格式回退 all_variables
+            block = data.get('all_test', data)
+            key = next((k for k in block if k.startswith('all_') and k.endswith('_vars')), 'all_variables')
+            all_metrics.append(block[key])
         
         # 转为 numpy 进行统计
         keys = all_metrics[0].keys()

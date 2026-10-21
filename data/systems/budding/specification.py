@@ -1,7 +1,7 @@
 """One canonical biological model, independently selectable synthetic profiles."""
 import importlib
 
-from ...generation.contracts import SystemSpec
+from ..contracts import SystemSpec
 from .parameters import PARAM_KEYS, get_default_params
 from .states import VARIABLE_NAMES, initial_conds
 from .simulation import simulate_mutant, prepare_initial_conditions
@@ -57,7 +57,7 @@ class BuddingSystem:
 
     def __getattr__(self, name):
         # Shared selection utilities have per-run reset managed by the driver.
-        from ...sampling import common
+        from .samplers import common
         if name=='MODE_FREQ':
             return common.MODE_FREQ
         for module in (catalog, topology, common):

@@ -2,7 +2,7 @@
 import numpy as np
 import itertools
 import networkx as nx
-from ..systems.budding.topology import MODULE_EDGES
+from ..topology import MODULE_EDGES
 
 PARALLEL_DISTAL_PAIRS = [
     # 1. Spindle assembly checkpoint dual-branch

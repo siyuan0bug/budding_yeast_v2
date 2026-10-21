@@ -1,7 +1,7 @@
 """Original Sobol allocation for Gibbs and parameter pools; quantiles provided by selected profile."""
 import numpy as np
 from .gibbs import GibbsBoltzmannGraphSampler
-from ..systems.budding.distributions.quantiles import sample_scaling_factor_sobol
+from ..distributions.quantiles import sample_scaling_factor_sobol
 
 def sample_gibbs_sobol_mutant(level, gibbs_sampler, sobol_vec, rng=np.random, *, ma):
     """

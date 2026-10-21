@@ -1,5 +1,14 @@
 # 数据集全景、生物图先验与归一化规范 (Datasets, Biological Graphs & Normalization)
 
+> **2026-10-21 系统目录收口完成**：新框架集中在 `data/systems/`，`data/generate.py` 为转发入口。
+> 已修复增量去重、混合指标格式seed汇总、旧导入/状态转发和Fission采样审计；原生物规则与标签保持。
+> 当前生成命令与文件职责见 [速查](DATA_GENERATION_QUICKSTART.md) 和 [整理说明](DATA_GENERATION_REFACTOR_2026-10-20.md)。
+
+
+> **2026-10-21 目录复审**：基础生物规则与旧版对照通过；发现Fission增量去重、兼容shim及审计接口问题。
+> 完整50k候选重放、49206条轨迹流式校验及优化优先级见 [目录审查](DIRECTORY_REVIEW_2026-10-21.md)。
+
+
 ## Budding 标签：生物标签保留，六分类作为补充（2026-10-21）
 
 **BIO 负责生物事件判定；六分类负责观察窗内轨迹分组；ABC 保留为粗粒度分裂次数。**

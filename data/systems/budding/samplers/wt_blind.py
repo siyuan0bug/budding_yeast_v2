@@ -1,9 +1,9 @@
 """WT-Blind specialized QSS/inversion/ledger algorithms, preserving their own 46-edge topology and strength policy."""
 import numpy as np
 import math
-from ..systems.budding.parameters import get_default_params
-from ..systems.budding.ode import GK
-from ..systems.budding.catalog import BINDING_GROUPS
+from ..parameters import get_default_params
+from ..ode import GK
+from ..catalog import BINDING_GROUPS
 
 EPS = 1e-12
 M_BIRTH = 1.2060194

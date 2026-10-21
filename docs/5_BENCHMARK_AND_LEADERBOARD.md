@@ -1,5 +1,15 @@
 # 全量模型基准评测榜单与坏 Case 深度剖析 (Benchmark Leaderboard & Badcase Analysis)
 
+> **2026-10-21 汇总兼容修复**：按seed规范化all_variables/all_16_vars/all_39_vars别名后再汇总，
+> 防止漏掉旧格式seed；每项指标记录实际有效n_seeds，并拒绝混合16/39变量系统或冲突的别名。
+> 本次未改写历史实验指标或seed_summary；现有单seed Fission榜单不受影响。
+
+
+> **2026-10-21 Fission 50k实测审查**：同seed42、100epoch，FNO1d/BioRefinerPlus的real MAE为0.031449/0.026654，
+> pooled relL2为0.137331/0.136807；只含一个seed，wee1ts cdc25D仍为主要坏例。
+> 实际有效synthetic为49186条，另有20 real；数据/指标口径及代码问题见 [目录与实验审查](DIRECTORY_REVIEW_2026-10-21.md)。
+
+
 > **2026-10-21 Fission流程复核**：实际跑通W&B离线训练、checkpoint恢复、20 real/8 synth评测与一轮受控HPO。
 > 采用复制合成轨迹的小规模冒烟数据，仅验证接口，不更新模型精度榜单。
 > 原Fission标签保持不变，详细范围见 [Fission实验流程](FISSION_EXTENSION.md)。

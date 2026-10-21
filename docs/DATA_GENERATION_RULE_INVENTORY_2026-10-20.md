@@ -1,6 +1,14 @@
 # 新旧文件与函数规则清单
 
+> **当前路径（2026-10-21收口后）**：公共框架已迁入 `data/systems/{contracts,generation,dataset_io,registry}.py`；
+> 配置在各系统recipes.py，采样实现在各系统samplers/。以下逐函数表保留历史路径/行号，
+> 最新映射可运行已迁移的audit_rule_inventory.py；当前职责见 [整理说明](DATA_GENERATION_REFACTOR_2026-10-20.md)。
+
+
 这是逐文件出处清单，不是“全部规则等价”的证明。默认值、全局绑定、生成主循环和导出规则另见 [逐文件结论](DATA_GENERATION_FILE_RULES_2026-10-20.md)。
+
+> **路径说明（2026-10-21）**：下表 `data/sampling/...` 记录的是目录调整前的路径。现行实现位于
+> `data/systems/budding/samplers/` 与 `data/systems/fission/samplers/`；文件内容与规则未变。
 
 原文件 44 个，新 Python 文件 55 个。
 

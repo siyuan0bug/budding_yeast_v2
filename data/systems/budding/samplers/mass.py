@@ -1,7 +1,7 @@
 """MA structure-aware selection, unchanged quotas, mixture and convergent coordination."""
 import numpy as np
-from ..systems.budding.catalog import GROUP_BY_NAME, GENE_NAMES, COMPOSITE_ELIGIBLE
-from ..systems.budding import topology as graph
+from ..catalog import GROUP_BY_NAME, GENE_NAMES, COMPOSITE_ELIGIBLE
+from .. import topology as graph
 from .common import QuotaPicker, next_L1_cell, _sample_mode, _resolve_conflicts
 ADJ = graph.ADJ
 P_BIO = graph.P_BIO

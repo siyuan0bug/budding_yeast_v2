@@ -528,8 +528,13 @@ def main():
                 batch_size=args.batch_size,
                 max_plots=None if is_last_round else 0  # 最终轮次完整画图, 中间轮次极速评估 (<1秒)
             )
-            real_m = metrics['real_mutants']['all_39_vars']
-            synth_m = metrics['synth_test']['all_39_vars']
+            # 兼容不同系统: Budding=all_39_vars, Fission=all_16_vars
+            real_block = metrics['real_mutants']
+            synth_block = metrics['synth_test']
+            real_key = next((k for k in real_block if k.startswith('all_') and k.endswith('_vars')), 'all_variables')
+            synth_key = next((k for k in synth_block if k.startswith('all_') and k.endswith('_vars')), 'all_variables')
+            real_m = real_block[real_key]
+            synth_m = synth_block[synth_key]
             print(f"✅ [AL 轮 {r + 1} 评测] 样本量: {n_train} | "
                   f"Real Mutants MAE={real_m['MAE']:.4f}, Rel-L2={real_m['Relative L2']:.4f}, Corr={real_m['Correlation']:.4f} | "
                   f"Synth Test MAE={synth_m['MAE']:.4f}")

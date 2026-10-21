@@ -14,7 +14,7 @@ ROOT=Path(__file__).resolve().parents[2]
 DATA=ROOT/'data'
 B='systems/budding/'
 F='systems/fission/'
-S='sampling/'
+S=B+'samplers/'
 TARGETS={
  'mutant_aware.py':[B+p for p in ('states.py','parameters.py','ode.py','phenotypes.py','simulation.py','real_mutants.py','catalog.py','topology.py','mutations/mutant_aware.py','distributions/mutant_aware.py')]+[S+'common.py',S+'mass.py'],
  'mass_dataset_generator.py':[B+p for p in ('states.py','parameters.py','ode.py','phenotypes.py','simulation.py','real_mutants.py','catalog.py','mutations/mass.py','distributions/mass.py')]+[S+'mass_motifs.py'],
@@ -30,9 +30,9 @@ TARGETS={
  'mass_wt_blind_sampler.py':[S+'wt_blind.py'],
  'generate_1m_pure_random_pool.py':[S+'sobol.py',B+'distributions/quantiles.py'],
  'generate_distribution_ablation_twins.py':[S+'twins.py'],
- 'mirror_pure_random_ko_interval.py':['generation/derived.py'],
- 'generate_bams_ablation_datasets.py':[S+'targeted_ablation.py','generation/derived.py'],
- 'fission_random_sampler.py':[F+p for p in ('constants.py','states.py','parameters.py','ode.py','simulation.py','phenotypes.py','real_mutants.py','catalog.py','distributions.py')]+[S+'fission_random.py'],
+ 'mirror_pure_random_ko_interval.py':[B+'derived.py'],
+ 'generate_bams_ablation_datasets.py':[S+'targeted_ablation.py',B+'derived.py'],
+ 'fission_random_sampler.py':[F+p for p in ('constants.py','states.py','parameters.py','ode.py','simulation.py','phenotypes.py','real_mutants.py','catalog.py','distributions.py')]+[F+'samplers/random.py'],
 }
 RULE_CONSTANTS={'BINDING_GROUPS','REAL_MUTANTS','MODULE_EDGES','TOUCH','MODE_CLASS','MODE_CLASS_QUOTA',
  'TARGET_MODES','PARALLEL_DISTAL_PAIRS','MASTER_SWITCH_CLUSTERS','LEVEL_QUOTAS','STRUCT_L2','STRUCT_L34',
@@ -107,8 +107,8 @@ def default_args(node):
 
 
 def inventory():
-    manifest=json.loads((DATA/'generation/legacy_sources.json').read_text())
-    new_paths=[DATA/'generate.py']+[p for directory in ('systems','sampling','generation','recipes') for p in (DATA/directory).rglob('*.py')]
+    manifest=json.loads((DATA/'systems/legacy_sources.json').read_text())
+    new_paths=[DATA/'generate.py']+list((DATA/'systems').rglob('*.py'))
     modules={str(p.relative_to(DATA)):definitions(p) for p in new_paths}
     rows=[]
     for relative,digest in manifest.items():
@@ -164,7 +164,7 @@ def inventory():
     return dict(all_rules_identical=False,original_files=len(rows),new_python_files=len(new_paths),
                 source_definition_counts=counts,
                 warning='Normalized source equality is not whole-file rule equality; defaults, bindings, driver branches and output schema are separate rules.',
-                new_cli=options(modules['generate.py'][0]),files=rows,
+                new_cli=options(modules['systems/generation.py'][0]),files=rows,
                 new_glue_or_package_files=[str(p.relative_to(DATA)) for p in new_paths if str(p.relative_to(DATA)) not in mapped])
 
 
@@ -198,7 +198,7 @@ def main():
                 lines.append(f"| {old} | {new} | {rule['status']} |")
         lines+=['','## 每个新文件的来源','',
                 '| 新文件 | 对应旧文件 |','| --- | --- |']
-        paths=sorted([DATA/'generate.py']+[p for directory in ('systems','sampling','generation','recipes') for p in (DATA/directory).rglob('*.py')])
+        paths=sorted([DATA/'generate.py']+list((DATA/'systems').rglob('*.py')))
         for file in paths:
             relative=str(file.relative_to(DATA))
             sources=[name for name,targets in TARGETS.items() if relative in targets]

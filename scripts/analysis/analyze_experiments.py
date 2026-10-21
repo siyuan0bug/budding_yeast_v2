@@ -131,14 +131,30 @@ def scan_legacy_experiments(legacy_dir: str) -> List[Dict[str, Any]]:
     return results
 
 
+def _all_vars_key(d: Dict[str, Any]) -> Optional[str]:
+    """
+    返回全变量指标子集键, 兼容不同生物系统:
+      - Budding: all_39_vars
+      - Fission: all_16_vars
+      - 旧格式:  all_variables
+    """
+    keys = [k for k in d if isinstance(k, str) and k.startswith("all_") and k.endswith("_vars")]
+    if keys:
+        return sorted(keys)[-1]
+    if isinstance(d.get("all_variables"), dict):
+        return "all_variables"
+    return None
+
+
 def extract_submetrics(d: Any) -> Dict[str, float]:
     """递归提取包含 MAE/Relative L2/Correlation 的最底层字典"""
     if not isinstance(d, dict):
         return {}
     if "MAE" in d:
         return d
-    if "all_39_vars" in d and isinstance(d["all_39_vars"], dict):
-        return d["all_39_vars"]
+    all_key = _all_vars_key(d)
+    if all_key is not None:
+        return d[all_key]
     if "real_mutants" in d:
         return extract_submetrics(d["real_mutants"])
     return {}
@@ -147,7 +163,8 @@ def extract_submetrics(d: Any) -> Dict[str, float]:
 def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
     """
     计算单个超参组多 Seed 的完整统计均值与标准差。
-    全面覆盖 real_mutants, lhs_test, all_test 以及 all_39_vars 与 core_9_vars 的所有指标。
+    全面覆盖 real_mutants, lhs_test, all_test 的所有指标; 变量子集键按数据集自动发现
+    (Budding: all_39_vars/core_9_vars, Fission: all_16_vars)。
     """
     seeds = group_entry["seeds"]
     n_seeds = len(seeds)
@@ -155,17 +172,45 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
     # 1. 结构化汇总全部指标
     # 结构: stats[split][var_set][metric] = [val_seed1, val_seed2, ...]
     splits = ["real_mutants", "synth_test", "all_test"]
-    var_subsets = ["all_39_vars", "core_9_vars"]
     metric_keys = ["MAE", "Relative L2", "Correlation", "MSE"]
+
+    # 平滑兼容：若旧实验只有 lhs_test，则映射为 synth_test
+    normalized_metrics = []
+    for s in seeds:
+        m = dict(s["metrics"])
+        if "synth_test" not in m and "lhs_test" in m:
+            m["synth_test"] = m["lhs_test"]
+        normalized_metrics.append(m)
+
+    # Canonicalise every seed before collecting values. Dropping aliases only
+    # from the union of keys would silently drop alias-only historical seeds.
+    explicit = {key for m in normalized_metrics for sp in splits
+                for key, value in (m.get(sp) or {}).items()
+                if isinstance(value, dict) and key.startswith('all_') and key.endswith('_vars')}
+    if len(explicit) > 1:
+        raise ValueError(f'Cannot aggregate different variable systems: {sorted(explicit)}')
+    all_vars_subset = next(iter(explicit), 'all_variables')
+    var_subsets = set()
+    for m in normalized_metrics:
+        for sp in splits:
+            if not isinstance(m.get(sp), dict):
+                continue
+            block = dict(m[sp])
+            alias = block.get('all_variables')
+            if all_vars_subset != 'all_variables' and isinstance(alias, dict):
+                if isinstance(block.get(all_vars_subset), dict) and block[all_vars_subset] != alias:
+                    raise ValueError('Explicit all-variable metrics disagree with their alias')
+                block.setdefault(all_vars_subset, alias)
+                block.pop('all_variables', None)
+            m[sp] = block
+            var_subsets.update(key for key, value in block.items()
+                               if isinstance(value, dict) and (key.endswith('_vars') or key == 'all_variables'))
+    var_subsets = sorted(var_subsets) or [all_vars_subset]
 
     collected_metrics = {sp: {vs: {mk: [] for mk in metric_keys} for vs in var_subsets} for sp in splits}
     sample_counts = {sp: None for sp in splits}
 
-    for s in seeds:
-        m = s["metrics"]
-        # 平滑兼容：若旧实验只有 lhs_test，则映射为 synth_test
-        if "synth_test" not in m and "lhs_test" in m:
-            m["synth_test"] = m["lhs_test"]
+    for m in normalized_metrics:
         for sp in splits:
             if sp in m and isinstance(m[sp], dict):
                 if sample_counts[sp] is None and "count" in m[sp]:
@@ -176,7 +221,8 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
                             if mk in m[sp][vs]:
                                 try:
                                     val = float(m[sp][vs][mk])
-                                    collected_metrics[sp][vs][mk].append(val)
+                                    if np.isfinite(val):
+                                        collected_metrics[sp][vs][mk].append(val)
                                 except (ValueError, TypeError):
                                     pass
 
@@ -191,16 +237,30 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
                 if vals:
                     summary_metrics[sp][vs][mk] = {
                         "mean": float(np.nanmean(vals)),
-                        "std": float(np.nanstd(vals)) if len(vals) > 1 else 0.0
+                        "std": float(np.std(vals)) if len(vals) > 1 else 0.0,
+                        "n_seeds": len(vals),
                     }
         if sample_counts[sp] is not None:
             summary_metrics[sp]["count"] = sample_counts[sp]
 
     # 3. 构造扁平快捷指标 (方便排行榜与快速索引)
-    real_39 = summary_metrics.get("real_mutants", {}).get("all_39_vars", {})
-    real_c9 = summary_metrics.get("real_mutants", {}).get("core_9_vars", {})
-    synth_39 = summary_metrics.get("synth_test", {}).get("all_39_vars", {}) or summary_metrics.get("lhs_test", {}).get("all_39_vars", {})
-    all_39 = summary_metrics.get("all_test", {}).get("all_39_vars", {})
+    core_subsets = [k for k in var_subsets if k.startswith("core_")]
+
+    def _pick(split: str, candidates: List[str]) -> Dict[str, Any]:
+        block = summary_metrics.get(split, {})
+        for key in candidates:
+            if block.get(key):
+                return block[key]
+        return {}
+
+    real_all = _pick("real_mutants", [all_vars_subset])
+    real_c9 = _pick("real_mutants", core_subsets)
+    synth_all = _pick("synth_test", [all_vars_subset])
+    all_all = _pick("all_test", [all_vars_subset])
+
+    def _flat(block: Dict[str, Any], metric: str, field: str, default: Any) -> Any:
+        """缺失子集返回 default (None), 避免在 JSON 中写入非标准 NaN"""
+        return block.get(metric, {}).get(field, default)
 
     summary = {
         "dataset": group_entry["dataset_tag"],
@@ -209,30 +269,30 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
         "hparam_signature": group_entry["hparam_sig"],
         "n_seeds": n_seeds,
         "seeds_evaluated": [s["seed"] for s in seeds],
-        
-        # Real Mutants (全部 39 变量)
-        "real_mae_mean": real_39.get("MAE", {}).get("mean", float("nan")),
-        "real_mae_std": real_39.get("MAE", {}).get("std", 0.0),
-        "real_l2_mean": real_39.get("Relative L2", {}).get("mean", float("nan")),
-        "real_l2_std": real_39.get("Relative L2", {}).get("std", 0.0),
-        "real_corr_mean": real_39.get("Correlation", {}).get("mean", float("nan")),
-        "real_corr_std": real_39.get("Correlation", {}).get("std", 0.0),
-        "real_mse_mean": real_39.get("MSE", {}).get("mean", float("nan")),
-        "real_mse_std": real_39.get("MSE", {}).get("std", 0.0),
 
-        # Real Mutants (核心 9 变量)
-        "real_core9_mae_mean": real_c9.get("MAE", {}).get("mean", float("nan")),
-        "real_core9_mae_std": real_c9.get("MAE", {}).get("std", 0.0),
-        "real_core9_l2_mean": real_c9.get("Relative L2", {}).get("mean", float("nan")),
-        "real_core9_l2_std": real_c9.get("Relative L2", {}).get("std", 0.0),
-        "real_core9_corr_mean": real_c9.get("Correlation", {}).get("mean", float("nan")),
-        "real_core9_corr_std": real_c9.get("Correlation", {}).get("std", 0.0),
+        # Real Mutants (全变量: Budding=39, Fission=16)
+        "real_mae_mean": _flat(real_all, "MAE", "mean", None),
+        "real_mae_std": _flat(real_all, "MAE", "std", 0.0),
+        "real_l2_mean": _flat(real_all, "Relative L2", "mean", None),
+        "real_l2_std": _flat(real_all, "Relative L2", "std", 0.0),
+        "real_corr_mean": _flat(real_all, "Correlation", "mean", None),
+        "real_corr_std": _flat(real_all, "Correlation", "std", 0.0),
+        "real_mse_mean": _flat(real_all, "MSE", "mean", None),
+        "real_mse_std": _flat(real_all, "MSE", "std", 0.0),
+
+        # Real Mutants (核心 9 变量, 仅 Budding 适用; Fission 为 null)
+        "real_core9_mae_mean": _flat(real_c9, "MAE", "mean", None),
+        "real_core9_mae_std": _flat(real_c9, "MAE", "std", 0.0),
+        "real_core9_l2_mean": _flat(real_c9, "Relative L2", "mean", None),
+        "real_core9_l2_std": _flat(real_c9, "Relative L2", "std", 0.0),
+        "real_core9_corr_mean": _flat(real_c9, "Correlation", "mean", None),
+        "real_core9_corr_std": _flat(real_c9, "Correlation", "std", 0.0),
 
         # Synthetic Test & All Test 关键指标
-        "synth_mae_mean": synth_39.get("MAE", {}).get("mean", float("nan")),
-        "synth_mae_std": synth_39.get("MAE", {}).get("std", 0.0),
-        "all_test_mae_mean": all_39.get("MAE", {}).get("mean", float("nan")),
-        "all_test_mae_std": all_39.get("MAE", {}).get("std", 0.0),
+        "synth_mae_mean": _flat(synth_all, "MAE", "mean", None),
+        "synth_mae_std": _flat(synth_all, "MAE", "std", 0.0),
+        "all_test_mae_mean": _flat(all_all, "MAE", "mean", None),
+        "all_test_mae_std": _flat(all_all, "MAE", "std", 0.0),
 
         # 完整分层结构化指标
         "detailed_metrics": summary_metrics
@@ -292,7 +352,13 @@ def main():
 
     # 排序
     reverse_sort = True if args.sort_by == "real_corr" else False
-    key_fn = lambda x: x.get(f"{args.sort_by}_mean", float("inf") if not reverse_sort else -float("inf"))
+
+    def key_fn(x):
+        v = x.get(f"{args.sort_by}_mean")
+        if v is None:
+            v = float("-inf") if reverse_sort else float("inf")
+        return v
+
     summaries.sort(key=key_fn, reverse=reverse_sort)
 
     # 打印 Leaderboard
@@ -305,10 +371,15 @@ def main():
     print(row_fmt.format(*headers))
     print("-" * 110)
 
+    def _fmt(v, std, n):
+        if v is None:
+            return "N/A"
+        return f"{v:.4f} ± {std:.4f}" if n > 1 else f"{v:.4f}"
+
     for rank, s in enumerate(summaries, 1):
-        mae_str = f"{s['real_mae_mean']:.4f} ± {s['real_mae_std']:.4f}" if s['n_seeds'] > 1 else f"{s['real_mae_mean']:.4f}"
-        l2_str = f"{s['real_l2_mean']:.4f} ± {s['real_l2_std']:.4f}" if s['n_seeds'] > 1 else f"{s['real_l2_mean']:.4f}"
-        corr_str = f"{s['real_corr_mean']:.4f} ± {s['real_corr_std']:.4f}" if s['n_seeds'] > 1 else f"{s['real_corr_mean']:.4f}"
+        mae_str = _fmt(s['real_mae_mean'], s['real_mae_std'], s['n_seeds'])
+        l2_str = _fmt(s['real_l2_mean'], s['real_l2_std'], s['n_seeds'])
+        corr_str = _fmt(s['real_corr_mean'], s['real_corr_std'], s['n_seeds'])
 
         # 截断过长签名保证对齐
         hparam_short = s['hparam_signature'][:22] + ".." if len(s['hparam_signature']) > 24 else s['hparam_signature']
