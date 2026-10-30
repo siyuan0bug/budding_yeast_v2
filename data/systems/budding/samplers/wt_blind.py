@@ -1,16 +1,17 @@
-"""WT-Blind specialized QSS/inversion/ledger algorithms, using its pruned specialized topology and original strength policy."""
+"""WT-Blind QSS/ledger policy with shared legal controls and restored topology."""
 import numpy as np
 import math
 from ..parameters import get_default_params
 from ..ode import GK
-from ..catalog import BINDING_GROUPS
+from ..catalog import BINDING_GROUPS, TOUCH as CATALOG_TOUCH, RESTORED_FUNCTIONAL_MODULES
+from ..topology import MODULE_EDGES as CANONICAL_MODULE_EDGES
+from ..distributions.ranges import GAL_CLB2
 
 EPS = 1e-12
 M_BIRTH = 1.2060194
 M_M = 2 * M_BIRTH
 SIM_WINDOW = 210.0
 N_BINS = 5
-TRAJ_MAX = 1000.0
 N_LOG_BANDS = 8
 BOUNDARY_LO, BOUNDARY_HI = (0.5, 2.0)
 MASS_LIMIT = 10.0
@@ -39,6 +40,9 @@ MODULE_EDGES = [('CLB2', 'CDC20', '+'),
  ('BUB2', 'TEM1', '-'),
  ('MAD2', 'CDC20', '-'),
  ('PDS1', 'ESP1', '-')]
+# Preserve the specialized base graph, adding only restored functional controls.
+MODULE_EDGES.extend(edge for edge in CANONICAL_MODULE_EDGES
+                    if RESTORED_FUNCTIONAL_MODULES.intersection(edge[:2]))
 GROUP_BY_NAME = {g['name']: g for g in BINDING_GROUPS.values()}
 GENE_NAMES = sorted(GROUP_BY_NAME.keys())
 USE_ENGINE_P_BIO = False
@@ -61,8 +65,9 @@ def _tier2_fold(mode, gene):
     (mass_dataset_generator.py:578). Real constructs cluster here because
     they are typical biological constructs, not because the test-set list
     was consulted."""
-    if mode == 'MC':
-        return float(10.0 ** np.random.uniform(np.log10(1.5), np.log10(30.0)))
+    if mode == 'MC' or (gene,mode) in {('CLB2','db'),('TEM1','ts'),('ESP1','ts'),('NET1','ts')}:
+        from ..distributions.mass import sample_scaling_factor
+        return sample_scaling_factor(mode,gene)
     if mode == 'ts':
         if gene == 'CDC14':
             return float(np.random.uniform(0.05, 0.35))
@@ -122,71 +127,7 @@ for a, b in ALL_PAIRS:
     PAIR_LISTS[_pair_class(a, b)].append((a, b))
 STAR_CENTERS = ['CLB2', 'MDT']
 STAR_LEAVES = {'CLB2': sorted(ADJ['CLB2']), 'MDT': [n for n in GENE_NAMES if n != 'MDT']}
-TOUCH = {('CLN2', 'KO'): {'ksn2pp'},
- ('CLN2', 'GAL-OE'): {'ksn2pp', 'ksn2p'},
- ('CLN2', 'MC'): {'ksn2pp'},
- ('CLN2', 'ts'): {'ksn2pp', 'ksn2p'},
- ('CLN3', 'KO'): {'C0'},
- ('CLN3', 'GAL-OE'): {'C0'},
- ('CLN3', 'MC'): {'C0'},
- ('CLB2', 'KO'): {'ksb2p', 'ksb2pp'},
- ('CLB2', 'GAL-OE'): {'ksb2p'},
- ('CLB2', 'MC'): {'ksb2p', 'ksb2pp'},
- ('CLB2', 'ts'): {'ksb2p', 'ksb2pp'},
- ('CLB2', 'db'): {'kdb2pp', 'kdb2P'},
- ('CLB2', 'pLOF'): {'ksb2p', 'ksb2pp'},
- ('CLB2', 'CA'): {'kdib2'},
- ('CLB5', 'KO'): {'ksb5p', 'ksb5pp'},
- ('CLB5', 'GAL-OE'): {'ksb5p'},
- ('CLB5', 'MC'): {'ksb5p', 'ksb5pp'},
- ('CLB5', 'db'): {'kdb5pp'},
- ('SIC1', 'KO'): {'ksc1pp', 'ksc1p'},
- ('SIC1', 'GAL-OE'): {'ksc1p'},
- ('SIC1', 'MC'): {'ksc1pp', 'ksc1p'},
- ('SIC1', 'db'): {'kd3c1'},
- ('SIC1', 'PM'): {'kd2c1', 'kd3c1'},
- ('CDC6', 'KO'): {'ksf6p', 'ksf6pp', 'ksf6ppp'},
- ('CDC6', 'GAL-OE'): {'ksf6p'},
- ('CDC6', 'MC'): {'ksf6p', 'ksf6pp', 'ksf6ppp'},
- ('CDC6', 'DAmP'): {'ksf6p', 'ksf6pp', 'ksf6ppp'},
- ('BCK2', 'KO'): {'B0'},
- ('BCK2', 'MC'): {'B0'},
- ('SWI5', 'KO'): {'ksswip', 'ksswipp'},
- ('SWI5', 'GAL-OE'): {'ksswip'},
- ('CDC20', 'KO'): {'ks20p', 'ks20pp'},
- ('CDC20', 'GAL-OE'): {'ks20p'},
- ('CDC20', 'MC'): {'ks20p', 'ks20pp'},
- ('CDC20', 'ts'): {'ks20p', 'ks20pp'},
- ('CDC20', 'APC-A'): {'ka20pp'},
- ('CDC20', 'DAmP'): {'ks20p', 'ks20pp'},
- ('CDH1', 'KO'): {'init_CDH1T', 'init_CDH1', 'kscdh'},
- ('CDH1', 'CA'): {'kscdh', 'kicdhpp'},
- ('CDC14', 'ts'): {'kppf6', 'kacdhpp', 'ks14', 'kppc1', 'kaswi'},
- ('CDC14', 'GAL-OE'): {'ks14'},
- ('CDC14', 'MC'): {'ks14'},
- ('CDC14', 'DAmP'): {'ks14'},
- ('NET1', 'TAB6-1'): {'kasrent', 'kasrentp'},
- ('NET1', 'GAL-OE'): {'ksnet'},
- ('NET1', 'ts'): {'kasrent', 'kasrentp'},
- ('NET1', 'DAmP'): {'ksnet'},
- ('TEM1', 'KO'): {'ka15pp', 'init_Tem1', 'Tem1T'},
- ('TEM1', 'GAL-OE'): {'Tem1T'},
- ('TEM1', 'MC'): {'Tem1T'},
- ('TEM1', 'ts'): {'ka15pp', 'Tem1T'},
- ('CDC15', 'KO'): {'init_Cdc15', 'Cdc15T', 'kkpnetpp'},
- ('CDC15', 'GAL-OE'): {'Cdc15T'},
- ('CDC15', 'MC'): {'Cdc15T'},
- ('CDC15', 'ts'): {'kkpnetpp'},
- ('PDS1', 'KO'): {'ks2pdspp', 'ks1pdspp'},
- ('PDS1', 'GAL-OE'): {'kspdsp'},
- ('PDS1', 'db'): {'kd2pdspp', 'kd3pdspp'},
- ('ESP1', 'ts'): {'kdiesp', 'kasesp'},
- ('ESP1', 'GAL-OE'): {'ESP1T'},
- ('MAD2', 'CSL'): {'Vi20_active', 'Vi20'},
- ('BUB2', 'CKO'): {'BUB2_active', 'kbub2', 'init_BUB2'},
- ('APC_Core', 'APC-A'): {'ka20pp'},
- ('APC_Core', 'ts'): {'init_CDH1T', 'init_CDH1', 'kscdh', 'ks20pp', 'ks20p'},
- ('MDT', 'MDT'): {'mdt'}}
+TOUCH = CATALOG_TOUCH
 
 def touch_set(gene, mode):
     return TOUCH.get((gene, mode), set())
@@ -216,6 +157,9 @@ FOLD_MODES = {('BCK2', 'MC'),
 RESIDUAL_MODES = {'ts', 'DAmP', 'pLOF', 'db'}
 COMPOSITE_ELIGIBLE = ['CLB2', 'CLB5', 'PDS1', 'SIC1', 'CDH1']
 ALLELE_RESIDUAL = {('CDC15', 'ts'): ['kkpnetpp'],
+ ('PPX', 'ts'): ['kppnetpp'],
+ ('PPX', 'db'): ['kdppxpp'],
+ ('Mcm1', 'ts'): ['kamcm'],
  ('TEM1', 'ts'): ['Tem1T', 'ka15pp'],
  ('ESP1', 'ts'): ['kasesp', 'kdiesp'],
  ('CLB5', 'db'): ['kdb5pp'],
@@ -468,7 +412,8 @@ _NATIVE_SCALE_PARAMS = {'CLN2': ('ksn2p', 'ksn2pp'),
  'TEM1': ('Tem1T',),
  'CDC15': ('Cdc15T',),
  'PDS1': ('kspdsp', 'ks1pdspp', 'ks2pdspp'),
- 'ESP1': ('ESP1T',)}
+ 'ESP1': ('ESP1T',),
+ 'PPX': ('ksppx',)}
 
 def gal_alpha_cap(gene, p_wt):
     """alpha_cap = 100 x gene's native maximum synthesis capacity (Tier 2)."""
@@ -477,7 +422,7 @@ def gal_alpha_cap(gene, p_wt):
         scale = 1.0
     return GAL_ALPHA_CAP_MULT * scale
 GAL_ALPHA_BIO = {'CDC20': (0.5, 12.0),
- 'CLB2': (0.002, 1.5),
+ 'CLB2': GAL_CLB2,
  'SIC1': (0.03, 0.36),
  'CDC6': (0.1, 0.6),
  'CLB5': (0.004, 0.03),
@@ -489,7 +434,8 @@ GAL_ALPHA_BIO = {'CDC20': (0.5, 12.0),
  'ESP1': (1.5, 6.0),
  'CDC14': (0.3, 1.2),
  'NET1': (0.15, 0.6),
- 'SWI5': (0.02, 0.1)}
+ 'SWI5': (0.02, 0.1),
+ 'PPX': (0.2, 0.6)}
 GAL_BIO_FALLBACK = (2.0, 30.0)
 GAL_STATS = {'eff_guided': 0, 'bio_draw': 0}
 
@@ -541,6 +487,14 @@ def _gal_theta_and_invert(gene, E, p, fpG1, fpM):
     if gene == 'ESP1':
         th = fpM['PDS1']
         return (th, E * th)
+    if gene == 'PPX':
+        # Vppnet = Vkpnet threshold; synthesis balances the candidate's own
+        # PPX degradation rate. PPX is the inhibitory phosphatase, not Cdc5.
+        th = max((p['kkpnetp'] + p['kkpnetpp'] * fpM['CDC15a']) * M_M
+                 - p['kppnetp'], EPS) / max(p['kppnetpp'], EPS)
+        degradation = (p['kdppxp'] + p['kdppxpp'] * (p['J20ppx'] + fpM['CDC20a'])
+                       * p['Jpds'] / max(p['Jpds'] + fpM['PDS1'], EPS))
+        return (th, E * th * degradation)
     return (1.0, E)
 
 def apply_gal_inversions(gal_list, p_wt, p_mut, ovr, *, ma):
@@ -797,7 +751,21 @@ def build_candidate(level, samplers, boost=None, fold_bias_fn=None, *, ma):
     edits = []
     for g, m in pairs:
         desc_parts.append(f'{g}[{m}]')
-        if m == 'GAL-OE':
+        if m=='GAL-MC':
+            has_gal=True
+            copies=ma.sample_scaling_factor(m,g)
+            ma.apply_gene_mutation(g,m,copies,p_wt,p_mut,ovr)
+            edits.append((g,m,copies))
+        elif m=='MC' or (g,m) in {('CLB2','db'),('TEM1','ts'),('ESP1','ts'),('NET1','ts'),('NET1','TAB6-1')}:
+            if FOLD_DIST=='tier2' or m=='TAB6-1':
+                value=ma.sample_scaling_factor(m,g)
+            else:
+                folded=samplers['f_mc' if m=='MC' else 'f_res'].sample(fold_bias_fn(m) if fold_bias_fn else None)
+                u=np.clip(np.log10(max(folded,1.))/2. if m=='MC' else (np.log10(max(folded,1e-3))+3.)/3.,0.,1.)
+                value=ma.sample_scaling_factor_sobol(m,g,u)
+            ma.apply_gene_mutation(g,m,value,p_wt,p_mut,ovr)
+            edits.append((g,m,value))
+        elif m == 'GAL-OE':
             has_gal = True
             E = samplers['E'].sample(fold_bias_fn('E') if fold_bias_fn else None)
             gal_list.append((g, E))
@@ -906,7 +874,6 @@ SIGN = {('CLN3', 'GAL-OE'): {0: -1},
  ('CLB2', 'pLOF'): {2: -1, 4: 1},
  ('CLB2', 'DAmP'): {2: -1, 4: 1},
  ('CLB2', 'db'): {4: 1},
- ('CLB2', 'CA'): {2: 1, 4: 1},
  ('SIC1', 'GAL-OE'): {2: -1, 4: -1},
  ('SIC1', 'MC'): {2: -1, 4: -1},
  ('SIC1', 'KO'): {2: 1, 4: 1},
@@ -953,6 +920,7 @@ SIGN = {('CLN3', 'GAL-OE'): {0: -1},
  ('CDC15', 'ts'): {6: -1},
  ('MDT', 'MDT'): {}}
 NEUTRAL_LOG_TOL = 0.05
+SIGN['CLB2','GAL-MC'] = SIGN['CLB2','GAL-OE']
 
 def direction_signs(edits):
     """edits: [(gene, mode, val)] where val = fold f (scaling) or target E

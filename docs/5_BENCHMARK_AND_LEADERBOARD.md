@@ -1,4 +1,56 @@
+> **2026-10-30 22:06 后台已安排**：11项optimized批次已挂到tmux `al_budding_optimized_20261030_220508`；当前GPU0–3被其他用户占用，队列等待空闲，尚未开始正式训练。115项专项回归及真实FNO选样→256条ODE→入库/重载验证通过。[记录](AL_OPTIMIZED_RESTART_2026-10-30.md)。
+
+> **2026-10-30 优化批次准备/启动记录**：旧8项完整结果仍按原表保留；六项中断实验将从round0独立重跑，另有四新ours及修正event。统一full预算，不能将新方法选样验收当作预测提升。[协议与新目录](AL_OPTIMIZED_RESTART_2026-10-30.md)。
+
+> **2026-10-30 ours完整诊断**：目前8项完成、6项中断。interaction显著改善#15/#22/#50，但#62/#124退步；CPU重载显示物理MSE约93%–97%来自ORI。对照预算后期回退、跨轮历史误差失配和过窄MC×KO动作均有审计证据。优先验证全局覆盖＋局部响应，再独立加入合成/降解联合响应与反馈校准。[结果、波形和方案](AL_OURS_DIAGNOSIS_2026-10-30.md)。仅分析，未启动新实验。
+
+> **2026-10-30 存储格式更新**：新AL改为共享初始数据＋新增块＋`rounds/round_XX/dataset.json`，不再重复写累计轨迹。训练/评测/相关分析支持新旧格式，原始轨迹精度不变；本批14项已完成逐字段验证转换，173.13→56.65GiB（含共享初始），释放116.48GiB；首末轮真实checkpoint重载通过。[布局、读取和验证](AL_DATASET_STORAGE_LAYOUT.md)。下方空间数字为转换前审计快照。
+
+> **2026-10-30 17:14更新**：event完成，最终MAE/MSE/RelL2/Corr=0.115966/2.217988/0.177114/0.960494；本批8完成/6失败。最终200epoch训练变化率0.052%–0.107%/epoch，未连续三次通过当前收敛判据。本批目录173.13GiB，尚未清理。[收敛、每项空间及无损优化方案](AL_STORAGE_AND_CONVERGENCE_2026-10-30.md)。
+
+> **2026-10-30 16:56长程7项完整结果**：MaxDist MAE/RelL2=0.097129/0.134503，Random MSE=1.374911；interaction MAE=0.103874，feedback RelL2=0.137153。ours改善部分难例但尚未赢得整体比较，interaction的总MAE/MSE劣势受#124显著影响。event未完成、6失败，不混合旧预算补榜。[完整表格与限制](AL_FULL_RESULTS_2026-10-30.md)。
+
+> **2026-10-30 10:48长程阶段结果**：14项中2完成、6运行、6异常。70k最终Random/MaxDist的MAE为0.098193/0.097129、MSE为1.374911/1.519672、整体RelL2为0.169334/0.134503。单seed，ours尚无完整最终结果；不能混合40k/70k排名。逐样本权衡、历史预算比较和loss变化率见[阶段审计](AL_FULL_PROGRESS_2026-10-30.md)。
+
+> **2026-10-30 正式长程批次已启动**：默认切换为research全部14项FNO＋full档（100/100/100/200 epochs、warmup5/5/5/10），GPU0–3队列4/4/3/3，每卡最多2项。保留screen作为显式选项。tmux后台与结果位置见[本批启动记录](AL_FULL_LAUNCH_2026-10-30.md)。此条表示已启动，不表示实验已完成。
+
+> **2026-10-30 最新预算档位**：默认screen采用50/50/50/100 epochs和warmup4/4/4/8枚举方法；显式TRAINING_PROFILE=full采用100/100/100/200和5/5/5/10复核少数候选。两档均保留峰值LR1e-3、最低LR1e-5、FNO192/4/24、batch512和loss变化率监控，不自动早停，不保证充分收敛。尚未正式训练。[设置、目录与验证](AL_TRAINING_BUDGET_2026-10-30.md)。下方较早配置与结果保留为历史记录。
+
+> 2026-10-30 loss变化率补查：ours末10轮训练loss平均下降0.203%/epoch、验证MSE下降0.098%/epoch；七项训练loss仍平均下降0.185%–0.228%/epoch。下降减缓，不等于已满足严格收敛标准。保持超参，未加训。[定义与统计](AL_CONVERGENCE_AND_NEXT_IDEAS_2026-10-29.md)。
+
+> 2026-10-30 研究变体准备完成：保持训练超参，新增7个独立采集方法，与6个baseline/首版ours统一比较。全池输入几何核验完成，但尚未正式训练，不能声称精度提升。[策略枚举与验证记录](AL_QUERY_VARIANTS_2026-10-30.md)。
+
+> 2026-10-29 收敛补查：核对七方法四轮日志/CSV，最终100 epoch接近当前schedule的末段平台，尚不能证明充分收敛；没有新增模型结果。详细统计与后续设计见[收敛与idea](AL_CONVERGENCE_AND_NEXT_IDEAS_2026-10-29.md)。
+
+> 2026-10-29 完整七方法结果：全部完成四轮。Power最终MAE=0.105360，LCMD Rel-L2=0.146436；ours MAE=0.136249/Rel-L2=0.165282，首版未显示优势。已完成配对动作、20个badcase、CPU ensemble重放及218伙伴hub缓存轨迹诊断。[完整结果与优化建议](AL_FINAL_COMPARISON_AND_RESPONSE_DIAGNOSIS_2026-10-29.md)。
+
+> 2026-10-29 15:33：Random、Uncertainty、ours_response已按修复后的代码后台重跑，旧失败记录整体保留。MaxDist/LCMD/BAIT/Power已完成，用时约3:36/3:39/4:20/4:22。[本次重跑与用时记录](AL_GENE_RANGES_RESTART_2026-10-29.md)。
+
+> 2026-10-29 AL结果审计：新 gene_ranges 同协议 Random 在40k训练时，real MAE 0.213509→0.180065、MSE 6.099851→3.300605；已完成最终70k的Power MAE=0.105360、LCMD Rel-L2=0.146436。Random/Uncertainty停滞，ours保存审计失败；详见 [逐轮、20个badcase与修复记录](AL_RANGE_RESULTS_AUDIT_2026-10-29.md)。
+
+> **2026-10-29 新正式输入已生成并审计**：百万`gene_ranges` pool与初始10000/1250/1250＋126 real已就绪。旧/新初始train大值比例19.55%→11.79%（相对减少39.69%），未按幅值删样本；新集总量上界检查通过。GAL-MC池中13703条、单模块容量8条。启动脚本默认新批次路径，W&B offline，正式训练尚未启动。文件、比较与跳过准备的启动命令见[数据准备结果](GENE_RANGES_DATA_PREPARATION_2026-10-29.md)。
+
+> **2026-10-29 已实施获批范围及GAL-MC**：CLN2/CLB5/CDC14/TEM1/CDC15的MC改2～10，其余按逐基因表；普通CLB2-GAL收窄并新增独立GAL-MC。三类获批残余范围已更新，未新增零点混采或调整SWI5。94项回归、256条参数池和8条GAL-MC轨迹导出验收通过；49组ODE对照说明小残余不普遍等价KO。旧正式输入未覆盖，新实验需重建pool/初始集。详见[实施与机制对照](APPROVED_BUDDING_RANGES_AND_KO_CHECK_2026-10-29.md)。
+
+> **2026-10-29 采样域诊断补充**：26组同背景强度/残余扫描完成，全部成功；#22的CLB5 2→4拷贝出现ABC变化，#124的APC近零扫描则保持平滑。仅为ODE响应检查，无新模型指标。范围提议、证据边界与复现产物见[候选方案](BUDDING_SAMPLING_RANGE_PROPOSAL_2026-10-29.md)。
+
+> **2026-10-28 强度与组合归因补充**：百万pool和Random最终70k的同基因/同模式参数全量核对、17组诊断ODE复算见[强度审计](MUTATION_REAL_RANGE_AUDIT_2026-10-28.md)。MC对部分基因明显宽于real；同拷贝数仍可因背景产生极大输出。另确认8条TEM1数值越界。没有重训、改写正式数据或新增模型精度结论。
+
 # 全量模型基准评测榜单与坏 Case 深度剖析 (Benchmark Leaderboard & Badcase Analysis)
+
+> **2026-10-28 AL用时核对**：16项计划中8项有启动记录，4项完成、4项中断未完成。完整墙钟用时：FNO Random约4小时51分、Uncertainty约6小时54分、Power约6小时16分，DeepONet Random约4小时06分；实际epoch100/100/100/200，含选样/在线仿真/评测保存，不含预生成与排队。FNO BAIT的10小时38分为中断前运行窗口，不能列作完成用时。来源与精确计时表见 [候选池与用时](AL_POOL_AND_RUNTIME_2026-10-28.md)。本轮未训练或改写结果。
+
+> **2026-10-28 采样概率审计**：恢复目录的142组强度/分位核对、12策略候选及2万唯一池统计见 [审计报告](BUDDING_MUTATION_PROBABILITY_AUDIT_2026-10-28.md)。发现BAMS非法模式和若干静态冲突规则差异，未修生产实现。本轮未积分ODE或训练，不更新模型精度榜；2026-10-27坏例报告和现有百万池对应恢复之前的目录，不能套用为新分布实测结果。
+
+> **2026-10-27 好例反证补充**：同一FNO Random最终70k中，#8/#10严格局部参数盒计数均0，RelL2仍仅0.092/0.078；#7/#9则有极近输入支撑。#15的训练集中已存在完整39变量轨迹RelL2差0.000297的阻滞样本。8组固定背景ODE与冻结FNO对照显示：双KO下CLN2从1→5拷贝，真实CLN2峰值仍0.065，预测却0.725→14.107。因而“类似样本少→预测差”不是充分解释，需检查模型是否学会条件参数依赖。16组诊断、邻居拟合误差、完整计数及限制见 [好例/坏例对照](GOOD_BAD_CASE_COMPARISON_2026-10-27.md)。未重训、未改采样规则，6项分析回归通过。
+
+> **2026-10-27 跨数据集 badcase 审计**：统计148份静态CSV、27份当前AL逐轮JSON及另列的44份旧AL CSV；深度核对26个静态数据文件与8个AL最新轮次，32/34个checkpoint可复现。20例逐样本指标、局部训练支撑、通道误差、固定背景ODE扫描及当前100万池供给见 [完整报告](BADCASE_SAMPLING_AUDIT_2026-10-27.md)。#15的主要现象是假START，而非真实CLN2必然很大；#124在24份静态复现中六分类均正确但ORI主导SSE。旧MASS的#88–91初值差异、3份旧实验小数real ID漏识别及2份未复现项已隔离。BAMS-hard属于test-informed定向消融，不能作为盲测AL收益。当前只有4个AL任务完成四轮，不能把不同预算直接排名。本轮未训练或修改生产规则。
+
+> **2026-10-22 AL 工程流程验收**：Budding/Fission 新四轮闭环及逐轮重归一化已实施，357 项回归通过，并完成两种系统的小规模真实仿真、四轮训练及八个 checkpoint 重载。初始生成验证使用完整原生 real 基准；四轮训练验收使用每系统 2 株 real 子集和小型 MLP，不作为正式模型精度结果，不更新排行榜。配置、目录与验证范围见 [AL 实验流程](AL_EXPERIMENT_WORKFLOW.md)。
+
+> **2026-10-22 log1p尺度诊断**：对5000条当前分布合成轨迹比较保留/排除高幅值后的标准化尺度，并核对hybrid_mse_rel的两项均在标准化空间计算。该诊断不包含模型训练，不代表real预测精度变化，见 [log1p诊断](../scripts/analysis/outputs/log1p_extremes_2026-10-22_hybrid/REPORT.md)。
+
+> **2026-10-22 分布内大值标定**：按当前两套 Budding 分布生成 5000 条随机样本，另测 290 组合法分位数组合；不在生产代码中新增/移除幅值门控。5290 条均正常完成，随机样本中 576 条超过两倍 real 的某个非 MASS 变量最大值。大值案例经加严容差复算仍存在；未做代理模型训练，不能推断 real 预测提升或下降。参数、原始轨迹、耗时、负值明细和比较表见 [分布内大值报告](../scripts/analysis/outputs/budding_extremes_2026-10-22/REPORT.md)。
 
 > **2026-10-21 baseline 清理**：下方旧实现的指标只保留为历史记录，不代表新标准 baseline 的性能。
 > 当前标准入口和来源见 [基线清单](BASELINE_SELECTION_AUDIT.md)；本次仅有数值/接口回归验证，没有重跑论文比较。
@@ -160,6 +212,8 @@
 
 ## 三、极端坏 Case 生化机理解析与修复归因
 
+> **历史解释待核正**：下列早期“120倍CLN2”“归一化修复90%”及表中机理/基因型不作为当前已验证结论。2026-10-27重新核对保存的参数、轨迹和checkpoint后，#15真实为低信号阻滞，且MC受SBF控制；不存在本轮证实的统一“极端值→分岔→坏例”因果链。当前逐例证据与限制以 [新审计报告](BADCASE_SAMPLING_AUDIT_2026-10-27.md) 为准。
+
 在大规模神经算子评估中，我们系统识别并攻克了两类由于参数极端变异引发的物理分岔失效坏 Case：
 
 ### 1. 强启动子多拷贝过表达型坏 Case（如 15 号、44 号）
@@ -218,3 +272,15 @@ python eval.py \
 # 使用分析脚本横向对比实验 badcase
 python scripts/analysis/analyze_badcases.py
 ```
+# 2026-10-23 显存测量补充
+
+Budding 进一步补测 batch1024：FNO192／DeepONet256／UNet32／UNet64 的 allocator 峰值分别为8.10／2.60／2.12／3.97 GiB，四项均完成两次合成训练步。原始数据见 `scripts/analysis/outputs/gpu_memory_2026-10-23_larger_batch/`。这只验证当前形状下的显存可行性，不是收敛和精度结论；正式脚本未改batch。
+
+用户授权后在 RTX A6000（物理 GPU 5）进行十项资源探针：batch512、500步、BF16 mixed、hybrid_mse_rel、真实训练分支与两次 AdamW 更新。全部完成，无 OOM；这不是精度对照或完整 AL 实验。Budding FNO192 的 allocator 峰值为 4.10 GiB、Transformer192 为 10.69 GiB、BioRefinerPlus192 为 34.65 GiB；Fission FNO128 为 2.62 GiB、BioRefinerPlus128 为 17.96 GiB。完整表和限制见 [AL 实验流程](AL_EXPERIMENT_WORKFLOW.md)，原始结果在 `scripts/analysis/outputs/gpu_memory_2026-10-23/summary.json`。
+
+
+## 2026-10-28：均衡百万池 FNO＋Random AL 完成
+
+配置：FNO width192、modes24、4块、batch512，50/50/50/100 epoch；累计合成train10k→20k→40k→70k，seed42、逐轮冷启动与train-only重拟合。最终126 real：MAE **0.124689**、MSE **2.145700**、RelL2 **0.166301**、Correlation **0.967073**；中位逐株MAE0.06153、RelL2 0.10845。指标来自round_03/eval/metrics_denorm.json，重算通过；与历史不同模型/采样域配置不作直接因果排名。其余六个模型打分策略曾因dtype错误失败，不算完成实验。
+
+数据极值、归一化、实际损失分层抽查、Top20和局部覆盖见[Random大值审计](AL_RANDOM_EXTREMES_AUDIT_2026-10-28.md)。本轮未执行过滤后重训或模型容量消融，未恢复阈值。

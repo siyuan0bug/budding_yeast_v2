@@ -68,8 +68,25 @@ def _mass_desc_of(name):
     return m.group(1) if m else None
 
 
+def refresh_model_inputs(self, dm):
+    """Encode this round's model buffers without changing physical provenance.
+
+    Exported ICs can be float64. Models and DataModule tensors use float32;
+    normalization intentionally preserves its input dtype, so cast the local
+    encoding inputs explicitly, on every round rather than only pool loading.
+    """
+    params = self._pool_P_real.detach().to(device='cpu', dtype=torch.float32)
+    initial = self._pool_initial_physical.detach().to(device='cpu', dtype=torch.float32)
+    self._pool_P = normalize_p(params, dm.p_mean.cpu(), dm.p_std.cpu(), dm.norm_type)
+    self._pool_Y_ic = normalize_y(initial, dm.mean_y.cpu(), dm.std_y.cpu(), dm.norm_type,
+                                 getattr(dm, 's_c', None))
+    self._pool_X = None  # Any materialized inputs belong to the previous encoding.
+    self._pool_shape_features_cached = None
+    self._al4pde_mean_y, self._al4pde_std_y = dm.mean_y, dm.std_y
+
+
 def _generate_param_only_pool(self, dm):
-    """Load a checked pool; fallback uses the shared 5/40/55 pool generator."""
+    """Load a checked pool; fallback uses the shared balanced quota generator."""
     if not self.al_pool_dataset:
         import tempfile
         from pathlib import Path
@@ -84,11 +101,14 @@ def _generate_param_only_pool(self, dm):
             finally:self.al_pool_dataset = None
     if not os.path.isfile(self.al_pool_dataset):
         raise FileNotFoundError(self.al_pool_dataset)
+    print(f'[AL pool] Reading cached candidates: {self.al_pool_dataset}', flush=True)
     from budding_yeast_v2.data.systems.sampling_policy import VERSION, valid_candidate
     from budding_yeast_v2.data.systems.contracts import Candidate
     with np.load(self.al_pool_dataset,allow_pickle=True) as data:
         if str(data.get('system_id','budding')) != 'budding':
             raise ValueError('Budding AL cannot load a Fission candidate pool')
+        from budding_yeast_v2.data.systems.budding.al_pool import validate_pool_contract
+        validate_pool_contract(data)
         physical = np.asarray(data['params'])
         names = np.asarray(data['mutant_names'])
         if physical.shape != (len(names),len(PARAM_KEYS)):
@@ -97,35 +117,53 @@ def _generate_param_only_pool(self, dm):
             raise ValueError('Budding pool parameter order mismatch')
         overrides = ([json.loads(str(value)) for value in data['overrides_json']]
                      if 'overrides_json' in data else None)
+        stored_metadata = data['candidate_metadata_json'] if 'candidate_metadata_json' in data else None
         metadata = []
+        print(f'[AL pool] Checking mutation metadata for {len(names)} candidates', flush=True)
         for i,name in enumerate(names):
             desc = _mass_desc_of(name)
             if desc is None:raise ValueError('Pool candidate lacks auditable module description; regenerate the pool')
             level = int(str(name).rsplit('_L',1)[1].split('_')[0])
+            source_meta = json.loads(str(stored_metadata[i])) if stored_metadata is not None else {}
+            source_meta['description'] = desc
             candidate = valid_candidate(Candidate(i,str(name),{} if overrides is None else overrides[i],level,
-                                       metadata={'description':desc}), 'budding')
+                                       metadata=source_meta), 'budding')
             if candidate is None:
                 raise ValueError('Pool contains unsupported mutations or violates exact L1/L2/L3 policy; regenerate it')
             metadata.append(dict(candidate.metadata,genes=candidate.metadata['pairs'],level=level))
+            if (i+1) % 100000 == 0 or i+1 == len(names):
+                print(f'[AL pool] Mutation metadata {i+1}/{len(names)}', flush=True)
         if overrides is None:
             overrides = [dict(zip(PARAM_KEYS,map(float,row))) for row in physical]
         initial = np.asarray(data['y_init']) if 'y_init' in data else np.array([prepare_initial_conditions(ovr)[1] for ovr in overrides])
         if initial.shape != (len(names),39) or not np.isfinite(initial).all() or not np.isfinite(physical).all():
             raise ValueError('Malformed/nonfinite Budding pool inputs')
+        # Historical pools may predate alias-aware real deduplication. Reject
+        # them rather than silently changing the parameters a strategy scored.
+        print('[AL pool] Checking parameters, initial states and real collisions (no ODE)', flush=True)
+        for i,ovr in enumerate(overrides):
+            expected = np.array([ovr.get(key,_MASS_DEFAULTS[key]) for key in PARAM_KEYS])
+            if (not np.allclose(physical[i],expected,rtol=1e-6,atol=1e-8)
+                    or not np.allclose(initial[i],prepare_initial_conditions(ovr)[1],rtol=1e-6,atol=1e-8)):
+                raise ValueError(f'Pool inputs disagree with overrides for {names[i]}; regenerate the pool')
+            if is_duplicate_real_mutant(ovr,_MASS_DEFAULTS):
+                raise ValueError(f'Pool candidate {names[i]} collides with a real mutant; regenerate the pool')
+            if (i+1) % 100000 == 0 or i+1 == len(names):
+                print(f'[AL pool] Input validation {i+1}/{len(names)}', flush=True)
         steps = dm.train_dataset_synth.tensors[2].shape[-1] if hasattr(dm,'train_dataset_synth') else 500
         if 'time_grid' in data and not np.allclose(data['time_grid'],np.linspace(0,float(getattr(dm,'t_max',210)),steps)):
             raise ValueError('Budding pool time grid mismatch')
     p = torch.tensor(physical,dtype=torch.float32)
-    y0 = torch.tensor(initial,dtype=torch.float32)
-    self._pool_P = normalize_p(p,dm.p_mean.cpu(),dm.p_std.cpu(),dm.norm_type)
-    self._pool_Y_ic = normalize_y(y0,dm.mean_y.cpu(),dm.std_y.cpu(),dm.norm_type,getattr(dm,'s_c',None))
     self._pool_P_real,self._pool_ovr,self._pool_mass_meta = p,overrides,metadata
+    # Preserve the exported physical ICs for provenance; model inputs above
+    # intentionally remain float32 and use the existing normalization.
+    self._pool_initial_physical = torch.tensor(initial,dtype=torch.float64)
+    refresh_model_inputs(self, dm)
     self._pool_mutant_names = names
     self._pool_X = self._pool_Y = None
     self._pool_size = len(names)
     self._al4pde_t_grid = torch.linspace(0,1,steps).reshape(1,1,steps)
     self._al4pde_pool_loaded = True
-    self._al4pde_mean_y,self._al4pde_std_y = dm.mean_y,dm.std_y
     print(f'[AL pool] Loaded {len(names)} exact L1/L2/L3 candidates ({VERSION})')
 
 
@@ -150,7 +188,7 @@ def _get_pool_X_batch(self, indices):
     Y_ic_batch = self._pool_Y_ic[indices]  # (B, 39)
     T = self._al4pde_t_grid.shape[2]
     IC = Y_ic_batch.unsqueeze(2).expand(-1, -1, T)  # (B, 39, T) — 视图
-    t_grid = self._al4pde_t_grid.to(IC.device).expand(IC.shape[0], IC.shape[1], T)
+    t_grid = self._al4pde_t_grid.to(device=IC.device, dtype=IC.dtype).expand(IC.shape[0], IC.shape[1], T)
     return torch.stack([IC, t_grid], dim=2)  # (B, 39, 2, T)
 
 
@@ -161,6 +199,7 @@ def _get_pool_X_batch(self, indices):
 POOL_FIELDS = {
     '_pool_P': 'params_normalized', '_pool_P_real': 'params_physical',
     '_pool_X': 'inputs', '_pool_Y': 'targets', '_pool_Y_ic': 'initial_states',
+    '_pool_initial_physical': 'initial_physical',
     '_pool_mutant_names': 'names', '_pool_ovr': 'overrides',
     '_pool_mass_meta': 'mutation_metadata', '_pool_shape_features_cached': 'shape_features',
     '_al4pde_pool_idx': 'source_indices', '_pool_size': 'size',
@@ -204,7 +243,7 @@ class CandidatePool:
         for field, value in values.items():
             setattr(self, field, value)
         self.candidate_ids = self.candidate_ids[mask]
-        self.size = mask.sum()
+        self.size = int(mask.sum())
         self.revision += 1
 
     def plan(self, indices, strategy, target_valid_num=None):

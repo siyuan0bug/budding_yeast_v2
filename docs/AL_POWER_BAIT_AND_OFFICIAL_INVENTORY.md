@@ -12,7 +12,7 @@
 | `pool_random` | `al4pde_random` 保留固定池随机语义及原 NumPy 抽样逻辑 |
 | `top_k` | `al4pde_uncertainty`，独立 ensemble 评分和官方 Top-K 语义的 ODE 适配 |
 | `power` | 新增 `al4pde_power`，使用相同 ensemble 分数及幂加权无放回抽样 |
-| `max_dist` | 已有 `al4pde_diversity` 使用自定义 332 维特征与本地 MaxDist，不能声称完整等价于官方默认特征流程 |
+| `max_dist` | `al4pde_max_dist`已接入：预测完整轨迹共享sketch＋实际官方bmdal MaxDist，无posterior；旧自定义332维diversity另行保留 |
 | `coreset_maxdist` | 尚未接入；官方在模型 latent 表示上执行 MaxDist，需要模型提供隐特征接口 |
 | `lcmd` | 新增 `al4pde_lcmd`，预测轨迹共享投影 + 实际 bmdal LCMD；平方距离加权，不做 posterior transform |
 | `bait` | 新增 `al4pde_bait`，使用官方同一 `bmdal_reg` BAIT 算法与缩放/posterior 处理 |

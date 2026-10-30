@@ -67,7 +67,12 @@ def generate_pool(output, samples=10000, seed=20000, workers=1, mode_freq='class
         np.random.seed(seed)
         random.seed(seed)
         sampler = make_sampler(recipe, config)
-        candidates = prepare_candidates(recipe, config, sampler, report)
+        if workers > 1:
+            from ..parallel_pool import prepare_parallel_pool
+            candidates = prepare_parallel_pool(recipe, config, report)
+        else:
+            candidates = prepare_candidates(recipe, config, sampler, report)
+        print(f"[fission pool] warming {len(candidates)} candidates on {workers} workers",flush=True)
         wt_birth = ADAPTER.prepare_context(config)
         tasks = [(candidate, wt_birth) for candidate in candidates]
         if workers == 1:

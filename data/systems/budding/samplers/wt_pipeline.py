@@ -22,7 +22,8 @@ def rescue_wt(cand, sampler, report):
     previous={(g,m):value for g,m,value in cand['edits']}
     for gene,mode in pairs:
         value=previous.get((gene,mode))
-        if (gene,mode) not in previous:
+        if ((gene,mode) not in previous or any(cand['ovr'].get(key)!=result['ovr'].get(key)
+                                             for key in w.touch_set(gene,mode))):
             keys=w.touch_set(gene,mode)
             ratios=[result['ovr'][k]/defaults[k] for k in sorted(keys) if defaults.get(k,0)>0 and k in result['ovr']]
             value=ratios[0] if ratios else None
@@ -125,7 +126,12 @@ def prepare_wt_candidates(sampler, config, report):
             continue
         if not cand['gal_conv']:
             stats['gal_nonconv'] += 1
-        cand = rescue_wt(cand, sampler, report)
+        try:
+            cand = rescue_wt(cand, sampler, report)
+        except RuntimeError as exc:
+            if 'Collision rescue exhausted' not in str(exc):raise
+            report['collision_exhausted'] += 1
+            continue  # level_pool is indexed by accepted count: same-L redraw.
         from ...sampling_policy import valid_candidate
         checked = valid_candidate(Candidate(1, 'wt', cand['ovr'], level, metadata={'description':cand['desc']}), 'budding')
         if checked is None:

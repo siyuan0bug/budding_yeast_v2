@@ -1,0 +1,36 @@
+{
+  "physical_gpu": "5",
+  "batch": 1024,
+  "steps": 2,
+  "note": "Synthetic normalized inputs; two AdamW updates, actual training_step and coarse loss. Excludes AL acquisition, validation, ensemble and full-run variation.",
+  "results": [
+    {
+      "system": "budding",
+      "model": "fno",
+      "width": 192,
+      "n_blocks": 4,
+      "modes": 24,
+      "batch": 1024,
+      "steps": 2,
+      "time_steps": 500,
+      "precision": "bf16-mixed",
+      "loss": "hybrid_mse_rel",
+      "input": "synthetic_normalized",
+      "coarse_auxiliary_loss": false,
+      "device": "NVIDIA RTX A6000",
+      "real_scalar_parameters": 7290791,
+      "peaks_by_stage_gib": {
+        "0_forward": 6.213915824890137,
+        "0_backward": 6.223803997039795,
+        "0_optimizer": 6.223803997039795,
+        "1_forward": 6.276174545288086,
+        "1_backward": 6.279104709625244,
+        "1_optimizer": 6.279104709625244
+      },
+      "status": "ok",
+      "seconds": 0.8056412758305669,
+      "peak_allocated_gib": 6.279104709625244,
+      "peak_reserved_gib": 8.09765625
+    }
+  ]
+}

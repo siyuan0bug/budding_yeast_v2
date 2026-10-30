@@ -55,6 +55,11 @@ def split_indices(names, patterns, seed):
 
 
 def data_chunks(path, chunk_size=512):
+    from budding_yeast_v2.data.dataset_archive import resolve_dataset_path, dataset_field_chunks
+    path=resolve_dataset_path(path)
+    if path.suffix=='.json':
+        yield from dataset_field_chunks(path,chunk_size=chunk_size)
+        return
     """Stream data.npy once; avoid materializing the 7.8 GB trajectory array."""
     with zipfile.ZipFile(path) as archive, archive.open("data.npy") as stream:
         version = np.lib.format.read_magic(stream)

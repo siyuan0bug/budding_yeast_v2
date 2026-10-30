@@ -96,8 +96,8 @@ class YeastDataModule(pl.LightningDataModule):
         if 'time_grid' in metadata:
             self.t_max=float(metadata['time_grid'][-1])
         self.pattern_labels = pattern_labels  # 🌟 新增：保存形态标签供 eval.py 使用
-        # Supplementary physical-window groups never replace the existing ABC
-        # split strata or the three-class targets used by historical models.
+        # Supplementary physical-window groups never replace ABC training targets.
+        # Non-LHS splitting is seed-only and does not read either set of labels.
         self.biological_labels = metadata['labels']
         self.biological_labels_available = metadata['biological_labels_available']
         self.pattern_group_codes = metadata.get('pattern_group_codes')
@@ -124,10 +124,11 @@ class YeastDataModule(pl.LightningDataModule):
             if self.adj_matrix.shape != (self.num_vars, self.num_vars) or not np.isfinite(self.adj_matrix).all():
                 raise ValueError('Expected a finite variable graph matching the dataset dimensions')
 
-        Y = torch.tensor(raw_data, dtype=torch.float32)
+        # The universal loader already rejects nonfinite data. Share a float32
+        # physical array instead of copying all trajectories twice per round.
+        Y = torch.as_tensor(raw_data, dtype=torch.float32)
         Params = torch.tensor(param_conds, dtype=torch.float32)
 
-        Y = torch.nan_to_num(Y, nan=0.0, posinf=1e4, neginf=0.0)
         Params = torch.nan_to_num(Params, nan=0.0, posinf=1e4, neginf=0.0)
 
         num_mutants, num_vars, T_STEPS = Y.shape
@@ -180,14 +181,14 @@ class YeastDataModule(pl.LightningDataModule):
         #  步骤 3: 第二级 — 按动态表型（Pattern）子组分组
         #  步骤 4: 比例抽样 + 孤本保护（每个 Pattern 子组内独立计算）
         # ================================================================
-        np.random.seed(self.seed)
+        if has_lhs:np.random.seed(self.seed)
 
         # 第一级：按突变体家族分组（提取 _LHS_ 前的前缀）
         # MASS 数据集无家族结构 → 跳过家族分层: 将全部 MASS 合成样本归为单一分组 'MASS',
         # 后续仍按 Pattern 子组做宏观 train/val/test 划分 (保留 Pattern 分层 + 孤本保护)。
         family_groups = {}
         if self.is_mass_dataset:
-            family_groups['MASS'] = list(synth_indices)
+            pass  # Non-LHS splits below use a seed permutation, never labels.
         else:
             for idx in synth_indices:
                 name = str(mutant_names[idx])
@@ -246,14 +247,37 @@ class YeastDataModule(pl.LightningDataModule):
 
         test_idx_real = real_indices
 
+        if not has_lhs:
+            from .systems.al_initial import random_split
+            split_keys = ('split_train','split_val','split_test','split_real')
+            if any(key in metadata for key in split_keys):
+                if not all(key in metadata for key in split_keys):
+                    raise ValueError('Incomplete stored dataset split')
+                split = [np.asarray(metadata[key]) for key in split_keys]
+            elif self._expected_preprocessing is not None:
+                stored = self._expected_preprocessing['split']
+                split = [np.asarray(stored[key],dtype=np.int64) for key in ('train','val','test','real')]
+            else:
+                split = [*random_split(synth_indices,self.seed),np.asarray(real_indices,dtype=np.int64)]
+            if any(part.ndim!=1 or part.dtype.kind not in 'iu' for part in split):
+                raise ValueError('Stored split indices must be one-dimensional integers')
+            joined = np.concatenate(split)
+            if (len(joined)!=num_mutants or not np.array_equal(np.sort(joined),np.arange(num_mutants))
+                    or set(split[3])!=set(real_indices)):
+                raise ValueError('Stored split must partition the dataset and keep real rows separate')
+            train_idx_synth,val_idx_synth,test_idx_synth,test_idx_real = [part.tolist() for part in split]
+        self.levels = metadata.get('levels')
+        self.requested_levels = metadata.get('requested_levels',self.levels)
+        self.module_counts = metadata.get('module_counts')
+
         n_families = len(family_groups)
-        print(f"📊 [两级分层+孤本保护] 家族数: {n_families} | "
+        print(f"📊 [{'LHS family split' if has_lhs else 'seeded random / stored split'}] | "
               f"训练集: {len(train_idx_synth)} | 验证集: {len(val_idx_synth)} | "
               f"合成测试集: {len(test_idx_synth)} | 真实测试集: {len(test_idx_real)}")
 
-        # Split first, fit on source-file synthetic TRAIN only, then freeze the
-        # same transform for every split/AL round. Legacy replay is explicit;
-        # a saved payload always restores its original tensors and policy.
+        # Fit only this file's synthetic train rows. AL rebuilds this module on
+        # each cumulative round snapshot; saved payloads restore that round's
+        # exact statistics instead of refitting evaluation data.
         fit_indices = train_idx_synth if self.fit_scope == TRAIN_FIT_SCOPE else synth_indices
         if not fit_indices:
             raise ValueError('No synthetic rows available for normalization fitting')
@@ -403,7 +427,7 @@ class YeastDataModule(pl.LightningDataModule):
         # change the effective training indices, but not normalization fit data
         # or the held-out source split. This is not an AL-pool resume snapshot.
         self._preprocessing_split = {
-            'seed': self.seed, 'train': list(train_idx_synth), 'val': list(val_idx_synth),
+            'seed': int(metadata.get('split_seed',self.seed)), 'train': list(train_idx_synth), 'val': list(val_idx_synth),
             'test': list(test_idx_synth), 'real': list(test_idx_real),
         }
         if self._expected_preprocessing is not None:

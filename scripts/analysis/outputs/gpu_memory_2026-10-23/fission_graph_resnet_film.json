@@ -1,0 +1,28 @@
+{
+  "system": "fission",
+  "model": "graph_resnet_film",
+  "width": 128,
+  "n_blocks": 4,
+  "modes": 24,
+  "batch": 512,
+  "steps": 2,
+  "time_steps": 500,
+  "precision": "bf16-mixed",
+  "loss": "hybrid_mse_rel",
+  "input": "synthetic_normalized",
+  "coarse_auxiliary_loss": false,
+  "device": "NVIDIA RTX A6000",
+  "real_scalar_parameters": 1642800,
+  "peaks_by_stage_gib": {
+    "0_forward": 8.136303901672363,
+    "0_backward": 8.25572681427002,
+    "0_optimizer": 8.25572681427002,
+    "1_forward": 8.25572681427002,
+    "1_backward": 8.26993465423584,
+    "1_optimizer": 8.26993465423584
+  },
+  "status": "ok",
+  "seconds": 0.8759594780858606,
+  "peak_allocated_gib": 8.26993465423584,
+  "peak_reserved_gib": 8.775390625
+}

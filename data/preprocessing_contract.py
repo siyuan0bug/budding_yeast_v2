@@ -2,12 +2,12 @@
 import copy
 import hashlib
 import json
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from .normalization import check_norm_type
+from .dataset_archive import open_dataset, resolve_dataset_path
 
 TRAIN_FIT_SCOPE = 'train_synthetic'
 LEGACY_FIT_SCOPE = 'all_synthetic_legacy'
@@ -36,8 +36,12 @@ def _array_hash(values):
 
 def dataset_contract(raw, params, names, patterns, dataset_path, t_max):
     schema = {'param_names': None, 'variable_names': None}
-    if Path(dataset_path).is_file():
-        with np.load(dataset_path, allow_pickle=True) as archive:
+    try:
+        source = resolve_dataset_path(dataset_path)
+    except FileNotFoundError:
+        source = None  # Preserve the historical in-memory-only contract helper.
+    if source is not None:
+        with open_dataset(source, allow_pickle=True) as archive:
             for key in schema:
                 if key in archive:
                     schema[key] = [str(x) for x in archive[key].tolist()]

@@ -21,7 +21,8 @@ from .samplers.rescue import parse_pairs
 def _report(config):
     return Counter({'collisions':0,'rescued':0,'recipe':config.recipe,
                     'mutation_profile':'mutant_aware','distribution_profile':'mutant_aware',
-                    'rng_contract':'paired_legacy_algorithms_v1','sampling_policy':VERSION,'collision_policy':'rescue'})
+                    'rng_contract':'paired_legacy_algorithms_v1','sampling_policy':VERSION,
+                    'collision_policy':'fixed_modules_environment_v2'})
 
 
 def _real_candidates(include):
@@ -75,7 +76,7 @@ def _paired_results(left,right,config):
 
 
 def _twin_rescue(ovr_b,ovr_a,desc,level,number,sampler,report):
-    """Change a colliding form once, then rebuild both arms on that shared form."""
+    """Rescue one allele in a pair; preserve both environments and other doses."""
     from .samplers.twins import TARGET_MODES, apply_gene_mutation_A, sample_scaling_factor_A
     backend=sampler.backend
     initial=Candidate(number,f'MASS_{desc}_L{level}_{number}',ovr_b,level,pair_id=number,
@@ -85,24 +86,35 @@ def _twin_rescue(ovr_b,ovr_a,desc,level,number,sampler,report):
             name=f'MASS_{desc}_L{level}_{number}'.replace(' ','_')
             return replace(initial,name=name,overrides=ovr_b,metadata={'description':desc}),replace(initial,name=name,overrides=ovr_a,metadata={'description':desc})
         # If only A collides, run the same rescue policy against A's current form.
-        source=ovr_b if real_mutants.is_duplicate_real_mutant(ovr_b,backend.defaults()) else ovr_a
-        fixed=ensure_candidate(replace(initial,overrides=source,metadata={'description':desc}),sampler,report)
-        if parse_pairs(desc)==parse_pairs(fixed.metadata['description']):
-            # A carbon-only rescue must not replace B's doses with A's doses,
-            # or redraw target doses on either side.
-            ovr_b=dict(ovr_b,mdt=fixed.overrides['mdt'])
-            ovr_a=dict(ovr_a,mdt=fixed.overrides['mdt'])
-            desc=fixed.metadata['description']
-            continue
-        ovr_b,desc=fixed.overrides,fixed.metadata['description']
-        ovr_a={'mdt':ovr_b['mdt']}
-        for gene,mode in parse_pairs(desc):
-            if mode in TARGET_MODES:
-                alpha=sample_scaling_factor_A(mode,gene) if mode in ('ts','db') else 1.
-                apply_gene_mutation_A(gene,mode,alpha,backend.defaults(),{},ovr_a)
-            else:
-                for key in backend.touch_set(gene,mode):
-                    if key in ovr_b:ovr_a[key]=ovr_b[key]
+        from copy import copy
+        from .specification import BuddingSystem
+        source_is_b=real_mutants.is_duplicate_real_mutant(ovr_b,backend.defaults())
+        source=ovr_b if source_is_b else ovr_a
+        local=copy(sampler)
+        if not source_is_b:local.backend=BuddingSystem('mass','mass')
+        fixed=ensure_candidate(replace(initial,overrides=source,metadata={'description':desc}),local,report)
+        before,after=parse_pairs(desc),parse_pairs(fixed.metadata['description'])
+        if len(before)!=len(after) or any(g!=h for (g,_),(h,_) in zip(before,after)):
+            raise RuntimeError('Paired rescue changed the module skeleton')
+        changed=[i for i,((g,m),(_,new_mode)) in enumerate(zip(before,after))
+                 if m!=new_mode or any(source.get(key)!=fixed.overrides.get(key)
+                    for key in backend.touch_set(g,m)|backend.touch_set(g,new_mode))]
+        if len(changed)!=1 or source.get('mdt',90.)!=fixed.overrides.get('mdt',90.):
+            raise RuntimeError('Paired rescue must change one mutation and preserve mdt')
+        index=changed[0];gene,old_mode=before[index];_,mode=after[index]
+        other=dict(ovr_a if source_is_b else ovr_b)
+        for key in backend.touch_set(gene,old_mode):other.pop(key,None)
+        if mode not in TARGET_MODES:
+            for key in backend.touch_set(gene,mode):
+                if key in fixed.overrides:other[key]=fixed.overrides[key]
+        elif source_is_b:
+            alpha=sample_scaling_factor_A(mode,gene) if mode in ('ts','db') else 1.
+            apply_gene_mutation_A(gene,mode,alpha,backend.defaults(),{},other)
+        else:
+            alpha=backend.sample_scaling_factor(mode,gene) if mode in ('ts','db') else 1.
+            backend.apply_gene_mutation(gene,mode,alpha,backend.defaults(),{},other)
+        ovr_b,ovr_a=(fixed.overrides,other) if source_is_b else (other,fixed.overrides)
+        desc=fixed.metadata['description']
     raise RuntimeError('Paired collision rescue exhausted; no mismatched pair was exported')
 
 
@@ -132,7 +144,12 @@ def generate_twins(config):
             for draw in range(100):
                 number+=1
                 b,a,desc=sample_twin_mutant_pair(int(level),sampler.backend.defaults(),ma=sampler.backend)
-                x,y=_twin_rescue(b,a,desc,int(level),number,sampler,report)
+                try:
+                    x,y=_twin_rescue(b,a,desc,int(level),number,sampler,report)
+                except RuntimeError as exc:
+                    if 'rescue exhausted' not in str(exc).lower():raise
+                    report['collision_exhausted']+=1
+                    continue
                 x,y=valid_candidate(x,'budding'),valid_candidate(y,'budding')
                 if x is not None and y is not None:break
             else:raise RuntimeError('Cannot draw a twin pair with the requested module count')
@@ -302,11 +319,11 @@ def generate_bams_ablation(config):
                 a,b,desc=targeted_pair(index)
                 if real_mutants.is_duplicate_real_mutant(a,sampler.backend.defaults()) or real_mutants.is_duplicate_real_mutant(b,sampler.backend.defaults()):
                     report['collisions']+=1
-                    for mdt in (150.,160.,90.):
-                        a,b=dict(a,mdt=mdt),dict(b,mdt=mdt)
-                        if not real_mutants.is_duplicate_real_mutant(a,sampler.backend.defaults()) and not real_mutants.is_duplicate_real_mutant(b,sampler.backend.defaults()):
-                            report['rescued']+=1;break
-                    else:continue
+                    # This control requires a hard-KO/hypomorphic paired assay.
+                    # Changing its KO modes would invalidate the contrast. Redraw
+                    # a complete pair at this L level instead of changing mdt.
+                    report['collision_exhausted']+=1
+                    continue
                 skeleton=TARGETED_SKELETONS[index]
                 pairs=[g if isinstance(g,tuple) else (g,'KO') for g in skeleton['lofs']]+list(skeleton['gofs'])
                 metadata={'pairs':pairs,'description':desc}

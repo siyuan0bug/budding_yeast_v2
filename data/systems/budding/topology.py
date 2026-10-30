@@ -1,4 +1,4 @@
-"""Pruned MA module graph and derived distances/pair classes; separate from the 39-state graph."""
+"""Sampling-module graph with restored equation-based functional controls."""
 import numpy as np
 from .catalog import GROUP_BY_NAME, GENE_NAMES
 
@@ -34,7 +34,25 @@ MODULE_EDGES = [('CLB2', 'CDC20', '+'),
  ('CLB2', 'SWI5', '-'),
  ('CLB2', 'SIC1', '-'),
  ('CLB5', 'SIC1', '-'),
- ('CLN2', 'SIC1', '-')]
+ ('CLN2', 'SIC1', '-'),
+ # Chen Table 1: PPX dephosphorylates Net1 and opposes Cdc14 release.
+ ('PPX', 'NET1', '+'),
+ ('PPX', 'CDC14', '-'),
+ ('CDC20', 'PPX', '-'),
+ ('PDS1', 'PPX', '+'),
+ ('CLB2', 'Mcm1', '+'),
+ ('Mcm1', 'CLB2', '+'),
+ ('Mcm1', 'CDC20', '+'),
+ ('Mcm1', 'SWI5', '+'),
+ ('Mcm1', 'PDS1', '+'),
+ ('CLN2', 'SBF_MBF', '+'),
+ ('CLN3', 'SBF_MBF', '+'),
+ ('BCK2', 'SBF_MBF', '+'),
+ ('CLB5', 'SBF_MBF', '+'),
+ ('CLB2', 'SBF_MBF', '-'),
+ ('SBF_MBF', 'CLN2', '+'),
+ ('SBF_MBF', 'CLB5', '+'),
+ ('SBF_MBF', 'PDS1', '+')]
 
 GENE_WEIGHT_ARM = 'uniform'      # 'uniform' (v5.1 default) | 'degree' | 'engine'
 

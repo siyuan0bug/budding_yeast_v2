@@ -37,6 +37,9 @@ def dataset_label_summary(dm):
                      biological_labels_available=int(dm.biological_labels_available[indices].sum()))
         if dm.pattern_group_codes is not None:
             split['pattern_groups'] = counts(dm.pattern_group_codes, indices)
+        for key in ('levels','requested_levels','module_counts'):
+            values=getattr(dm,key,None)
+            if values is not None:split[key]=counts(values,indices)
         splits[name] = split
     return dict(system_id=dm.system_id, num_vars=dm.num_vars, num_params=dm.num_params,
                 variable_names=list(dm.variable_names), horizon_minutes=float(dm.t_max),

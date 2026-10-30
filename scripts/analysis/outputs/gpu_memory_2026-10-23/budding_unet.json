@@ -1,0 +1,28 @@
+{
+  "system": "budding",
+  "model": "unet",
+  "width": 32,
+  "n_blocks": 4,
+  "modes": 24,
+  "batch": 512,
+  "steps": 2,
+  "time_steps": 500,
+  "precision": "bf16-mixed",
+  "loss": "hybrid_mse_rel",
+  "input": "synthetic_normalized",
+  "coarse_auxiliary_loss": false,
+  "device": "NVIDIA RTX A6000",
+  "real_scalar_parameters": 2723399,
+  "peaks_by_stage_gib": {
+    "0_forward": 0.9462456703186035,
+    "0_backward": 0.9462456703186035,
+    "0_optimizer": 0.9462456703186035,
+    "1_forward": 0.9665436744689941,
+    "1_backward": 0.9665436744689941,
+    "1_optimizer": 0.9665436744689941
+  },
+  "status": "ok",
+  "seconds": 1.4509819732047617,
+  "peak_allocated_gib": 0.9665436744689941,
+  "peak_reserved_gib": 1.08984375
+}

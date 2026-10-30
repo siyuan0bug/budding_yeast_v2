@@ -160,7 +160,8 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
     3. 使用多进程进程池并行绘制 matplotlib 图片。
     """
     plot_dir = os.path.join(save_dir, sub_dir)
-    os.makedirs(plot_dir, exist_ok=True)
+    if max_plots is None or max_plots > 0:
+        os.makedirs(plot_dir, exist_ok=True)
     
     system_id=getattr(dm,'system_id','budding')
     if len(dataset)==0:
@@ -266,7 +267,8 @@ def write_supplementary_label_metrics(rows, indices, dm, path):
 
 
 def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42, batch_size=512, 
-                                 max_plots=None, max_real_plots=None, synth_test_plots=50, plot_workers=16):
+                                 max_plots=None, max_real_plots=None, synth_test_plots=50, plot_workers=16,
+                                 compact=False):
     """
     对给定的 model 和 dm 执行全量评测，生成 global_metrics_denorm.json, per_mutant_metrics.csv 等标准成果。
     """
@@ -327,10 +329,13 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
         "synth_test": synth_summary,
     }
 
-    json_path = os.path.join(save_dir, 'global_metrics_denorm.json')
+    if compact:
+        global_metrics['per_mutant'] = real_csv
+        global_metrics['per_synth_test'] = synth_csv
+    json_path = os.path.join(save_dir, 'metrics_denorm.json' if compact else 'global_metrics_denorm.json')
     with open(json_path, 'w') as f:
         json.dump(global_metrics, f, indent=2)
-    if hasattr(model, 'graph_report'):
+    if not compact and hasattr(model, 'graph_report'):
         with open(os.path.join(save_dir, 'graph_provenance.json'), 'w') as f:
             json.dump(model.graph_report(), f, indent=2)
     print(f"📊 Global metrics JSON saved to: {json_path}")
@@ -349,12 +354,13 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
                 writer.writerow(row)
         print(f"📝 CSV saved to: {path}")
 
-    write_csv(real_csv, os.path.join(save_dir, 'per_mutant_metrics.csv'))
-    write_csv(synth_csv, os.path.join(save_dir, 'per_synth_test_metrics.csv'))
-    write_supplementary_label_metrics(real_csv, dm._test_idx_real, dm,
-        os.path.join(save_dir, 'per_mutant_label_groups.csv'))
-    write_supplementary_label_metrics(synth_csv, dm._test_idx_synth, dm,
-        os.path.join(save_dir, 'per_synth_test_label_groups.csv'))
+    if not compact:
+        write_csv(real_csv, os.path.join(save_dir, 'per_mutant_metrics.csv'))
+        write_csv(synth_csv, os.path.join(save_dir, 'per_synth_test_metrics.csv'))
+        write_supplementary_label_metrics(real_csv, dm._test_idx_real, dm,
+            os.path.join(save_dir, 'per_mutant_label_groups.csv'))
+        write_supplementary_label_metrics(synth_csv, dm._test_idx_synth, dm,
+            os.path.join(save_dir, 'per_synth_test_label_groups.csv'))
 
     # ======== 5. 多进程并发画图 (若有请求) ========
     all_plot_tasks = real_plot_tasks + synth_plot_tasks
@@ -372,7 +378,7 @@ def main():
     parser.add_argument('--ckpt', type=str, default=None, help='Checkpoint 路径 (若提供 exp_dir 则可自动查找)')
     parser.add_argument('--exp_dir', type=str, default=None, help='分层实验目录 (如 ./experiments/.../seed_42)')
     parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
-    parser.add_argument('--dataset_name', type=str, required=True)
+    parser.add_argument('--dataset_name', type=str, default=None,help='AL rounds infer dataset.json or legacy dataset.npz next to the checkpoint')
     parser.add_argument('--batch_size', type=int, default=1024, help='GPU 推理 Batch Size (A6000 48GB 推荐 1024)')
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--save_dir', type=str, default=None,
@@ -396,9 +402,12 @@ def main():
         if args.save_dir is None:
             args.save_dir = os.path.join(args.exp_dir, f'eval_graph_{args.graph_load_policy}')
         if args.ckpt is None:
+            round_models=sorted(glob.glob(os.path.join(args.exp_dir,'rounds','round_*','model.ckpt')))
+            if round_models:args.ckpt=round_models[-1]
             # 自动在 exp_dir/checkpoints 或 exp_dir 寻找 ckpt
             ckpt_search_dirs = [os.path.join(args.exp_dir, 'checkpoints'), args.exp_dir]
             for d in ckpt_search_dirs:
+                if args.ckpt is not None:break
                 if os.path.isdir(d):
                     ckpts = glob.glob(os.path.join(d, '*.ckpt'))
                     if ckpts:
@@ -411,6 +420,11 @@ def main():
 
     if not args.ckpt or not os.path.exists(args.ckpt):
         raise FileNotFoundError(f"未找到有效的 Checkpoint 文件: {args.ckpt}")
+    if args.dataset_name is None:
+        directory=os.path.dirname(os.path.abspath(args.ckpt))
+        candidates=[os.path.join(directory,name) for name in ('dataset.json','dataset.npz')]
+        args.dataset_name=next((path for path in candidates if os.path.isfile(path)),None)
+        if args.dataset_name is None:raise ValueError('Provide --dataset_name for a checkpoint without an adjacent AL dataset.json/dataset.npz')
 
     os.makedirs(args.save_dir, exist_ok=True)
     print(f"🎯 加载 Checkpoint: {args.ckpt}")

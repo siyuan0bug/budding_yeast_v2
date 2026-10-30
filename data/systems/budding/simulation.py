@@ -85,9 +85,6 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
         return name, None, "Inviable: Numerical Failure", "Pattern_C: Exponential-Arrest (==0)"
     
     max_m = np.max(yu[nMASS])
-    if tf <= 210 and max_m > 10.0:
-        return name, None, "Discarded_Mass", None
-
     max_b2 = np.max(yu[nCLB2])
     bio_l = analyze_cell_viability_unified(eh, bd, md, max_m, max_b2)
     pat_l = analyze_mass_pattern(yu[nMASS])

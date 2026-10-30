@@ -1,5 +1,6 @@
 """oracle services extracted from the pre-package implementation."""
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from budding_yeast_v2.data.label_metadata import UNKNOWN_BIOLOGY_LABEL
 from budding_yeast_v2.data.simulation_guards import bounded_ordered_map
 from contextlib import closing
@@ -11,20 +12,18 @@ from budding_yeast_v2.data.systems.budding.api import simulate_mutant as simulat
 import torch
 from budding_yeast_v2.data.systems.budding.api import PARAM_KEYS, VARIABLE_NAMES
 from budding_yeast_v2.data.systems.budding.api import get_default_params as get_default_params_mass
+from budding_yeast_v2.utils.runtime_logging import log_stage, ProgressLog, log_event
 
 _MASS_DEFAULTS = get_default_params_mass()
 _MASS_DEFAULTS.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
 MASS_SIM_TIMEOUT = 15.0
 
 def solve_single_mass_bridge(name, ovr, *, return_biological_label=False):
-    """MASS 版 ODE 仿真桥: 用完整 ovr 字典调用 mass_dataset_generator.simulate_mutant。
+    """Call the canonical modular Budding solver with complete overrides.
 
-    与 solve_single_mutant_bridge (lhs 版) 的关键差异:
-    1. 接收完整 ovr 字典 (含 init_Tem1/init_Cdc15/Vi20/kbub2 等 lhs 版不认识的键),
-       保证 TEM1-KO / CDC15-KO 等突变的初始条件覆盖与数据集生成时完全一致;
-    2. mass 版引擎自带 MAD2-CSL / BUB2-CKO 的特殊处理 (is_mad2_ko / is_bub2_ko);
-    3. mass 版引擎自带 mass>10 过滤 (返回 None + "Discarded_Mass");
-    4. 补 SIGALRM 硬超时保护 (mass 版引擎无内建超时, 防止 BDF 卡死进程池 worker)。
+    Initial-state overrides and MAD2/BUB2 event handling are preserved. Finite
+    high-amplitude trajectories are retained; solver deadlines and numerical
+    validity checks still apply.
 
     Args:
         name: 样本名 (仅用于日志/记录, mass 引擎不查表)
@@ -50,12 +49,15 @@ def solve_single_mass_bridge(name, ovr, *, return_biological_label=False):
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old_handler)
 
-    if y_uniform is None:
+    if (y_uniform is None or np.asarray(y_uniform).shape != (39, 500)
+            or not np.isfinite(y_uniform).all()):
         return None
 
     # ovr → 141 维参数向量 (仅取 PARAM_KEYS 中的键, 与数据集 npz 导出逻辑一致)
     p_vec = np.array([ovr.get(k, _MASS_DEFAULTS[k]) for k in PARAM_KEYS],
                      dtype=np.float64)
+    if not np.isfinite(p_vec).all():
+        return None
     X_dummy = np.zeros((39, 2, 500))
     result = (X_dummy, y_uniform, p_vec, pattern_label)
     return (*result, bio_label) if return_biological_label else result
@@ -65,9 +67,50 @@ def _solve_single_mass_task_wrapper(task_tuple):
     """顶级函数包装器，供 ProcessPoolExecutor(mp_context='spawn') 进程池调用"""
     name, ovr = task_tuple
     try:
-        return solve_single_mass_bridge(name, ovr, return_biological_label=True)
+        result = solve_single_mass_bridge(name, ovr, return_biological_label=True)
+        if result is None:
+            return None
+        # The dummy input is never consumed by the oracle. Returning 30k copies
+        # used >9 GB of IPC/parent RAM. Match the existing float32 NPZ and model
+        # trajectory contract; solver, actual IC and physical parameters stay 64.
+        return (None, np.asarray(result[1], dtype=np.float32), *result[2:])
     except Exception:
         return None
+
+
+def _valid_simulation_result(result):
+    """Shared single-batch/refill validity gate, independent of amplitude or BIO."""
+    if result is None:
+        return False
+    try:
+        y, p = np.asarray(result[1]), np.asarray(result[2])
+        return (y.shape == (39, 500) and p.shape == (len(PARAM_KEYS),)
+                and np.isfinite(y).all() and np.isfinite(p).all())
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
+def _simulation_results(tasks,workers,context,*,stall_timeout=35.,retries=1):
+    """Rebuild a failed pool once, without dropping/reordering unknown inputs.
+
+    Already-yielded candidates are never rerun. A repeated infrastructure failure
+    aborts explicitly; no candidate is silently called biologically inviable.
+    """
+    cursor=attempt=0
+    while cursor<len(tasks):
+        try:
+            with ProcessPoolExecutor(max_workers=workers,mp_context=context) as executor, closing(
+                bounded_ordered_map(executor,_solve_single_mass_task_wrapper,tasks[cursor:],
+                                    stall_timeout=stall_timeout)) as ordered:
+                for result in ordered:
+                    cursor+=1
+                    yield result
+            return
+        except (TimeoutError,BrokenProcessPool) as error:
+            log_event('RETRY' if attempt<retries else 'FAIL','ODE pool rebuild',
+                completed=cursor,total=len(tasks),attempt=attempt+1,error=repr(error))
+            if attempt>=retries:raise
+            attempt+=1
 
 
 def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
@@ -76,18 +119,12 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
     al4pde 机制: 选中参数后 ODE 仿真生成真实轨迹, 再加入训练集。
     1. target_valid_num is None: 传统单批模式 (sel_idx 样本全部送检并保留通过者)
     2. target_valid_num is not None: 配额达标动态缓冲填充模式 (Quota-Guaranteed Dynamic Filling)
-       传入优先级降序候选队列 sel_idx, 分块流式仿真, 过滤 Monster / Numerical Failure,
+       传入优先级降序候选队列 sel_idx, 分块流式仿真, 排除数值失败,
        严格累积有效样本直至填满 target_valid_num 个, 彻底根除样本饥饿。
     """
     sel_idx = np.array(sel_idx, dtype=np.int64)
     pool_ids = self.pool.ensure_ids().copy()
-
-    if hasattr(dm, '_Y') and hasattr(dm, '_test_idx_real'):
-        real_envelope = dm._Y[dm._test_idx_real].max(dim=-1)[0].max(dim=0)[0].cpu().numpy()
-    else:
-        Y_real_phys = dm.denormalize_y(dm.test_dataset_real.tensors[2].cpu())
-        real_envelope = Y_real_phys.max(dim=-1)[0].max(dim=0)[0].cpu().numpy()
-    dynamic_thresholds = np.maximum(real_envelope * 2.0, 2.0)
+    pool_levels = [int(row['level']) for row in self._pool_mass_meta]
 
     import multiprocessing as mp
     ctx = mp.get_context('spawn')
@@ -107,13 +144,14 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
             tasks.append((str(sel_names[i]), ovr))
 
         sim_results = [None] * n_sel
-        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor, closing(
-            bounded_ordered_map(executor, _solve_single_mass_task_wrapper, tasks)
-        ) as ordered_results:
+        progress=ProgressLog('ODE simulation',n_sel,workers=workers)
+        with log_stage('ODE process pool',candidates=n_sel,workers=workers), closing(
+            _simulation_results(tasks,workers,ctx)) as ordered_results:
             done = 0
             for idx, res in enumerate(ordered_results):
                 sim_results[idx] = res
                 done += 1
+                progress.update(done)
                 if done % max(1, n_sel // 10) == 0 or done == n_sel:
                     print(f"  ODE 仿真进度: {done}/{n_sel} ({100*done//n_sel}%)")
 
@@ -126,13 +164,9 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
 
         for i in range(n_sel):
             res = sim_results[i]
-            if res is None:
+            if not _valid_simulation_result(res):
                 continue
             _, y_uniform, p_vec, pattern_label = res[:4]
-            lhs_max_vals = np.max(y_uniform, axis=1)
-            is_monster = any(lhs_max_vals[v] > dynamic_thresholds[v] for v in range(1, 39))
-            if is_monster:
-                continue
             valid_positions.append(i)
             valid_Y_real.append(y_uniform)
             valid_P_real.append(p_vec)
@@ -141,9 +175,10 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
             valid_biological_labels.append(res[4] if len(res) > 4 else UNKNOWN_BIOLOGY_LABEL)
 
         evaluated_indices = sel_idx
+        del sim_results
         if valid_positions:
             valid_sel_idx = sel_idx[valid_positions]
-            X_tensor = self._get_pool_X_batch(valid_sel_idx).clone()
+            X_tensor = self._get_pool_X_batch(valid_sel_idx)
         else:
             valid_sel_idx = []
 
@@ -180,20 +215,17 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
                 ovr = batch_ovrs[i] if batch_ovrs is not None else {k: v for k, v in zip(PARAM_KEYS, batch_P_real[i].tolist())}
                 tasks.append((str(batch_names[i]), ovr))
 
-            with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor, closing(
-                bounded_ordered_map(executor, _solve_single_mass_task_wrapper, tasks)
-            ) as ordered_results:
+            progress=ProgressLog('ODE refill chunk',len(batch_candidates),workers=workers)
+            with log_stage('ODE refill process pool',candidates=len(batch_candidates),workers=workers), closing(
+                _simulation_results(tasks,workers,ctx)) as ordered_results:
                 for i, res in enumerate(ordered_results):
                     pool_cand_idx = batch_candidates[i]
                     evaluated_idx_list.append(pool_cand_idx)
+                    progress.update(i+1)
 
-                    if res is None:
+                    if not _valid_simulation_result(res):
                         continue
                     _, y_uniform, p_vec, pattern_label = res[:4]
-                    lhs_max_vals = np.max(y_uniform, axis=1)
-                    is_monster = any(lhs_max_vals[v] > dynamic_thresholds[v] for v in range(1, 39))
-                    if is_monster:
-                        continue
 
                     valid_Y_real.append(y_uniform)
                     valid_P_real.append(p_vec)
@@ -220,9 +252,11 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
         valid_sel_idx = np.array(valid_pool_idx, dtype=np.int64)
 
         if len(valid_sel_idx) > 0:
-            X_tensor = self._get_pool_X_batch(valid_sel_idx).clone()
+            X_tensor = self._get_pool_X_batch(valid_sel_idx)
 
     # 从候选池安全移除所有已参与仿真的样本 (无论合格与否, 保证不重复测试)
+    from .io import pool_provenance
+    provenance = pool_provenance(self, valid_sel_idx) if len(valid_sel_idx) else []
     mask = np.ones(self._pool_size, dtype=bool)
     mask[evaluated_indices] = False
     self.pool.keep(mask)
@@ -239,18 +273,14 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
     p_mean = dm.p_mean.cpu()  # (1, 141)
     p_std = dm.p_std.cpu()    # (1, 141)
 
-    Y_list = []
-    for y_real in valid_Y_real:
-        y_t = torch.tensor(y_real, dtype=torch.float32)  # (39, 500)
-        y_norm = normalize_y(y_t.unsqueeze(0), mean_y, std_y, norm_type,
-                             getattr(dm, 's_c', None)).squeeze(0)
-        Y_list.append(y_norm)
-
-    P_list = []
-    for p_real in valid_P_real:
-        p_t = torch.tensor(p_real, dtype=torch.float32).unsqueeze(0)  # (1, 141)
-        p_norm = normalize_p(p_t, p_mean, p_std, norm_type).squeeze(0)
-        P_list.append(p_norm)
+    # Allocate once instead of retaining N normalized tensors and another stack.
+    normalized_y = torch.empty((len(valid_Y_real), 39, 500), dtype=torch.float32)
+    for start in range(0, len(valid_Y_real), 256):
+        block = torch.from_numpy(np.asarray(valid_Y_real[start:start+256], dtype=np.float32))
+        normalized_y[start:start+len(block)] = normalize_y(block, mean_y, std_y, norm_type,
+                                                         getattr(dm, 's_c', None))
+    normalized_p = normalize_p(torch.as_tensor(np.asarray(valid_P_real), dtype=torch.float32),
+                               p_mean, p_std, norm_type)
 
     n_evaluated = len(evaluated_indices)
     print(f"[al4pde] 仿真完成: {len(valid_Y_real)}/{n_evaluated} 通过验证 (通过率: {100*len(valid_Y_real)/max(1, n_evaluated):.1f}%) | "
@@ -259,14 +289,18 @@ def _build_broadcast_from_pool(self, sel_idx, dm, target_valid_num=None):
     return {
         'candidate_ids': pool_ids[valid_sel_idx],
         'consumed_ids': pool_ids[evaluated_indices],
+        'levels': [pool_levels[i] for i in valid_sel_idx],
+        'requested_levels': [pool_levels[i] for i in valid_sel_idx],
+        'module_counts': [pool_levels[i] for i in valid_sel_idx],
         'X': X_tensor,
-        'Y': torch.stack(Y_list),
-        'P': torch.stack(P_list),
+        'Y': normalized_y,
+        'P': normalized_p,
         'Y_real': valid_Y_real,
         'P_real': valid_P_real,
         'names': valid_names,
         'labels': valid_labels,
         'biological_labels': valid_biological_labels,
+        'provenance': provenance,
         'sample_plots': {}
     }
 

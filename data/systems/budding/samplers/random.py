@@ -39,7 +39,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
     mut_descriptions = []
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
         if m_chosen == 'KO':
             if enable_ko_interval:
@@ -65,7 +65,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
                     p_mut['init_Cdc15'] = ovr['init_Cdc15']
             else:
                 ma.apply_gene_mutation(g_name, 'KO', 0.0, p_wt, p_mut, ovr, rng=rng)
-        elif m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
+        elif m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
             alpha = ma.sample_scaling_factor(m_chosen, g_name, rng=rng)
             ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, rng=rng)
         else:
@@ -121,17 +121,17 @@ def sample_mass_random(level=1, *, ma):
                 comp_mode = np.random.choice(synth_modes)
         if comp_mode:
             mut_descriptions.append(f'{g_name}[{m_chosen}+{comp_mode}]')
-            if m_chosen == 'GAL-OE' or comp_mode == 'GAL-OE':
+            if m_chosen in ('GAL-OE','GAL-MC') or comp_mode in ('GAL-OE','GAL-MC'):
                 has_gal_oe = True
-            alpha1 = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+            alpha1 = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             ma.apply_gene_mutation(g_name, m_chosen, alpha1, p_wt, p_mut, ovr)
-            alpha2 = ma.sample_scaling_factor(comp_mode, g_name) if comp_mode in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+            alpha2 = ma.sample_scaling_factor(comp_mode, g_name) if comp_mode in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             ma.apply_gene_mutation(g_name, comp_mode, alpha2, p_wt, p_mut, ovr)
         else:
             mut_descriptions.append(f'{g_name}[{m_chosen}]')
-            if m_chosen == 'GAL-OE':
+            if m_chosen in ('GAL-OE','GAL-MC'):
                 has_gal_oe = True
-            alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+            alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
     if has_gal_oe:
         ovr['mdt'] = 150.0
@@ -185,17 +185,17 @@ def sample_mass_random_dist(level=1, *, ma):
                 comp_mode = np.random.choice(synth_modes)
         if comp_mode:
             mut_descriptions.append(f'{g_name}[{m_chosen}+{comp_mode}]')
-            if m_chosen == 'GAL-OE' or comp_mode == 'GAL-OE':
+            if m_chosen in ('GAL-OE','GAL-MC') or comp_mode in ('GAL-OE','GAL-MC'):
                 has_gal_oe = True
-            alpha1 = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+            alpha1 = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             ma.apply_gene_mutation(g_name, m_chosen, alpha1, p_wt, p_mut, ovr)
-            alpha2 = ma.sample_scaling_factor(comp_mode, g_name) if comp_mode in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+            alpha2 = ma.sample_scaling_factor(comp_mode, g_name) if comp_mode in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             ma.apply_gene_mutation(g_name, comp_mode, alpha2, p_wt, p_mut, ovr)
         else:
             mut_descriptions.append(f'{g_name}[{m_chosen}]')
-            if m_chosen == 'GAL-OE':
+            if m_chosen in ('GAL-OE','GAL-MC'):
                 has_gal_oe = True
-            alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+            alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
             ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
     if has_gal_oe:
         ovr['mdt'] = 150.0

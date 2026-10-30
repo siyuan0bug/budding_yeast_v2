@@ -14,11 +14,18 @@ class StrategySpec:
 
 
 SPECS = {
+    **{name: StrategySpec(name, 'strategies.hybrid', '_hybrid_sample', True)
+       for name in ('ours_global_interaction','ours_global_response','ours_global_tail','ours_global_calibrated')},
+    **{name: StrategySpec(name, 'strategies.experimental', '_experimental_sample', True)
+       for name in ('ours_response_marginal', 'ours_response_feedback', 'ours_interaction',
+                    'ours_invariance', 'ours_event', 'ours_error', 'ours_coverage')},
+    'ours_response': StrategySpec('ours_response', 'strategies.response', '_ours_response_sample', True),
     'al4pde_random': StrategySpec('al4pde_random', 'strategies.random', '_al4pde_random_sample', False, 'single_batch', systems=('budding', 'fission')),
     'al4pde_uncertainty': StrategySpec('al4pde_uncertainty', 'strategies.uncertainty', '_al4pde_uncertainty_sample', True, 'single_batch', systems=('budding', 'fission')),
     'al4pde_power': StrategySpec('al4pde_power', 'strategies.uncertainty', '_al4pde_power_sample', True, 'single_batch', systems=('budding', 'fission')),
     'al4pde_lcmd': StrategySpec('al4pde_lcmd', 'strategies.diversity', '_al4pde_lcmd_sample', False, 'single_batch', systems=('budding', 'fission')),
     'al4pde_bait': StrategySpec('al4pde_bait', 'strategies.diversity', '_al4pde_bait_sample', False, 'single_batch', systems=('budding', 'fission')),
+    'al4pde_max_dist': StrategySpec('al4pde_max_dist', 'strategies.diversity', '_al4pde_max_dist_sample'),
     'al4pde_diversity': StrategySpec('al4pde_diversity', 'strategies.diversity', '_al4pde_diversity_sample', False, 'single_batch'),
     'maal': StrategySpec('maal', 'strategies.biology', '_maal_sample', False, 'single_batch'),
     'al4pde_mass': StrategySpec('al4pde_mass', 'strategies.biology', '_al4pde_mass_sample', False, 'single_batch'),

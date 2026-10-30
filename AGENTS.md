@@ -38,7 +38,7 @@
 ### 1.1 绝对工程铁律：严禁在仓库根目录乱放临时脚本
 > [!CAUTION]
 > **绝对禁止 AI Agent 在仓库根目录下直接创建任何临时探针、测试或调试 `.py` 文件！**（如 `_cap_probe_tmp.py`, `inspect_xxx.py`, `temp_test.py` 等）。
-> 仓库根目录只允许保留核心生产入口（`train.py`, `eval.py`, `tune.py`）、批量运行脚本（`run_pipeline.sh`, `run_al_pure_random_1m.sh`, `run_tune.sh`）以及权威文档（`README.md`, `AGENTS.md`）。
+> 仓库根目录只允许保留核心生产入口（`train.py`, `eval.py`, `tune.py`）、批量运行脚本（`run_pipeline.sh`, `run_al_budding.sh`, `run_tune.sh`）以及权威文档（`README.md`, `AGENTS.md`）。
 
 ### 1.2 全类型代码存放字典 (Where Code Belongs)
 
@@ -61,7 +61,7 @@
 > 2. **新增主动学习策略**：在 `utils/active_learning/strategies/` 实现并注册新策略后，必须同步在 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md) 补充数学设计、采样目标函数与实测性能。
 > 3. **新增损失函数/物理约束**：在 `utils/losses.py` 新增损失后，必须同步在 [docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md) 补充数学公式与梯度特性。
 > 4. **新增数据生成器/归一化**：在 `data/` 编写新生成引擎或验证归一化后，必须同步在 [docs/4_DATASETS_AND_NORMALIZATION.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/4_DATASETS_AND_NORMALIZATION.md) 补充采样空间分布与物理基准。
-> 5. **实验完成/评测出炉**：任何批次实验（如 `run_pipeline.sh`, `run_al_pure_random_1m.sh` 等）运行完毕后，必须运行分析脚本提取关键指标，并同步更新至 [docs/5_BENCHMARK_AND_LEADERBOARD.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/5_BENCHMARK_AND_LEADERBOARD.md)（与对应的专门指南中），严禁只在终端汇报而导致专著文档脱节！
+> 5. **实验完成/评测出炉**：任何批次实验（如 `run_pipeline.sh`, `run_al_budding.sh` 等）运行完毕后，必须运行分析脚本提取关键指标，并同步更新至 [docs/5_BENCHMARK_AND_LEADERBOARD.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/5_BENCHMARK_AND_LEADERBOARD.md)（与对应的专门指南中），严禁只在终端汇报而导致专著文档脱节！
 
 ### 1.4 AI 专用分析、探针与评测工具库导航 (AI Tooling Navigation Guide)
 代码库为 AI Agent 和科研人员配备了多层次的诊断工具链，当遇到性能瓶颈、收敛异常或需开展归因分析时，**优先复用以下现有成熟工具，避免重复造轮子**：
@@ -133,7 +133,7 @@ python train.py \
     --lr 8.8e-4 --warmup_epochs 8 --norm_type log1p --al_strategy none
 
 # 2. 1M 纯随机池 AL4PDE 闭环主动学习批量运行
-bash run_al_pure_random_1m.sh
+bash run_al_budding.sh
 
 # 3. 评测与 126 真实突变体轨迹绘制
 python eval.py \
@@ -198,13 +198,16 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 **当前组织**：`utils/active_learning/` 按 engine、pool、prediction/features、oracle、dataset/io、strategies 拆分；旧 `utils/al_callback.py` 为 16 行兼容入口。新增策略只向 registry 注册，CLI/ensemble 需求由同一清单派生。`tune.py` 当前明确仅支持 `--al_strategy none`。接口、归档与验证见 [拆包说明](docs/AL_PACKAGE_REFACTOR.md)。
 
 ### 6.1 1M 免预仿真纯参数空间候选池架构
-当前 `run_al_pure_random_1m.sh` 用 `data/generate.py --recipe budding_pool` 生成参数/初值池，`data/al_pool_manager.py` 选取并仿真初始集；之后由 `train.py` 驱动选样、在线 ODE 仿真和外层冷启动训练。
-当前 real-envelope 筛选仍保留，不能声称完整测试盲态。Fission AL 已支持 Random/Uncertainty/Power/BAIT/LCMD 五种通用策略；其余 Budding 专用策略明确拒绝。候选初值必须逐株预热，入口与成本边界见 [Fission AL](docs/FISSION_ACTIVE_LEARNING.md)。
+
+**2026-10-30 存储更新**：新AL采用`shared/datasets/<sha>.npz`共享初始块、每次`added_samples.npz`及每轮`dataset.json`清单，不再保存重复累计NPZ。轨迹float32、物理参数/实际初值float64和训练输入float32/bf16保持；数据读取使用`data.dataset_archive.open_dataset`，不要直接对清单调用`np.load`。checkpoint仍严格检查同一数据哈希/切分/归一化；迁移必须逐字段验证一致后才释放旧快照。详见[存储布局](docs/AL_DATASET_STORAGE_LAYOUT.md)。下方旧快照描述保留为历史。
+AL 与静态批训练的新实验结果默认根目录为机械盘 `/home/users/zsy/mydata/budding_yeast/experiments/`，两系统 AL 分别使用其下 `al_budding/`、`al_fission/`。`EXP_ROOT` 可覆盖，不把新结果默认写回项目盘。共享输入路径仍由 `DATA_DIR` 控制，Budding默认文件名为`_balanced.npz`，Fission为`_al.npz`，规则版本保留在内部元数据；用户授权删除的旧 AL 根目录输入不再使用。
+当前 `run_al_budding.sh` 用 `data/generate.py --recipe budding_pool` 生成参数/初值池，`data/systems/al_initial.py` 按层 KMeans 选取并仿真初始集；之后由 `train.py` 驱动选样、在线 ODE 仿真和外层冷启动训练。两个 AL 脚本均内置 `SEEDS` 和 `EXPERIMENTS` 清单，每行指定模型、损失、策略、超参数和 GPU；Budding有界同卡并行、Fission同卡串行，均跨卡并行，先准备一个共享池及每个 seed 的初始数据，再启动 worker。Budding当前默认FNO的6个基线（Random/Uncertainty/Power/MaxDist/LCMD/BAIT）加ours_response，共7项，GPU0–3任务数2/2/2/1，MAX_JOBS_PER_GPU默认2（设1则串行），Fission仍同卡串行；Fission默认标准fno四策略4项（Random/Uncertainty/Power/BAIT，GPU0–3）；AL W&B 强制本地离线，池大小为 100 万/50 万。Budding候选池使用budding/al_pool.py两级容量配额和逐模式Sobol流（百万池L1/L2/L3=9815/126225/863960）；Fission候选池多核提议仍使用parallel_pool.py（固定256条块、SeedSequence、全局去重）；SIM_WORKERS默认32，新并行RNG契约区别于旧串行流，详见 AL_EXPERIMENT_WORKFLOW.md。Budding当前FNO统一50/50/50/100 epoch、warmup4/4/4/8、batch512、LR1e-3；其他Budding模型和AL方法以此为参考，容量仍按架构定义。Fission默认60/60/60/120 epoch、warmup6/6/6/12不变。标准 FNO width 为 Budding192/Fission128、modes24、4主干块；当前默认清单仅FNO，不以cross_fno的每变量width推导其容量。批次 `tasks.tsv` 按完成顺序记录成功失败，失败默认继续下一项，退出码仍为非零；CONTINUE_ON_ERROR=0不再启动该卡后续项，已运行项正常收尾。Budding ODE默认每实验4进程，可用AL_SIM_WORKERS覆盖。
+Budding 仿真后幅值拒绝已取消，旧六种启发式策略的参数门控保持；新增ours_response不加该门控。当前四轮、初始 KMeans + seed 随机切分、逐轮累计 train 重拟合和快照 L 字段契约以 [AL_EXPERIMENT_WORKFLOW.md](docs/AL_EXPERIMENT_WORKFLOW.md) 为准；旧三轮/Pattern 分层/冻结尺度说明不适用于新 AL。Fission AL 已支持 Random/Uncertainty/Power/BAIT/LCMD 五种通用策略；其余 Budding 专用策略明确拒绝。候选初值必须逐株预热，入口与成本边界见 [Fission AL](docs/FISSION_ACTIVE_LEARNING.md)。
 
 ### 6.2 当前在线策略与官方对齐状态
 保留原 12 种在线策略：`al4pde_random`、`al4pde_uncertainty`、`al4pde_diversity`、`maal`、`al4pde_mass`、`al4pde_novelty`、`al4pde_residual`、`al4pde_residual_diversity`、`al4pde_bifurcation`、`al4pde_bifurcation_entropy`、`al4pde_event_entropy`、`al4pde_fisher_oed`；四个短别名继续兼容。
 
-新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，当前合计 15 种在线策略；Power 复用独立 ensemble，BAIT/LCMD 使用预测轨迹共享投影及实际 bmdal 选择器；LCMD 无 posterior transform。`coreset_maxdist` 尚未实现，不能用输出轨迹替代 latent 冒充支持。官方 8 个预置配置及未移植项见 [清单](docs/AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。
+新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，新增预测轨迹`al4pde_max_dist`后加上`ours_response`当前合计17种在线策略；Power 复用独立 ensemble，BAIT/LCMD 使用预测轨迹共享投影及实际 bmdal 选择器；LCMD 无 posterior transform。`coreset_maxdist` 尚未实现，不能用输出轨迹替代 latent 冒充支持。官方 8 个预置配置及未移植项见 [清单](docs/AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。
 
 `random/us/is/wrs/vessal/hggs/pial` 已归档至 `utils/archive/al_callback_legacy.py`，主文件和训练入口不再支持这些旧轨迹池策略。归档包含完整原文件，生产代码不可导入它来绕过限制。
 
@@ -230,7 +233,7 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 
 ### 7.2 数据集生成引擎清单
 
-**2026-10-22**：当前 systems 统一静态 10/40/50、AL pool 5/40/55，仅精确 L1–L3，原始生成器仍保留。修改采样前必须阅读 [三模块规则](docs/EXACT_THREE_MODULE_SAMPLING.md)，不得重新引入独立兜底配额或默默截断旧高阶数据。
+**2026-10-22**：当前 systems 静态10/40/50；Budding AL已在2026-10-28改为模块集合/模式两级均衡，不再用5/40/55（Fission仍用原规则），仅精确L1–L3，原始生成器仍保留。修改采样前必须阅读 [三模块规则](docs/EXACT_THREE_MODULE_SAMPLING.md)，不得重新引入独立兜底配额或默默截断旧高阶数据。
 **2026-10-19 RNG 后续修复**：`generate_pure_random_dataset.py` 的局部 `RandomState(seed)`
 现显式传入幅度采样、随机等位基因处理、冲突重抽和碰撞救援；显式 RNG 的冲突键按固定顺序遍历。
 新 NPZ 记录 `sampling_seed` / `sampling_rng_contract=pure_random_single_stream_v1`。
@@ -263,7 +266,7 @@ untyped 补充组成，不从旧 NPZ 读取连边；默认 hybrid 为 226 条非
 2. **ODE BDF 积分器三层超时保护**：
    在调用 `solve_ivp(method='BDF')` 仿真复杂突变体时，病态参数可能导致底层 Fortran 循环挂起。必须保证：
    - 内置 `SIGALRM` 5秒硬超时中断；
-   - Python 父进程 35 秒无完成结果时终止自有 worker 并中止生成（不是对已完成 future 调用 timeout）；
+   - Python 父进程 35 秒无完成结果时终止自有 worker；AL 最多重建一次未交付任务，重复失败则中止生成（不是对已完成 future 调用 timeout）；
    - `try...except` 捕获异常返回 `None`。
 3. **日志输出与实验管理**：
    所有实验日志唯一写入各自的 `experiments/.../train.log`，不再在根目录生成 `logs/` 或 `logs_v3/` 软链接。
@@ -280,3 +283,7 @@ untyped 补充组成，不从旧 NPZ 读取连边；默认 hybrid 为 226 条非
 - 📙 [docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md) — 17 种损失函数、GradNorm 梯度平衡与 PINO 约束
 - 📕 [docs/4_DATASETS_AND_NORMALIZATION.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/4_DATASETS_AND_NORMALIZATION.md) — 数据集生成引擎、三大归一化实证与生物图谱
 - 📓 [docs/5_BENCHMARK_AND_LEADERBOARD.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/5_BENCHMARK_AND_LEADERBOARD.md) — 126 真实突变体基准评测排行榜与 Badcase 审计
+
+AL精度边界：`_pool_initial_physical`用于精确来源保存（Budding float64），模型缓存由`refresh_model_inputs(dm)`统一生成float32；train.py每轮必须调用它，时间轴匹配IC dtype。不能直接normalize_y原始float64初值后推理；此次六策略首轮故障及真实checkpoint验证见docs/AL_DTYPE_FIX_2026-10-28.md。
+
+2026-10-30 新AL优化：默认 AL_SUITE=optimized，四个 global_* 策略＋六项中断重跑＋修正event；full预算不变，GPU0–3各一项，旧结果不可覆盖。方法/内存修复/验证见 docs/AL_OPTIMIZED_RESTART_2026-10-30.md。

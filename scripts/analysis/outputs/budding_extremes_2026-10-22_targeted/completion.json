@@ -1,0 +1,7 @@
+{
+  "samples": 290,
+  "success": 290,
+  "seconds": 37.760558617068455,
+  "production_files_unchanged": 84,
+  "note": "Diagnostic quantile combinations; joint occurrence rates are not inferred."
+}

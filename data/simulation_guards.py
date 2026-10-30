@@ -7,6 +7,7 @@ import threading
 import time
 
 import numpy as np
+from budding_yeast_v2.utils.runtime_logging import log_event
 
 
 DEFAULT_SIM_TIMEOUT = 5.0
@@ -77,6 +78,8 @@ def bounded_completed(executor, futures, stall_timeout=35.0):
             # Python 3.10 has no public terminate_workers(). Keep the compatibility
             # workaround local and join/kill only the executor's own children.
             processes = list((getattr(executor, '_processes', None) or {}).values())
+            log_event('FAIL','process pool watchdog',stall_timeout_s=stall_timeout,
+                      pending=len(pending),worker_pids=[process.pid for process in processes])
             for process in processes:
                 if process.is_alive():
                     process.terminate()
@@ -91,16 +94,41 @@ def bounded_completed(executor, futures, stall_timeout=35.0):
 
 
 def bounded_ordered_map(executor, function, tasks, stall_timeout=35.0):
-    """Watch completion without changing ranking/selection order of map results."""
-    indices = {executor.submit(function, task): i for i, task in enumerate(tasks)}
+    """Bound submitted work as well as waits; preserve candidate input order.
+
+    Submitting tens of thousands of tasks before consuming any result can block
+    Python 3.10's process-pool wakeup/result pipes before the watchdog is entered.
+    The window also bounds completed out-of-order trajectory buffers.
+    """
+    tasks = iter(tasks)
+    window = max(1, 2 * int(getattr(executor, '_max_workers', 1)))
+    indices = {}
     ready = {}
-    next_index = 0
+    next_index = submitted = 0
+    exhausted = False
+
+    def replenish():
+        nonlocal submitted, exhausted
+        while not exhausted and len(indices) + len(ready) < window:
+            try:
+                task = next(tasks)
+            except StopIteration:
+                exhausted = True
+                break
+            indices[executor.submit(function, task)] = submitted
+            submitted += 1
+
     try:
-        for future in bounded_completed(executor, indices, stall_timeout):
-            ready[indices[future]] = future.result()
+        replenish()
+        while indices:
+            # Recreate the bounded wait after each completion so newly submitted
+            # futures are watched too. No wait ever owns a growing global set.
+            future = next(bounded_completed(executor, tuple(indices), stall_timeout))
+            ready[indices.pop(future)] = future.result()
             while next_index in ready:
                 yield ready.pop(next_index)
                 next_index += 1
+            replenish()
     finally:
         # A quota may stop consumption early. Cancel queued work and watchdog
         # running tasks BEFORE ProcessPoolExecutor.__exit__ waits on them.

@@ -27,6 +27,8 @@ def _append_dm_label_metadata(dm, bd):
                                        getattr(dm, 'system_id', 'budding'))
     arrays = dict(pattern_labels=np.asarray(bd['labels']), biological_labels=fields['labels'],
                   biological_labels_available=fields['biological_labels_available'])
+    for key in ('levels','requested_levels','module_counts'):
+        if key in bd:arrays[key]=np.asarray(bd[key],dtype=np.int16)
     for key in ('pattern_group_codes', 'pattern_group_labels', 'pattern_group_ids', 'observed_division_counts'):
         if key in fields:
             arrays[key] = fields[key]

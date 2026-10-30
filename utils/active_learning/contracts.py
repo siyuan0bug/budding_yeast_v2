@@ -66,7 +66,7 @@ class QueryBatch:
         if self.data is None:
             return
         size = len(self.data['X'])
-        for key in ('P', 'Y', 'names', 'labels', 'Y_real', 'P_real', 'biological_labels'):
+        for key in ('P', 'Y', 'names', 'labels', 'Y_real', 'P_real', 'biological_labels', 'provenance'):
             if key in self.data and len(self.data[key]) != size:
                 raise ValueError(f'Query row alignment error: {key}')
 

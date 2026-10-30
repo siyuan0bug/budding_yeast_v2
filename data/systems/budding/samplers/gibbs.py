@@ -116,9 +116,9 @@ def sample_gibbs_mutant(level, gibbs_sampler, rng=np.random, *, ma):
         return sample_gibbs_mutant(level, gibbs_sampler, rng, ma=ma)
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
-        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
         ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
     if has_gal_oe:
         ovr['mdt'] = 150.0

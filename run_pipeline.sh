@@ -396,7 +396,7 @@ EXPERIMENTS=(
 #   USE_HIERARCHICAL=0 (兼容旧版扁平目录 train_results_v3/ / eval_results_v3/)
 # ==========================================
 USE_HIERARCHICAL=1
-EXP_ROOT="./experiments"
+EXP_ROOT="${EXP_ROOT:-/home/users/zsy/mydata/budding_yeast/experiments}"
 mkdir -p "$EXP_ROOT"
 
 # =========================================================================
@@ -572,12 +572,12 @@ run_single_task() {
         mkdir -p "$CKPT_DIR" "$EVAL_OUT_DIR"
         DIR_PARAMS="--exp_dir $EXP_DIR --dataset_tag $DATASET_NAME"
     else
-        EXP_DIR="./train_results_v3/${RUN_NAME}"
-        CKPT_DIR="./train_results_v3/${RUN_NAME}"
-        EVAL_OUT_DIR="./eval_results_v3/${RUN_NAME}"
-        LOG_FILE="logs_v3/${RUN_NAME}.log"
+        EXP_DIR="${EXP_ROOT}/flat_runs/${RUN_NAME}"
+        CKPT_DIR="${EXP_DIR}"
+        EVAL_OUT_DIR="${EXP_DIR}/eval"
+        LOG_FILE="${EXP_DIR}/train.log"
         mkdir -p "$EXP_DIR" "$EVAL_OUT_DIR"
-        DIR_PARAMS="--save_dir ./train_results_v3"
+        DIR_PARAMS="--save_dir ${EXP_ROOT}/flat_runs"
     fi
 
     local PINN_PARAMS=""
@@ -877,7 +877,7 @@ done
 # 等待所有后台 GPU Worker 完成
 echo ""
 echo "⏳ 等待所有 GPU Worker 完成 (共 ${#ALL_GPUS[@]} 个并行卡，总计 $TOTAL_TASKS 个任务)..."
-echo "   实时查看日志: tail -f logs_v3/*.log"
+echo "   实时查看日志: 各实验目录下的 train.log"
 echo "   分层实验目录: ${EXP_ROOT}/"
 echo ""
 

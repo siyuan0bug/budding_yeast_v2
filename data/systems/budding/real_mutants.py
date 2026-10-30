@@ -1,5 +1,6 @@
 """Canonical MA real-mutant rules; the old MASS table is not imported."""
 import copy
+from functools import lru_cache
 import numpy as np
 
 REAL_MUTANTS = {
@@ -133,49 +134,41 @@ REAL_MUTANTS = {
 
 mutant_rules = {f"{mid}_{mname}": movr for mid, (mname, movr) in REAL_MUTANTS.items()}
 
-_CACHED_REAL_PARAMS = None
+def effective_inputs(overrides, defaults):
+    """Solver parameters, actual ICs and event/time-dependent controls.
+
+    Initialization aliases are evaluated by the canonical initializer; unused
+    Vi20/kbub2 aliases are not extra dimensions. The BUB2 event reset and #104
+    timed induction are included even when the initial state is identical.
+    """
+    from .parameters import get_default_params
+    from .simulation import prepare_initial_conditions
+    merged = dict(defaults, **overrides)
+    params, initial, _, bub2_ko = prepare_initial_conditions(merged)
+    keys = sorted(get_default_params())
+    reset_bub2 = 0. if bub2_ko else merged.get('init_BUB2', .2)
+    return np.r_[[params[key] for key in keys], initial,
+                 reset_bub2, bool(params.get('is_mutant_104', False))].astype(float)
+
+
+@lru_cache(maxsize=8)
+def _real_inputs(default_items):
+    defaults = dict(default_items)
+    rows = np.array([effective_inputs(ovr, defaults) for _, ovr in REAL_MUTANTS.values()])
+    rows.setflags(write=False)
+    return rows
+
 
 def get_cached_real_params(p_wt_default):
-    global _CACHED_REAL_PARAMS
-    if _CACHED_REAL_PARAMS is None:
-        _CACHED_REAL_PARAMS = []
-        for mid, (mname, movr) in REAL_MUTANTS.items():
-            p_real = p_wt_default.copy()
-            y0_real = {}
-            for k, v in movr.items():
-                if k.startswith('init_'):
-                    y0_real[k] = v
-                else:
-                    p_real[k] = v
-            _CACHED_REAL_PARAMS.append((p_real, y0_real))
-    return _CACHED_REAL_PARAMS
+    """Canonical real inputs cached separately for each default parameter set."""
+    return _real_inputs(tuple(sorted(p_wt_default.items())))
+
 
 def is_duplicate_real_mutant(ovr_candidate, p_wt_default):
-    """
-    136-dim Parameter Deduplication Check:
-    Verify if ovr_candidate is 100% identical to any of the 126 Real Mutants in D_real.
-    """
-    p_cand = p_wt_default.copy()
-    y0_cand_keys = {}
-    for k, v in ovr_candidate.items():
-        if k.startswith('init_'):
-            y0_cand_keys[k] = v
-        else:
-            p_cand[k] = v
-
-    cached_reals = get_cached_real_params(p_wt_default)
-    for p_real, y0_real in cached_reals:
-        if y0_cand_keys != y0_real:
-            continue
-        match = True
-        for k, v in p_cand.items():
-            if k not in p_real or abs(v - p_real[k]) > 1e-8 + 1e-5 * abs(p_real[k]):
-                match = False
-                break
-        if match:
-            return True
-
-    return False
+    """Compare effective ODE/event inputs, with the established numeric tolerance."""
+    candidate = effective_inputs(ovr_candidate, p_wt_default)
+    reals = get_cached_real_params(p_wt_default)
+    return bool(np.any(np.all(np.abs(reals-candidate) <= 1e-8 + 1e-5*np.abs(reals), axis=1)))
 
 def real_tasks():
     return [(f"{mid}_{name}".replace(' ', '_'), copy.deepcopy(overrides))

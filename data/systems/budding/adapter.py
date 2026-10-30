@@ -15,6 +15,7 @@ from ..registry import resolve_config, candidate_name
 
 class BuddingAdapter:
     system_id = 'budding'
+    collision_policy = 'fixed_modules_environment_v2'
     spec = SPEC
 
     def prepare_context(self, config):
@@ -86,17 +87,13 @@ class BuddingAdapter:
         row.trajectory = trajectory
         row.label = label
         row.pattern = pattern
-        row.status = ('success' if trajectory is not None
-                      else ('discarded_mass' if label == 'Discarded_Mass' else 'numerical_failure'))
+        row.status = 'success' if trajectory is not None else 'numerical_failure'
         return row
 
     def accept_result(self, result, state, config):
         recipe = state['recipe']
         if result.candidate.is_real:
             return True
-        if recipe.sampler == 'wt_blind' and np.max(np.abs(result.trajectory)) > 1000.:
-            state['report']['trajectory_limit'] += 1
-            return False
         if recipe.sampler == 'kdpp_curvature':
             from .samplers.kdpp import compute_trajectory_curvature
             level = result.candidate.level

@@ -70,6 +70,22 @@ def write_dataset(path, spec, results, config, report, *, parameter_only=False, 
                  sampling_seed=np.int64(config.seed),sampling_rng_contract=np.array(report['rng_contract']),
                  generation_config=np.array(json.dumps(asdict(config),ensure_ascii=False)),
                  generation_report=np.array(json.dumps(report,ensure_ascii=False)))
+    from ..sample_metadata import mutation_metadata
+    archive.update(mutation_metadata(archive['mutant_names'], archive['candidate_metadata_json'],
+                                    archive['is_real'], spec.system_id))
+    archive.update(simulation_status=np.asarray([r.status for r in results]),
+        initial_state_source=np.full(n, 'system_prepared'),
+        overrides_available=np.ones(n, dtype=bool),
+        candidate_ids=np.asarray([r.candidate.metadata.get('source_candidate_id',
+            r.candidate.sample_id-1 if parameter_only and not r.candidate.is_real else -1)
+            for r in results], dtype=np.int64))
+    if spec.system_id == 'budding':
+        from .budding.catalog import CATALOG_VERSION
+        from .budding.distributions.ranges import RANGE_FINGERPRINT
+        archive['catalog_version'] = np.array(CATALOG_VERSION)
+        archive['sampling_range_fingerprint'] = np.array(RANGE_FINGERPRINT)
+    if 'pool_generation_contract' in report:
+        archive['pool_generation_contract'] = np.array(report['pool_generation_contract'])
     if report.get('sampling_policy') == VERSION:
         archive.update(sampling_policy=np.array(VERSION),
             requested_levels=np.array([r.candidate.level for r in results],dtype=np.int16),

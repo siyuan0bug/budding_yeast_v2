@@ -121,7 +121,7 @@ def build_perturbed_sample(genes, modes, rng, *, ma):
     ovr = {}
     has_gal = False
     for g, m in zip(genes, modes):
-        if m == 'GAL-OE':
+        if m in ('GAL-OE','GAL-MC'):
             has_gal = True
         if m == 'KO':
             ma.apply_gene_mutation(g, 'KO', 0.0, p_wt, {}, ovr)

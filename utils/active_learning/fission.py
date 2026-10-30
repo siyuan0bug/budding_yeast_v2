@@ -6,6 +6,7 @@ import multiprocessing as mp
 import os
 
 import numpy as np
+from budding_yeast_v2.data.dataset_archive import open_dataset
 import torch
 
 from budding_yeast_v2.data.normalization import normalize_p, normalize_y
@@ -73,7 +74,7 @@ def load_pool(engine, dm):
     # parameters, even if names differ, in addition to the canonical real set.
     references = ADAPTER.references()
     if getattr(dm, 'dataset_path', None):
-        with np.load(dm.dataset_path, allow_pickle=True) as archive:
+        with open_dataset(dm.dataset_path, allow_pickle=True) as archive:
             for vector in archive['params']:
                 references.add(vector)
     keep = []
@@ -92,11 +93,13 @@ def load_pool(engine, dm):
     engine._pool_mutant_names = names
     engine._pool_ovr = overrides
     engine._pool_P_real = p
+    engine._pool_initial_physical = y0.clone()
     engine._pool_P = normalize_p(p, dm.p_mean.cpu(), dm.p_std.cpu(), dm.norm_type)
     engine._pool_Y_ic = normalize_y(y0, dm.mean_y.cpu(), dm.std_y.cpu(), dm.norm_type,
                                   getattr(dm, 's_c', None))
     engine._pool_X = engine._pool_Y = None
-    engine._pool_mass_meta = [{'level':int(level),'genes':[]} for level in levels[keep]]
+    engine._pool_mass_meta = [{'level':int(level),'genes':[], 'source_candidate_id':int(i)}
+                             for level,i in zip(levels[keep], np.flatnonzero(keep))]
     engine._al4pde_t_grid = torch.linspace(0, 1, expected_steps).reshape(1, 1, -1)
     engine._al4pde_pool_loaded = True
     engine._fission_wt_birth = ADAPTER.prepare_context(None)
@@ -152,6 +155,9 @@ def query_pool(engine, indices, dm, target_valid_num=None):
         valid.append(result)
     x = engine._get_pool_X_batch(np.asarray(accepted, dtype=np.int64)).clone()
     names = [str(engine._pool_mutant_names[i]) for i in accepted]
+    accepted_levels = [int(engine._pool_mass_meta[i]['level']) for i in accepted]
+    from .io import pool_provenance
+    provenance = pool_provenance(engine, accepted, [row[4] for row in valid])
     keep = np.ones(engine._pool_size, dtype=bool)
     keep[indices] = False
     engine.pool.keep(keep)
@@ -167,6 +173,7 @@ def query_pool(engine, indices, dm, target_valid_num=None):
                       dm.std_y.cpu(), dm.norm_type, getattr(dm, 's_c', None)),
         P=normalize_p(torch.as_tensor(physical_p, dtype=torch.float32), dm.p_mean.cpu(),
                       dm.p_std.cpu(), dm.norm_type),
-        Y_real=list(physical_y), P_real=list(physical_p), names=names,
+        Y_real=list(physical_y), P_real=list(physical_p), names=names, provenance=provenance,
+        levels=accepted_levels, requested_levels=accepted_levels, module_counts=accepted_levels,
         labels=[row[2] for row in valid], biological_labels=[row[3] for row in valid],
         sample_plots={})

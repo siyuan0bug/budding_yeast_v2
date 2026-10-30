@@ -3,8 +3,8 @@ import numpy as np
 import torch
 
 
-def _bmdal_lcmd_select(pool_matrix, train_matrix, n_select, device='cpu'):
-    """Official LCMD: predicted features, sq-dist weighting, no posterior."""
+def _bmdal_distance_select(pool_matrix, train_matrix, n_select, device='cpu', *, method):
+    """Official distance selectors on predicted features, without posterior."""
     from bmdal_reg.bmdal.feature_data import TensorFeatureData
     from bmdal_reg.bmdal.feature_maps import IdentityFeatureMap
     from bmdal_reg.bmdal.features import Features
@@ -13,17 +13,31 @@ def _bmdal_lcmd_select(pool_matrix, train_matrix, n_select, device='cpu'):
         return np.empty(0, dtype=int)
     train_matrix, pool_matrix = train_matrix.to(device), pool_matrix.to(device)
     if not torch.isfinite(train_matrix).all() or not torch.isfinite(pool_matrix).all():
-        raise ValueError('LCMD requires finite features')
+        raise ValueError('Distance selection requires finite features')
     width = train_matrix.shape[1]
     train_features = Features(IdentityFeatureMap(width), TensorFeatureData(train_matrix))
     pool_features = Features(IdentityFeatureMap(width), TensorFeatureData(pool_matrix))
-    selector = selection_module().LargestClusterMaxDistSelectionMethod(
-        pool_features=pool_features, train_features=train_features,
-        sel_with_train=True, dist_weight_mode='sq-dist')
+    if method == 'lcmd':
+        selector = selection_module().LargestClusterMaxDistSelectionMethod(
+            pool_features=pool_features, train_features=train_features,
+            sel_with_train=True, dist_weight_mode='sq-dist')
+    elif method == 'max_dist':
+        selector = selection_module().MaxDistSelectionMethod(
+            pool_features=pool_features, train_features=train_features, sel_with_train=True)
+    else:
+        raise ValueError(f'Unsupported distance method: {method}')
     result = selector.select(n_select).detach().cpu().numpy()
     if len(result) != n_select or len(np.unique(result)) != len(result):
-        raise RuntimeError('LCMD returned an invalid selection')
+        raise RuntimeError(f'{method} returned an invalid selection')
     return result
+
+
+def _bmdal_lcmd_select(pool_matrix, train_matrix, n_select, device='cpu'):
+    return _bmdal_distance_select(pool_matrix,train_matrix,n_select,device,method='lcmd')
+
+
+def _bmdal_predicted_max_dist_select(pool_matrix, train_matrix, n_select, device='cpu'):
+    return _bmdal_distance_select(pool_matrix,train_matrix,n_select,device,method='max_dist')
 
 
 def _bmdal_bait_select(pool_matrix, train_matrix, n_select, device='cpu'):
@@ -124,7 +138,7 @@ class _NumpyCompatibilityView:
 def selection_module():
     spec = importlib.util.find_spec('bmdal_reg.bmdal.selection')
     if spec is None or spec.origin is None:
-        raise ImportError('BAIT/LCMD require the bmdal_reg dependency used by AL4PDE')
+        raise ImportError('BAIT/LCMD/MaxDist require the bmdal_reg dependency used by AL4PDE')
     name = 'bmdal_reg.bmdal._yeast_numpy2_selection'
     private_spec = importlib.util.spec_from_file_location(name, spec.origin)
     module = importlib.util.module_from_spec(private_spec)

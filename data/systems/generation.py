@@ -70,7 +70,8 @@ def ensure_candidate(candidate, sampler=None, report=None, references=None, *, a
         if not adapter.is_collision(overrides, references, sampler):
             report['rescued'] += 1
             metadata = dict(candidate.metadata, description=new_description, rescued=True,
-                            rescue_attempts=attempt + 1)
+                            rescue_attempts=attempt + 1,
+                            collision_policy=getattr(adapter,'collision_policy','rescue'))
             pairs = adapter.pairs_from_description(new_description)
             if pairs is not None:
                 metadata['pairs'] = pairs
@@ -168,6 +169,7 @@ def generate_dataset(config):
     random.seed(config.seed)
     report = Counter(collisions=0, rescued=0)
     dict.update(report, recipe=config.recipe,
+                collision_policy=getattr(adapter,'collision_policy','rescue'),
                 mutation_profile=config.mutation_profile or recipe.mutation,
                 distribution_profile=config.distribution_profile or recipe.distribution,
                 sampling_policy=VERSION,
@@ -178,11 +180,21 @@ def generate_dataset(config):
         sampler = make_sampler(recipe, config)
         candidates = adapter.special_candidates(recipe, config, sampler, report)
         if candidates is None:
-            candidates = prepare_candidates(recipe, config, sampler, report)
+            if config.parameter_only and recipe.system == 'budding' and recipe.sampler == 'pool':
+                from .budding.al_pool import prepare_quota_pool
+                candidates = prepare_quota_pool(recipe, config, report)
+            elif config.parameter_only and config.workers > 1:
+                from .parallel_pool import prepare_parallel_pool
+                candidates = prepare_parallel_pool(recipe, config, report)
+            else:
+                candidates = prepare_candidates(recipe, config, sampler, report)
         else:
             checked = [valid_candidate(c, recipe.system) for c in candidates]
             candidates = [c for c in checked if c is not None]
         if config.parameter_only:
+            if report.get('pool_generation_contract'):
+                actual = Counter(candidate.level for candidate in candidates)
+                config = replace(config,level_ratios=tuple(actual[level]/len(candidates) for level in (1,2,3)))
             results = [adapter.parameter_result(c, context) for c in candidates]
         else:
             results = []

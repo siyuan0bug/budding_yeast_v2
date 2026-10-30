@@ -11,6 +11,7 @@ from .contracts import ALConfig, SelectionContext, SelectionPlan, QueryBatch
 from .pool import CandidatePool, POOL_FIELDS
 from .registry import build_strategy, canonical_name, is_strategy, SPECS, validate_system
 from . import pool, prediction, features, oracle, dataset, io, backends
+from budding_yeast_v2.utils.runtime_logging import log_event, log_stage
 
 
 class ActiveLearningEngine(pl.Callback):
@@ -48,7 +49,7 @@ class ActiveLearningEngine(pl.Callback):
         if not self._is_al4pde_strategy():
             raise ValueError(
                 f"Unsupported or archived AL strategy {self.strategy!r}. "
-                "Use an al4pde strategy or maal. Historical trajectory-pool "
+                "Use a registered online strategy (al4pde, ours_response or maal). Historical trajectory-pool "
                 "strategies are in utils/archive/al_callback_legacy.py; "
                 "disable AL with --al_strategy none in train.py."
             )
@@ -115,10 +116,10 @@ class ActiveLearningEngine(pl.Callback):
             self.initial_train_size = initial_train_size
             self.trigger_every_n_epochs = 4  # 保留字段, 外层重训模式下不生效
             self.num_add = num_add            # 保留字段, 外层重训模式下不生效
-            self._al4pde_num_al_iter = 3      # 3 轮 AL (Iter 0: 10k -> Iter 1: 20k -> Iter 2: 40k)
+            self._al4pde_num_al_iter = 4
             self._al4pde_per_round_add = 10000
             print(f"[AL Manager] al4pde 设置: initial_train_size={self.initial_train_size}, "
-                  f"{self._al4pde_num_al_iter} 轮指数倍增 (10k -> 20k -> 40k)")
+                  f"{self._al4pde_num_al_iter} rounds; acquisitions = 1x, 2x, 3x initial training budget")
 
         self._al4pde_al_iter = 0           # 当前 AL 轮次 (0-indexed, 每次选择后递增)
         self._outer_loop_mode = False      # v2.3: 外层重训模式 (由 train.py 启用, 关闭 in-loop 触发)
@@ -146,6 +147,13 @@ class ActiveLearningEngine(pl.Callback):
         self._cum_synth_names = []
         self._cum_synth_labels = []
         self._cum_synth_biological_labels = []
+        self._cum_synth_levels = []
+        self._cum_synth_requested_levels = []
+        self._cum_synth_module_counts = []
+        self._cum_synth_provenance = []
+        self._benchmark_real_provenance = []
+        self._heldout = {}
+        self._heldout_val_count = 0
         self._benchmark_real_data = []
         self._benchmark_real_params = []
         self._benchmark_real_names = []
@@ -155,7 +163,8 @@ class ActiveLearningEngine(pl.Callback):
 
         dataset_path = getattr(dm, 'dataset_path', None)
         if dataset_path and os.path.exists(dataset_path):
-            init_npz = np.load(dataset_path, allow_pickle=True)
+            from budding_yeast_v2.data.dataset_archive import open_dataset
+            init_npz = open_dataset(dataset_path, allow_pickle=True)
             if 'data' in init_npz and 'params' in init_npz:
                 data_arr = init_npz['data']
                 params_arr = init_npz['params']
@@ -193,12 +202,15 @@ class ActiveLearningEngine(pl.Callback):
 
                 if 'param_names' in init_npz:
                     self._param_names_cached = init_npz['param_names']
+                io.cache_source_metadata(self,dm,init_npz)
+            init_npz.close()
+            io.configure_snapshot_storage(self, dm, exp_dir)
 
         # 检查是否已直接通过 --dataset_name 加载了预生成的初始训练集 (如 al_iter0_10000_210m_500s.npz)
         if hasattr(dm, 'train_dataset_synth') and len(dm.train_dataset_synth) > 0:
             print(f"[al4pde] ✅ 直接复用预生成的初始训练集: {len(dm.train_dataset_synth)} 样本 (无须重复进行初始 ODE 仿真)")
             if hasattr(dm, '_mutant_names'):
-                existing_names = set(str(n) for n in dm._mutant_names)
+                existing_names = set(str(n) for n in dm._mutant_names) | getattr(self,'_initial_consumed_names',set())
                 mask = np.isin(self._pool_mutant_names, list(existing_names), invert=True)
                 if mask.sum() < len(mask):
                     n_removed = len(mask) - mask.sum()
@@ -209,8 +221,8 @@ class ActiveLearningEngine(pl.Callback):
             initial_size = min(self.initial_train_size, self._pool_size)
             rng = np.random.RandomState(self.random_seed + 1)
             from budding_yeast_v2.data.systems.generation import level_schedule
-            from budding_yeast_v2.data.systems.sampling_policy import STATIC_RATIOS
-            targets = np.bincount(level_schedule(initial_size,STATIC_RATIOS,rng),minlength=4)
+            from budding_yeast_v2.data.systems.sampling_policy import POOL_RATIOS
+            targets = np.bincount(level_schedule(initial_size,POOL_RATIOS,rng),minlength=4)
             levels = np.array([row['level'] for row in self._pool_mass_meta])
             selected = []
             for level in (1,2,3):
@@ -219,7 +231,7 @@ class ActiveLearningEngine(pl.Callback):
                 selected.extend(rng.choice(available,int(targets[level]),replace=False))
             sel_idx = np.asarray(selected,dtype=np.int64)
             rng.shuffle(sel_idx)
-            print(f"[al4pde] 按 10/40/50 分层随机抽取初始集: {initial_size}/{self._pool_size} (seed={self.random_seed + 1})")
+            print(f"[al4pde] 按 5/40/55 分层随机抽取初始集: {initial_size}/{self._pool_size} (seed={self.random_seed + 1})")
             bd = self._build_broadcast_from_pool(sel_idx, dm)
             if bd is None or bd['X'].shape[0] == 0:
                 raise RuntimeError("[al4pde] 初始训练集仿真全部失败, 无法继续")
@@ -236,6 +248,9 @@ class ActiveLearningEngine(pl.Callback):
                 self._cum_synth_names.extend(bd['names'])
                 self._cum_synth_labels.extend(bd['labels'])
                 self._cum_synth_biological_labels.extend(bd.get('biological_labels', [UNKNOWN_BIOLOGY_LABEL] * len(bd['names'])))
+                self._cum_synth_provenance.extend(io.batch_provenance(bd))
+                for key in ('levels','requested_levels','module_counts'):
+                    getattr(self,'_cum_synth_'+key).extend(bd[key])
 
         self._al_initialized = True
         self._al4pde_al_iter = 0
@@ -243,12 +258,13 @@ class ActiveLearningEngine(pl.Callback):
 
         # 保存 Round 0 初始训练集到实验目录 datasets/
         if exp_dir and len(self._cum_synth_data) > 0:
-            ds_dir = os.path.join(exp_dir, 'datasets')
+            ds_dir = os.path.join(exp_dir,'rounds','round_00')
             os.makedirs(ds_dir, exist_ok=True)
-            r0_path = os.path.join(ds_dir, f'al_iter0_train{len(self._cum_synth_data)}.npz')
+            r0_path = os.path.join(ds_dir,'dataset.json')
             if not os.path.exists(r0_path):
                 self._save_al_snapshot(r0_path, dm)
                 print(f"💾 [al4pde] 已将 Round 0 初始数据集落盘保存至: {r0_path}")
+            self._latest_dataset_path = r0_path
 
         print(f"[al4pde] 初始训练集就绪: {len(dm.train_dataset_synth)} 样本 | 候选池剩余: {self._pool_size} | 策略: {self.strategy}")
 
@@ -260,6 +276,7 @@ class ActiveLearningEngine(pl.Callback):
         return pool._generate_param_only_pool(self, dm)
 
     _get_pool_X_batch = pool._get_pool_X_batch
+    refresh_model_inputs = pool.refresh_model_inputs
 
     _compute_mc_dropout_uncertainty = prediction._compute_mc_dropout_uncertainty
 
@@ -297,6 +314,8 @@ class ActiveLearningEngine(pl.Callback):
 
     _bmdal_lcmd_select = staticmethod(backends._bmdal_lcmd_select)
 
+    _bmdal_predicted_max_dist_select = staticmethod(backends._bmdal_predicted_max_dist_select)
+
     _bmdal_bait_select = staticmethod(backends._bmdal_bait_select)
 
     _bmdal_max_dist_select = backends._bmdal_max_dist_select
@@ -316,10 +335,12 @@ class ActiveLearningEngine(pl.Callback):
         return is_strategy(self.strategy)
 
     def _al4pde_scheduled_num_add(self):
-        """al4pde 指数递增调度: Iter 0 添加 initial_train_size (如 10k), Iter 1 添加 2x (如 20k)"""
+        """Valid-data budgets: initial_train_size times acquisition number 1, 2, 3."""
         iter_idx = getattr(self, '_al4pde_al_iter', 0)
         base_add = getattr(self, 'initial_train_size', 10000)
-        scheduled = base_add * (2 ** iter_idx)
+        scheduled = getattr(self,'_pending_add_budget',base_add * (iter_idx + 1))
+        if getattr(self,'fill_acquisition_budget',False) and self._pool_size<scheduled:
+            raise RuntimeError(f'Insufficient AL candidates for requested acquisition: {self._pool_size}/{scheduled}')
         return min(scheduled, self._pool_size)
 
 
@@ -344,6 +365,12 @@ class ActiveLearningEngine(pl.Callback):
         consumed = tuple(candidate_id for candidate_id in plan.candidate_ids if candidate_id in removed) if plan else ()
         accepted = tuple(map(int, bd.get('candidate_ids', ()))) if bd else ()
         self.last_query = QueryBatch(bd, consumed, accepted, self.strategy)
+        if hasattr(self, '_pending_query_feedback'):
+            from .strategies.query_feedback import observe_query
+            observe_query(self, self.last_query)
+        if hasattr(self, '_pending_hybrid_edges'):
+            from .strategies.hybrid_feedback import observe_edges
+            observe_edges(self,self.last_query)
         return self.last_query
 
     def execute_plan(self, plan, dm):
@@ -370,15 +397,46 @@ class ActiveLearningEngine(pl.Callback):
             pl_module = pl_module.to(device)
             pl_module.eval()
         try:
-            plan = self.select(pl_module, dm, device)
-            batch = self.query(plan, dm)
-            bd = batch.data
+            target=self._al4pde_scheduled_num_add()
+            collected=[];consumed=[];accepted=0
+            while accepted<target:
+                self._pending_add_budget=target-accepted
+                previous_size=self._pool_size
+                with log_stage('candidate scoring and selection',strategy=self.strategy,
+                               acquisition=self._al4pde_al_iter+1,pool_size=int(self._pool_size),
+                               budget=int(self._pending_add_budget)):
+                    plan = self.select(pl_module, dm, device)
+                with log_stage('selected candidates ODE and validation',strategy=self.strategy,
+                               acquisition=self._al4pde_al_iter+1,
+                               selected=0 if plan is None else len(plan.candidate_ids)):
+                    batch = self.query(plan, dm)
+                if batch.data is not None:
+                    collected.append(batch.data);accepted+=len(batch.data['names'])
+                consumed.extend(batch.consumed_ids)
+                log_event('PROGRESS','valid acquisition quota',strategy=self.strategy,
+                          accepted=accepted,target=int(target),consumed=len(consumed))
+                if not getattr(self,'fill_acquisition_budget',False):break
+                if accepted<target and (self._pool_size==0 or self._pool_size>=previous_size):
+                    raise RuntimeError(f'AL valid acquisition quota exhausted: {accepted}/{target}')
+            if collected:
+                bd=dict(collected[0])
+                for key in ('X','Y','P'):bd[key]=torch.cat([row[key] for row in collected],dim=0)
+                for key in ('Y_real','P_real','names','labels','biological_labels','levels','requested_levels','module_counts'):
+                    bd[key]=[value for row in collected for value in row[key]]
+                bd['provenance']=[value for row in collected for value in io.batch_provenance(row)]
+                bd['candidate_ids']=np.concatenate([row['candidate_ids'] for row in collected])
+                bd['consumed_ids']=np.asarray(consumed,dtype=np.int64)
+            else:bd=None
             if bd is None:
                 return 0
-            n_added = dataset.append_training_batch(self, dm, bd)
-            io.save_round(self, dm, bd, exp_dir)
+            with log_stage('training dataset append',strategy=self.strategy,samples=len(bd['names'])):
+                n_added = dataset.append_training_batch(self, dm, bd)
+            with log_stage('acquisition snapshot and audit saving',strategy=self.strategy,
+                           acquisition=int(self._al4pde_al_iter),samples=n_added):
+                io.save_round(self, dm, bd, exp_dir)
             return n_added
         finally:
+            if hasattr(self,'_pending_add_budget'):del self._pending_add_budget
             if pl_module is not None:
                 pl_module.train()
 

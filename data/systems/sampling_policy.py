@@ -41,6 +41,25 @@ def module_metadata(candidate, system):
                 require_mutation(gene, mode)
             except ValueError:
                 invalid.append((gene, mode))
+    if system=='budding':
+        from .budding.distributions.ranges import GAL_MC_BASE,GAL_MC_MIN,GAL_MC_MAX
+        components=[]
+        for gene,mode in pairs:
+            if mode!='GAL-MC':continue
+            if sum(g==gene for g,_ in pairs)!=1:
+                invalid.append((gene,mode))
+            copies=float(candidate.overrides.get('ksb2p',float('nan')))/GAL_MC_BASE
+            if not np.isfinite(copies) or not np.isclose(copies,round(copies),atol=1e-10,rtol=0) or not GAL_MC_MIN<=copies<=GAL_MC_MAX:
+                invalid.append((gene,mode));continue
+            if candidate.overrides.get('mdt',90.)!=150.:
+                invalid.append((gene,mode))
+            components.append(dict(gene=gene,mode=mode,gal_base_strength=GAL_MC_BASE,
+                                   copy_number=int(round(copies)),effective_parameter='ksb2p',
+                                   effective_strength=float(candidate.overrides['ksb2p'])))
+        if components or 'mutation_components' in candidate.metadata:
+            metadata=dict(candidate.metadata);metadata.pop('mutation_components',None)
+            if components:metadata['mutation_components']=components
+            candidate=replace(candidate,metadata=metadata)
     modules = sorted({gene for gene,mode in pairs if gene in legal and gene not in ENVIRONMENT_MODULES})
     environment = sorted({gene for gene,mode in pairs if gene in ENVIRONMENT_MODULES})
     return replace(candidate,metadata=dict(candidate.metadata,pairs=pairs,

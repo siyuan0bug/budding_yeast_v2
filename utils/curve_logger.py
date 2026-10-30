@@ -80,6 +80,7 @@ class TrainingCurveLogger:
         title: Optional[str] = None,
         subtitle: Optional[str] = None,
         dpi: int = 300,
+        ax=None,
     ) -> Optional[plt.Figure]:
         """Generate a single-panel consolidated loss curve figure."""
         if not self.has_data():
@@ -92,7 +93,11 @@ class TrainingCurveLogger:
         test_real_norm = np.array(self.test_real_norm)
         test_real_denorm = np.array(self.test_real_denorm_rel_l2)
 
-        fig, ax1 = plt.subplots(figsize=(11, 7), dpi=dpi)
+        embedded = ax is not None
+        if embedded:
+            fig,ax1=ax.figure,ax
+        else:
+            fig,ax1=plt.subplots(figsize=(11,7),dpi=dpi)
 
         # Style palette (Modern, clear contrast)
         c_train = '#1f77b4'       # Blue
@@ -171,7 +176,7 @@ class TrainingCurveLogger:
 
         # 4. Main Title and Subtitle (Specifying Loss Function and Model/Experiment)
         main_title = title or "Training Convergence & Real Mutants Generalization"
-        fig.suptitle(main_title, fontsize=15, fontweight='bold', y=0.98)
+        if not embedded:fig.suptitle(main_title, fontsize=15, fontweight='bold', y=0.98)
 
         sub_parts = []
         if self.exp_name:
@@ -188,7 +193,9 @@ class TrainingCurveLogger:
         else:
             sub_str = ""
 
-        if sub_str:
+        if embedded:
+            ax1.set_title(main_title+'\n'+sub_str,fontsize=11,color='#444444',pad=10)
+        elif sub_str:
             ax1.set_title(sub_str, fontsize=11, color='#444444', pad=10)
 
         # 5. Key Metrics Summary Box (Bottom Left)
@@ -215,7 +222,7 @@ class TrainingCurveLogger:
         # Set x limits neatly
         ax1.set_xlim(left=1, right=max(epochs[-1], 1))
 
-        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        if not embedded:fig.tight_layout(rect=[0, 0, 1, 0.96])
 
         # Save files
         if save_path_png:
@@ -335,12 +342,14 @@ if HAS_PL:
     class TrainingCurveCallback(Callback):
         """Lightning Callback to automatically record metrics and plot curves on training finish."""
 
-        def __init__(self, save_dir: str, exp_name: str = "", loss_type: str = "", model_name: str = ""):
+        def __init__(self, save_dir: str, exp_name: str = "", loss_type: str = "", model_name: str = "", round_output=False):
             super().__init__()
             self.save_dir = save_dir
+            self.round_output = round_output
             self.curve_logger = TrainingCurveLogger(exp_name=exp_name, loss_type=loss_type, model_name=model_name)
 
         def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+            if trainer.sanity_checking:return
             epoch = trainer.current_epoch + 1
             m = trainer.callback_metrics
 
@@ -375,9 +384,33 @@ if HAS_PL:
                 lr=lr,
             )
 
+        def on_train_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+            # Lightning finalizes train epoch reductions after validation. Read
+            # them here so epoch 1 is present and later points are not one epoch late.
+            epoch=trainer.current_epoch+1
+            value=trainer.callback_metrics.get('train_loss',trainer.callback_metrics.get('train_loss_epoch'))
+            if value is None:return
+            if self.curve_logger.epochs and self.curve_logger.epochs[-1]==epoch:
+                self.curve_logger.train_loss[-1]=float(value)
+            else:
+                self.curve_logger.record(epoch=epoch,train_loss=float(value),
+                    lr=trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else None)
+
         def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
             """Automatically render the loss curve figure on train finish."""
             if not self.curve_logger.has_data():
+                return
+
+            if self.round_output:
+                import csv
+                os.makedirs(self.save_dir,exist_ok=True)
+                keys=('epochs','train_loss','val_synth','test_synth','test_real_norm','test_real_denorm_rel_l2','lr')
+                with open(os.path.join(self.save_dir,'training_history.csv'),'w',newline='') as handle:
+                    writer=csv.writer(handle);writer.writerow(keys)
+                    writer.writerows(zip(*(getattr(self.curve_logger,key) for key in keys)))
+                fig=self.curve_logger.plot(save_path_png=os.path.join(self.save_dir,'loss_curves.png'),
+                                           save_path_pdf=os.path.join(self.save_dir,'loss_curves.pdf'))
+                if fig is not None:plt.close(fig)
                 return
 
             eval_dir = os.path.join(self.save_dir, "eval")

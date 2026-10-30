@@ -1,0 +1,35 @@
+{
+  "synthetic_rejected": 1150,
+  "real_rejected": [],
+  "mdt": [
+    90.0,
+    150.0,
+    160.0
+  ],
+  "by_pattern": {
+    "P1": {
+      "sum": 164,
+      "count": 6711
+    },
+    "P2": {
+      "sum": 316,
+      "count": 29052
+    },
+    "P3": {
+      "sum": 122,
+      "count": 18389
+    },
+    "P4": {
+      "sum": 88,
+      "count": 6849
+    },
+    "P5a": {
+      "sum": 383,
+      "count": 30341
+    },
+    "P5b": {
+      "sum": 77,
+      "count": 8658
+    }
+  }
+}

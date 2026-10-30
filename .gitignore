@@ -38,6 +38,7 @@ model_visualizations/
 
 # 4. Experimental checkpoints & big directories
 experiments/
+experiments
 archive/
 !/utils/archive/
 /utils/archive/*

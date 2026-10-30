@@ -37,6 +37,9 @@ from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.preprocessing_contract import TRAIN_FIT_SCOPE
 from budding_yeast_v2.utils.metrics import calculate_metrics
 from budding_yeast_v2.utils.curve_logger import TrainingCurveCallback, extract_and_plot_from_log
+from budding_yeast_v2.utils.runtime_logging import (
+    install_timestamped_streams, install_stack_diagnostics, log_event, log_stage,
+)
 
 VARIABLE_NAMES = [
     "MASS", "CLN2", "CLB2", "CLB5", "SIC1", "CDC6", "C2", "C5", "F2", "F5",
@@ -180,7 +183,7 @@ def main():
     parser.add_argument('--graph_view', choices=['continuous', 'hybrid'], default='hybrid')
     parser.add_argument('--graph_load_policy', choices=['current', 'checkpoint'], default='current')
     parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
-    parser.add_argument('--save_dir', type=str, default='./train_result')
+    parser.add_argument('--save_dir', type=str, default=os.path.join(os.environ.get('EXP_ROOT', '/home/users/zsy/mydata/budding_yeast/experiments'), 'flat_runs'))
     
     # 超参数
     parser.add_argument('--modes', type=int, default=24)
@@ -189,6 +192,8 @@ def main():
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--min_lr', type=float, default=1e-6,
+                        help='Cosine learning-rate floor; Budding AL launcher uses 1e-5')
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--warmup_epochs', type=int, default=10, help='Cosine+Warmup 的线性预热 epoch 数')
     parser.add_argument('--seed', type=int, default=42)
@@ -263,6 +268,8 @@ def main():
     # al4pde 框架专用参数
     parser.add_argument('--al_pool_dataset', type=str, default=None,
                         help="未标注候选输入池路径；Fission 必须使用 fission.al_pool 生成的逐突变体预热池")
+    parser.add_argument('--al_round_seed_policy', choices=('legacy', 'fixed'), default='legacy',
+                        help='fixed: reseed each cold start by seed+10007*round, independent of acquisition RNG')
     parser.add_argument('--al_target_weight', type=float, default=0.4,
                         help="MAAL 的 target priority 权重 (默认 0.4; diversity 权重 = 1 - target_weight)")
     parser.add_argument('--al_mass_weight', type=float, default=0.5,
@@ -273,9 +280,9 @@ def main():
     parser.add_argument('--al_family_weight', type=float, default=0.2,
                         help="al4pde_novelty 的家族不确定性权重 (默认 0.2; diversity 权重 = 1 - novelty - family 自动归一化)")
     parser.add_argument('--al_trigger_epoch', type=int, default=10, help="兼容旧配置，当前外层重训不使用此参数")
-    parser.add_argument('--al_num_add', type=int, default=500, help="兼容旧配置；当前追加量由 al_initial_train_size 和轮次决定")
-    parser.add_argument('--al_initial_train_size', type=int, default=5000,
-                        help="AL 随机初始化目标及指数追加基数；已有初始训练集会直接复用")
+    parser.add_argument('--al_num_add', type=int, default=500, help="追加量由 al_initial_train_size × (追加序号+1) 决定")
+    parser.add_argument('--al_initial_train_size', type=int, default=None,
+                        help="AL 初始训练目标及线性追加基数；已有初始训练集会直接复用")
     parser.add_argument('--al_initial_selection', type=str, default='kmeans',
                         choices=['kmeans', 'random'],
                         help="兼容旧配置，当前 callback 不使用；预生成初始集由 al_pool_manager 选取")
@@ -283,8 +290,12 @@ def main():
                         help="MAAL 多样性权重，与 al_target_weight 一起归一化")
     parser.add_argument('--al_pool_subset_size', type=int, default=10000,
                         help="兼容旧配置，当前在线策略不使用此参数")
-    parser.add_argument('--num_al_rounds', type=int, default=3,
-                        help="AL4PDE 外层重训轮数 (默认 3 轮: Iter 0(10k) -> Iter 1(20k) -> Iter 2(40k))")
+    parser.add_argument('--num_al_rounds', type=int, default=4,
+                        help="AL4PDE 外层重训轮数 (默认四轮训练、三次追加)")
+    parser.add_argument('--al_round_epochs',type=int,default=None)
+    parser.add_argument('--al_final_epochs',type=int,default=None)
+    parser.add_argument('--al_round_warmup',type=int,default=None)
+    parser.add_argument('--al_final_warmup',type=int,default=None)
     parser.add_argument('--al_uncertainty_metric', type=str, default='variance',
                         choices=['variance', 'entropy'],
                         help="兼容旧配置；当前 al4pde_uncertainty 使用 ensemble 方差")
@@ -310,8 +321,8 @@ def main():
                         help="PINO 鲁棒 Huber 损失截断阈值 delta (默认 1.0)")
 
     # 实验管理与目录参数
-    parser.add_argument('--exp_root', type=str, default='./experiments',
-                        help='统一分层实验根目录 (默认 ./experiments)')
+    parser.add_argument('--exp_root', type=str, default=os.environ.get('EXP_ROOT', '/home/users/zsy/mydata/budding_yeast/experiments'),
+                        help='统一分层实验根目录 (默认机械盘 budding_yeast/experiments，可用 EXP_ROOT 覆盖)')
     parser.add_argument('--exp_dir', type=str, default=None,
                         help='显式指定实验目录 (若指定则优先使用该目录作为输出路径)')
     parser.add_argument('--dataset_tag', type=str, default=None,
@@ -322,6 +333,8 @@ def main():
                         help='启用分层语义化目录结构 (experiments/dataset/model/...)')
 
     args = parser.parse_args()
+    if not math.isfinite(args.lr) or args.lr <= 0 or not math.isfinite(args.min_lr) or not 0 <= args.min_lr <= args.lr:
+        parser.error('Require finite lr > 0 and 0 <= min_lr <= lr')
     if args.model == 'sc_fno' and (args.loss_type != 'sc_sensitivity' or not args.sensitivity_path):
         parser.error('sc_fno requires --loss_type sc_sensitivity --sensitivity_path <reference.npz>')
     if args.sensitivity_path and args.model != 'sc_fno':
@@ -329,7 +342,7 @@ def main():
     if args.model == 'sc_fno' and (args.al_strategy != 'none' or args.rollout_type != 'one_time'):
         parser.error('SC-FNO reference sensitivities currently require --al_strategy none --rollout_type one_time')
     if args.al_strategy != 'none' and strategy_spec(args.al_strategy).requires_ensemble and args.al_ensemble_size < 2:
-        parser.error('--al_ensemble_size must be at least 2 for al4pde_uncertainty')
+        parser.error(f'--al_ensemble_size must be at least 2 for {args.al_strategy}')
     if args.al_strategy == 'al4pde_power' and (not math.isfinite(args.al_power_beta) or args.al_power_beta <= 0):
         parser.error('--al_power_beta must be finite and positive')
     if args.al_strategy in ('al4pde_bait', 'al4pde_lcmd') and args.al_bait_sketch_dim < 1:
@@ -379,6 +392,9 @@ def main():
         actual_exp_dir = os.path.join(args.save_dir, run_name)
 
     ckpt_dir = os.path.join(actual_exp_dir, 'checkpoints') if (args.exp_dir or args.use_hierarchical_dir) else actual_exp_dir
+    if args.al_strategy!='none':ckpt_dir=os.path.join(actual_exp_dir,'rounds')
+    if args.al_strategy!='none' and os.path.isfile(os.path.join(actual_exp_dir,'config.json')):
+        raise FileExistsError('AL output already contains a run; choose a new --exp_dir')
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs(actual_exp_dir, exist_ok=True)
 
@@ -403,6 +419,7 @@ def main():
             sensitivity_weight=args.sensitivity_weight,
             loss_type=args.loss_type,
             lr=args.lr,
+            min_lr=args.min_lr,
             weight_decay=args.weight_decay,
             max_epochs=args.max_epochs,
             warmup_epochs=args.warmup_epochs,
@@ -438,13 +455,26 @@ def main():
         norm_type=args.norm_type,
         fit_scope=args.normalization_fit_scope,
         sensitivity_path=args.sensitivity_path,
+        seed=args.seed,
     )
 
-    datamodule.setup('fit')
+    with log_stage('initial dataset loading and normalization',dataset=datamodule.dataset_path):
+        datamodule.setup('fit')
     if args.system!='auto' and args.system!=datamodule.system_id:
         raise ValueError('--system contradicts the dataset biological system')
     if args.al_strategy != 'none':
         validate_system(args.al_strategy, datamodule.system_id)
+        fission=datamodule.system_id=='fission'
+        if args.al_initial_train_size is None:args.al_initial_train_size=5000 if fission else 10000
+        if len(datamodule.train_dataset_synth)!=args.al_initial_train_size:
+            raise ValueError('Initial actual train count differs from --al_initial_train_size; '
+                             'generate the initial trajectory file with systems.al_initial --train-samples')
+        args.al_round_epochs = (30 if fission else 50) if args.al_round_epochs is None else args.al_round_epochs
+        args.al_final_epochs = (60 if fission else 100) if args.al_final_epochs is None else args.al_final_epochs
+        args.al_round_warmup = args.al_round_warmup if args.al_round_warmup is not None else (3 if fission else 4)
+        args.al_final_warmup = args.al_final_warmup if args.al_final_warmup is not None else (6 if fission else 8)
+        if args.num_al_rounds<1 or min(args.al_round_epochs,args.al_final_epochs)<1 or min(args.al_round_warmup,args.al_final_warmup)<0:
+            raise ValueError('AL rounds/epochs must be positive and warmup nonnegative')
     data_numpy_state=np.random.get_state()
     np.random.set_state(model_numpy_state)
     try:
@@ -475,10 +505,10 @@ def main():
         # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
         from budding_yeast_v2.utils.active_learning import ActiveLearningEngine
         from budding_yeast_v2.utils.active_learning.io import round_record, metric_text
-        NUM_AL_ROUNDS = getattr(args, 'num_al_rounds', 3)
-        device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
+        NUM_AL_ROUNDS = args.num_al_rounds
+        device_str = 'cuda' if args.device in ('cuda','gpu','auto') and torch.cuda.is_available() else 'cpu'
         print(f"🚀 [al4pde v2.3 外层重训] 策略={args.al_strategy.upper()} | "
-              f"{NUM_AL_ROUNDS} 轮 × {args.max_epochs} epoch/轮 | 每轮冷启动 + 全新余弦 | 取最后一轮最后 epoch")
+              f"{NUM_AL_ROUNDS} rounds; {args.al_round_epochs} epochs, final {args.al_final_epochs}; cold starts, per-round normalization refit")
 
         datamodule.setup('fit')  # 构建数据集 (setup 幂等, 后续 fit 不会重建)
 
@@ -504,27 +534,79 @@ def main():
             power_beta=args.al_power_beta, bait_sketch_dim=args.al_bait_sketch_dim,
         )
         al_cb.enable_outer_loop_mode()
+        al_cb.fill_acquisition_budget = True
         # 一次性: 缩至初始子集 + 生成候选池 + (diversity/maal/boundary) ODE 预计算
-        al_cb.setup(datamodule, device=device_str, exp_dir=actual_exp_dir)
+        with log_stage('AL pool setup',strategy=args.al_strategy):
+            al_cb.setup(datamodule, device=device_str, exp_dir=actual_exp_dir)
 
         trainer = None
-        eval_base_dir = os.path.join(actual_exp_dir, 'eval')
+        eval_base_dir = os.path.join(actual_exp_dir, 'summary')
         os.makedirs(eval_base_dir, exist_ok=True)
         al_curve_records = []
+        histories = []
+        data_dir=os.path.join(actual_exp_dir,'data');os.makedirs(data_dir,exist_ok=True)
+        # All methods reference the same immutable initial block; no run-local copy.
+        initial_copy=al_cb._snapshot_initial_path
+        pool_path=os.path.abspath(args.al_pool_dataset) if args.al_pool_dataset else None
+        with open(os.path.join(data_dir,'pool_manifest.json'),'w') as handle:
+            json.dump(dict(path=pool_path,system_id=datamodule.system_id,seed=args.seed,
+                remaining_after_initial=int(al_cb._pool_size),initial_train_count=len(datamodule.train_dataset_synth),
+                initial_dataset=os.path.abspath(initial_copy),normalization='refit_cumulative_train_each_round',
+                acquisition_multipliers=[1,2,3]),handle,indent=2)
 
         for r in range(NUM_AL_ROUNDS):
+            if r:
+                # Lightning holds cyclic references to the previous module and
+                # its multi-GB datasets. Release them BEFORE assembling a new
+                # round, rather than relying on allocation-count-triggered GC.
+                trainer = None
+                model = None
+                datamodule = None
+                import gc
+                gc.collect()
+                if torch.cuda.is_available():torch.cuda.empty_cache()
+                log_event('PROGRESS','previous round memory released',round=r+1)
+            round_started=time.monotonic()
+            log_event('START','AL round',round=r+1,rounds=NUM_AL_ROUNDS,strategy=args.al_strategy)
+            round_dir=os.path.join(actual_exp_dir,'rounds',f'round_{r:02d}')
+            os.makedirs(round_dir,exist_ok=True)
+            # Include fixed holdouts and explicit indices so every checkpoint
+            # can be replayed against exactly its own training/normalization data.
+            round_dataset=os.path.join(round_dir,'dataset.json')
+            with log_stage('round dataset and normalization refit',round=r+1,dataset=round_dataset):
+                if not os.path.isfile(round_dataset):al_cb._save_al_snapshot(round_dataset,datamodule)
+                datamodule=YeastDataModule(dataset_path=round_dataset,batch_size_synth=args.batch_size,
+                    val_batch_size=args.val_batch_size,num_workers=args.num_workers,use_adj_matrix=False,
+                    norm_type=args.norm_type,fit_scope=TRAIN_FIT_SCOPE,seed=args.seed)
+                datamodule.setup('fit')
+                # Re-encode pool inputs using this round's newly fitted statistics.
+                al_cb.refresh_model_inputs(datamodule)
+            args.max_epochs=args.al_final_epochs if r==NUM_AL_ROUNDS-1 else args.al_round_epochs
+            args.warmup_epochs=min(args.max_epochs-1,args.al_final_warmup if r==NUM_AL_ROUNDS-1 else args.al_round_warmup)
             n_train = len(datamodule.train_dataset_synth)
             current_labels = dataset_label_summary(datamodule)
-            logger.log_hyperparams({f'al_round_{r}_dataset_labels': current_labels})
-            with open(os.path.join(eval_base_dir, f'dataset_labels_round_{r}.json'), 'w') as f:
+            logger.log_hyperparams({f'al_round_{r}_dataset_labels': current_labels,
+                f'al_round_{r}_epochs':args.max_epochs,f'al_round_{r}_warmup':args.warmup_epochs,
+                f'al_round_{r}_min_lr':args.min_lr})
+            with open(os.path.join(round_dir,'labels.json'), 'w') as f:
                 json.dump(current_labels, f, indent=2)
+            torch.save(datamodule.preprocessing_state(),os.path.join(round_dir,'preprocessing.pt'))
             print(f"\n===== [al4pde v2.3] AL 轮 {r + 1}/{NUM_AL_ROUNDS} | 当前训练集: {n_train} =====")
+            round_seed = args.seed + 10007*r if args.al_round_seed_policy == 'fixed' else None
+            if round_seed is not None:
+                pl.seed_everything(round_seed, workers=True)
+            with open(os.path.join(round_dir, 'training_seed.json'), 'w') as handle:
+                json.dump(dict(policy=args.al_round_seed_policy, seed=round_seed), handle)
             model = build_fresh_model()  # 冷启动: 全新随机初始化 + 全新余弦周期
-            curve_callback = TrainingCurveCallback(save_dir=actual_exp_dir, exp_name=f"{run_name}_round{r+1}", loss_type=args.loss_type, model_name=args.model)
+            curve_callback = TrainingCurveCallback(save_dir=round_dir, exp_name=f"{run_name}_round{r+1}", loss_type=args.loss_type, model_name=args.model,round_output=True)
+            from budding_yeast_v2.utils.active_learning.logging import make_round_logger, log_round_evaluation
+            from budding_yeast_v2.utils.active_learning.convergence import LossChangeMonitor
+            round_logger=make_round_logger(logger.experiment,actual_exp_dir,r)
             trainer = pl.Trainer(
                 max_epochs=args.max_epochs,
-                logger=logger,
-                callbacks=[lr_monitor, visualizer, EpochSummaryCallback(), curve_callback],
+                logger=round_logger,
+                callbacks=[lr_monitor, EpochSummaryCallback(), curve_callback, LossChangeMonitor(round_dir)],
+                enable_checkpointing=False,
                 accelerator=args.device,
                 devices=args.devices,
                 gradient_clip_val=1.0,
@@ -533,45 +615,52 @@ def main():
                 reload_dataloaders_every_n_epochs=0,
                 num_sanity_val_steps=0,
             )
-            trainer.fit(model, datamodule=datamodule)
+            with log_stage('main model training',round=r+1,train_samples=n_train,epochs=args.max_epochs):
+                trainer.fit(model, datamodule=datamodule)
 
             # 1. 保存当轮 Checkpoint
-            round_ckpt = os.path.join(ckpt_dir, f"round_{r}_train{n_train}.ckpt")
-            trainer.save_checkpoint(round_ckpt)
+            round_ckpt = os.path.join(round_dir,'model.ckpt')
+            with log_stage('checkpoint saving',round=r+1,path=round_ckpt):
+                trainer.save_checkpoint(round_ckpt)
             print(f"💾 [AL 轮 {r + 1}] 已保存当轮 Checkpoint: {round_ckpt}")
 
-            # 2. 全量评估当轮模型并保存结果到 eval/round_{r}_train{n_train}
-            round_eval_dir = os.path.join(eval_base_dir, f"round_{r}_train{n_train}")
+            # Round-local compact evaluation: physical JSON and native real plots.
+            round_eval_dir = os.path.join(round_dir,'eval')
             print(f"📊 [AL 轮 {r + 1}] 正在评估 {datamodule.system_id} 测试集 (真实突变体 {len(datamodule.test_dataset_real)} 株)...")
             from budding_yeast_v2.eval import evaluate_model_on_datamodule
             is_last_round = (r == NUM_AL_ROUNDS - 1)
-            metrics = evaluate_model_on_datamodule(
-                model=model,
-                dm=datamodule,
-                device=device_str,
-                save_dir=round_eval_dir,
-                seed=args.seed,
-                batch_size=args.batch_size,
-                max_plots=None if is_last_round else 0  # 最终轮次完整画图, 中间轮次极速评估 (<1秒)
-            )
+            with log_stage('test evaluation and real-mutant plots',round=r+1,output=round_eval_dir):
+                metrics = evaluate_model_on_datamodule(
+                    model=model,
+                    dm=datamodule,
+                    device=device_str,
+                    save_dir=round_eval_dir,
+                    seed=args.seed,
+                    batch_size=args.batch_size,
+                    max_plots=None,synth_test_plots=0,compact=True
+                )
             record = round_record(metrics, r, n_train)
+            log_round_evaluation(logger.experiment,record)
             print(f"✅ [AL 轮 {r + 1} 评测] 样本量: {n_train} | "
                   f"Real Mutants MAE={metric_text(record['real_mutants_mae'])}, "
                   f"Rel-L2={metric_text(record['real_mutants_rel_l2'])}, "
                   f"Corr={metric_text(record['real_mutants_corr'])} | "
                   f"Synth Test MAE={metric_text(record['synth_test_mae'])}")
             al_curve_records.append(record)
-
-            # 更新性能演化表 al_performance_curve.csv 和 al_rounds_summary.json
-            curve_csv_path = os.path.join(eval_base_dir, 'al_performance_curve.csv')
-            import csv
-            with open(curve_csv_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=list(al_curve_records[0].keys()))
-                writer.writeheader()
-                writer.writerows(al_curve_records)
-
-            with open(os.path.join(eval_base_dir, 'al_rounds_summary.json'), 'w') as f:
-                json.dump(al_curve_records, f, indent=2)
+            record.update(epochs=args.max_epochs,warmup_epochs=args.warmup_epochs,
+                checkpoint=round_ckpt,dataset=round_dataset,normalization='refit_cumulative_train')
+            convergence_path=os.path.join(round_dir,'convergence.json')
+            with open(convergence_path) as handle:
+                convergence=json.load(handle)
+            change=convergence.get('final') or {}
+            record.update(min_lr=args.min_lr,convergence_report=convergence_path,
+                convergence_status=convergence['status'],
+                train_loss_trend_pct_per_epoch=change.get('train_trend_pct'),
+                val_mse_trend_pct_per_epoch=change.get('val_trend_pct'))
+            histories.append(curve_callback.curve_logger)
+            from budding_yeast_v2.utils.active_learning.reporting import save_summary
+            with log_stage('round summary and loss plots',round=r+1):
+                save_summary(actual_exp_dir,al_curve_records,histories,metrics)
 
             # 4. Select with independently trained members, matching official top_k.
             if not is_last_round:
@@ -583,47 +672,40 @@ def main():
                         # only fit the same data and save their selection weights.
                         return pl.Trainer(
                             max_epochs=args.max_epochs, logger=False,
-                            callbacks=[], enable_checkpointing=False,
+                            callbacks=[LossChangeMonitor(os.path.join(round_dir,'ensemble',f'member_{member_index:02d}'))],
+                            enable_checkpointing=False,
                             accelerator=args.device, devices=args.devices,
                             gradient_clip_val=1.0, precision='bf16-mixed',
                             strategy='ddp_find_unused_parameters_true' if args.devices > 1 else 'auto',
                             num_sanity_val_steps=0,
                         )
 
-                    members, member_records = train_acquisition_ensemble(
-                        model, build_fresh_model, build_member_trainer, datamodule,
-                        n_members=args.al_ensemble_size, seed=args.seed,
-                        round_index=r, checkpoint_dir=ckpt_dir,
-                    )
+                    with log_stage('acquisition ensemble training',round=r+1,members=args.al_ensemble_size):
+                        members, member_records = train_acquisition_ensemble(
+                            model, build_fresh_model, build_member_trainer, datamodule,
+                            n_members=args.al_ensemble_size, seed=args.seed,
+                            round_index=r, checkpoint_dir=os.path.join(round_dir,'ensemble'),
+                        )
                     member_records[0].update(checkpoint=round_ckpt,
-                                             seed_policy='primary training RNG stream')
-                    with open(os.path.join(eval_base_dir, f'ensemble_round_{r}.json'), 'w') as f:
+                                             seed_policy=args.al_round_seed_policy,
+                                             seed=round_seed if round_seed is not None else args.seed)
+                    with open(os.path.join(round_dir,'ensemble.json'), 'w') as f:
                         json.dump({'score': args.al_ensemble_uncertainty,
                                    'prediction': 'first_member', 'members': member_records}, f, indent=2)
                     al_cb.set_ensemble_members(members)
                 try:
-                    al_cb.select_and_append(model, datamodule, device=device_str, exp_dir=actual_exp_dir)
+                    with log_stage('AL acquisition',after_round=r+1,budget=al_cb._al4pde_scheduled_num_add()):
+                        al_cb.select_and_append(model, datamodule, device=device_str, exp_dir=actual_exp_dir)
                 finally:
                     al_cb.set_ensemble_members(None)
                     if args.al_strategy != 'none' and strategy_spec(args.al_strategy).requires_ensemble:
                         del members
+            log_event('END','AL round',round=r+1,train_samples=n_train,
+                      elapsed_s=f'{time.monotonic()-round_started:.3f}')
 
 
         # 最终末轮: 保存 final-last-epoch.ckpt，并将最后一轮评估结果同步到 eval/ 根目录
-        final_ckpt = os.path.join(ckpt_dir, 'final-last-epoch.ckpt')
-        trainer.save_checkpoint(final_ckpt)
-        print(f"✅ [al4pde v2.3] 已保存最终模型 (最后一轮最后 epoch): {final_ckpt}")
-
-        import shutil
-        last_eval_dir = os.path.join(eval_base_dir, f"round_{NUM_AL_ROUNDS-1}_train{n_train}")
-        for item in ['global_metrics_denorm.json', 'graph_provenance.json', 'per_mutant_metrics.csv', 'per_synth_test_metrics.csv', 'per_mutant_label_groups.csv', 'per_synth_test_label_groups.csv', 'real_mutants', 'synth_test']:
-            src = os.path.join(last_eval_dir, item)
-            dst = os.path.join(eval_base_dir, item)
-            if os.path.exists(src):
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(src, dst)
+        print(f'Final model: {round_ckpt}; final physical metrics: {eval_base_dir}/global_metrics_denorm.json')
     else:
         # ================= 非 al4pde: 单次 fit (最优权重依据 val_loss_synth) =================
         checkpoint_callback = ModelCheckpoint(
@@ -650,9 +732,14 @@ def main():
             reload_dataloaders_every_n_epochs=0,
             num_sanity_val_steps=0
         )
-        trainer.fit(model, datamodule=datamodule)
+        with log_stage('static model training',epochs=args.max_epochs):
+            trainer.fit(model, datamodule=datamodule)
     
     wandb.finish()
 
 if __name__ == '__main__':
-    main()
+    install_timestamped_streams()
+    diagnostics=install_stack_diagnostics()
+    log_event('INFO','runtime',pid=os.getpid(),timezone='Asia/Shanghai',stack_dump_SIGUSR1=diagnostics)
+    with log_stage('experiment'):
+        main()

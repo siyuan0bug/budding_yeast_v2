@@ -45,7 +45,7 @@ def sample_twin_mutant_pair(level, defaults, *, ma):
     pairs = ma._resolve_conflicts(pairs)
     if not pairs:
         return sample_twin_mutant_pair(level, defaults, ma=ma)
-    has_gal_oe = any((m == 'GAL-OE' for _, m in pairs))
+    has_gal_oe = any((m in ('GAL-OE','GAL-MC') for _, m in pairs))
     if has_gal_oe:
         mdt_shared = 150.0
     else:
@@ -58,7 +58,7 @@ def sample_twin_mutant_pair(level, defaults, *, ma):
     p_mut_A = p_wt.copy()
     for g_name, m_chosen in pairs:
         if m_chosen not in TARGET_MODES:
-            alpha_shared = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'DAmP', 'pLOF'] else 1.0
+            alpha_shared = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'DAmP', 'pLOF'] else 1.0
             ma.apply_gene_mutation(g_name, m_chosen, alpha_shared, p_wt, p_mut_B, ovr_B)
             ma.apply_gene_mutation(g_name, m_chosen, alpha_shared, p_wt, p_mut_A, ovr_A)
         else:

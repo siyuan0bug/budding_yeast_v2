@@ -1,0 +1,28 @@
+{
+  "system": "fission",
+  "model": "biom_refiner_plus",
+  "width": 128,
+  "n_blocks": 4,
+  "modes": 24,
+  "batch": 512,
+  "steps": 2,
+  "time_steps": 500,
+  "precision": "bf16-mixed",
+  "loss": "hybrid_mse_rel",
+  "input": "synthetic_normalized",
+  "coarse_auxiliary_loss": true,
+  "device": "NVIDIA RTX A6000",
+  "real_scalar_parameters": 5519881,
+  "peaks_by_stage_gib": {
+    "0_forward": 16.900354385375977,
+    "0_backward": 16.900354385375977,
+    "0_optimizer": 16.900354385375977,
+    "1_forward": 16.95002031326294,
+    "1_backward": 16.95002031326294,
+    "1_optimizer": 16.95002031326294
+  },
+  "status": "ok",
+  "seconds": 1.3198106680065393,
+  "peak_allocated_gib": 16.95002031326294,
+  "peak_reserved_gib": 17.962890625
+}

@@ -205,7 +205,7 @@ def official_inventory(official):
         'pool_random': 'project al4pde_random: fixed-pool semantics retained',
         'top_k': 'al4pde_uncertainty: ensemble score and top-k project adapter',
         'power': 'al4pde_power: ensemble and official weighted sampling semantics',
-        'max_dist': 'partial: al4pde_diversity has custom 332D features and local MaxDist',
+        'max_dist': 'al4pde_max_dist: predicted trajectory sketch and actual bmdal MaxDist, no posterior transform',
         'coreset_maxdist': 'not ported: requires surrogate latent feature interface',
         'lcmd': 'al4pde_lcmd: predicted trajectory sketch and actual bmdal LCMD, no posterior transform',
         'bait': 'al4pde_bait: predicted trajectory sketch/posterior and actual bmdal selector',

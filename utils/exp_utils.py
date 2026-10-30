@@ -219,6 +219,8 @@ def setup_wandb_logger(
 
     # 2. 运行名称精炼化
     run_name = f"seed_{seed}" if not is_tune else f"trial_{getattr(args, 'trial_number', 0)}"
+    if not is_tune and al_strategy != 'none':
+        run_name = f'{model_name}_{al_strategy}_seed_{seed}'
 
     # 3. 结构化标签 (W&B 限制单个 Tag 长度必须在 1~64 字符之间)
     raw_tags = [
@@ -232,7 +234,8 @@ def setup_wandb_logger(
     tags = [str(t)[:64] for t in raw_tags if t]
 
     no_wandb = getattr(args, "no_wandb", False)
-    if no_wandb:
+    local_only = no_wandb or al_strategy != "none"
+    if local_only:
         os.environ["WANDB_MODE"] = "offline"
 
     # 将 wandb 运行目录指向实验目录内部的 wandb/
@@ -246,6 +249,8 @@ def setup_wandb_logger(
         job_type="tune" if is_tune else "train",
         tags=tags,
         save_dir=exp_dir,
+        offline=local_only or os.environ.get("WANDB_MODE") == "offline",
+        log_model=False,
     )
 
     # 记录超参

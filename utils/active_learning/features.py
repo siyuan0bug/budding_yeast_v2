@@ -2,6 +2,7 @@
 import torch.nn.functional as F
 import numpy as np
 import torch
+from budding_yeast_v2.utils.runtime_logging import log_stage, ProgressLog
 
 _SHAPE_FEAT_GROUP_SIZES = [32, 3, 39, 39, 39, 39, 141]
 
@@ -38,6 +39,7 @@ def _compute_predicted_distance_features(self, pl_module, dm, device, batch_size
     pl_module.eval()
     def collect(count, inputs):
         output = None
+        progress=ProgressLog('predicted trajectory features',count)
         for start in range(0, count, batch_size):
             indices = np.arange(start, min(start + batch_size, count))
             x, p = inputs(indices)
@@ -46,12 +48,15 @@ def _compute_predicted_distance_features(self, pl_module, dm, device, batch_size
             if output is None:
                 output = torch.empty(count, features.shape[1], dtype=features.dtype)
             output[indices] = features
+            progress.update(min(start+batch_size,count))
         return output
     try:
         with torch.no_grad():
-            train_features = collect(len(train_p), lambda idx: (train_x[idx], train_p[idx]))
-            pool_features = collect(self._pool_size,
-                lambda idx: (self._get_pool_X_batch(idx), self._pool_P[idx]))
+            with log_stage('training trajectory feature inference',samples=len(train_p)):
+                train_features = collect(len(train_p), lambda idx: (train_x[idx], train_p[idx]))
+            with log_stage('pool trajectory feature inference',samples=int(self._pool_size)):
+                pool_features = collect(self._pool_size,
+                    lambda idx: (self._get_pool_X_batch(idx), self._pool_P[idx]))
     finally:
         pl_module.train(training)
     return pool_features, train_features

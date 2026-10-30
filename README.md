@@ -51,7 +51,7 @@ budding_yeast_v2/
 ├── eval.py                    # 📈 统一评估与可视化入口 (126 突变体金标准)
 ├── tune.py                    # 🔍 自动化超参搜索入口
 ├── run_pipeline.sh            # ⚙️ 批量基准训练与多算子对比流水线
-├── run_al_pure_random_1m.sh   # 🔬 AL4PDE 百万候选池主动学习执行流水线
+├── run_al_budding.sh   # 🔬 AL4PDE 百万候选池主动学习执行流水线
 ├── docs/                      # 📚 5 篇核心技术专题规范文档
 ├── models/                    # 🧠 神经网络模型库 (ours: BioRefinerPlus 等; baselines: 18 个标准实现)
 ├── data/                      # 💾 数据集生成脚本、生化多关系图、可达性分析
@@ -92,20 +92,18 @@ python train.py \
   --seed 42
 ```
 
-### 3. AL4PDE 主动学习训练 (Active Learning with 1M Candidate Pool)
+### 3. AL4PDE 主动学习训练
 ```bash
-python train.py \
-  --model biom_refiner_plus \
-  --loss hybrid_mse_rel \
-  --al_strategy al4pde_bifurcation_entropy \
-  --pool_path /home/users/zsy/mydata/budding_yeast/pool_1m_pure_random.npz \
-  --al_budget_per_round 500 \
-  --al_candidate_pool_size 100000 \
-  --al_warmup_epochs 8 \
-  --al_interval_epochs 5 \
-  --al_max_rounds 6 \
-  --max_epochs 100
+# 四模型 × 四策略，GPU 0–3；W&B 仅本地离线记录
+bash run_al_budding.sh
+# Fission 默认标准 FNO × 四策略；可直接编辑其 EXPERIMENTS 清单
+bash run_al_fission.sh
+# 单模型，按顺序运行五个默认策略
+GPU_ID=0 MODEL=fno bash run_al_budding.sh
 ```
+完整配置、候选池与结果目录见 [AL_EXPERIMENT_WORKFLOW.md](docs/AL_EXPERIMENT_WORKFLOW.md)。
+两个脚本均按 `SEEDS=(...)`、`EXPERIMENTS=(...)` 批量配置，同卡串行、跨卡并行；`DRY_RUN=1` 只显示计划。
+实验结果默认保存到机械盘 `/home/users/zsy/mydata/budding_yeast/experiments/`，可用 `EXP_ROOT` 覆盖；pool 和初始输入仍由 `DATA_DIR` 控制。
 
 ### 4. 真实突变体评估与可视化 (Evaluation)
 ```bash

@@ -27,6 +27,7 @@ from typing import Dict, List, Any, Optional
 def load_metrics_from_folder(folder_path: str) -> Optional[Dict[str, Any]]:
     """从评估目录或实验子目录加载 global_metrics_denorm.json"""
     candidates = [
+        os.path.join(folder_path, "summary", "global_metrics_denorm.json"),
         os.path.join(folder_path, "eval", "global_metrics_denorm.json"),
         os.path.join(folder_path, "global_metrics_denorm.json"),
     ]
@@ -312,7 +313,7 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-Seed Aggregator & Leaderboard")
-    parser.add_argument("--exp_root", type=str, default="./experiments", help="分层实验根目录")
+    parser.add_argument("--exp_root", type=str, default=os.environ.get("EXP_ROOT", "/home/users/zsy/mydata/budding_yeast/experiments"), help="分层实验根目录（默认机械盘）")
     parser.add_argument("--legacy_dir", type=str, default=None, help="历史扁平结果目录 (如 ./eval_results_v3)")
     parser.add_argument("--dataset", type=str, default=None, help="按数据集标签过滤")
     parser.add_argument("--model", type=str, default=None, help="按模型名称过滤")

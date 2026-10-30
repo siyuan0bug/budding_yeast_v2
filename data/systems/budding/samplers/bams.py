@@ -21,7 +21,7 @@ for i, a in enumerate(GENE_NAMES):
             CONVERGENT_TARGETS[a, b] = sorted(common)
 ANTAG_PAIRS = [(u, v) for u, v, s in MODULE_EDGES if s == '-']
 LOF_MODES = {'KO', 'ts', 'DAmP', 'pLOF', 'db'}
-GOF_MODES = {'GAL-OE', 'MC', 'CA', 'APC-A', 'TAB6-1'}
+GOF_MODES = {'GAL-OE', 'GAL-MC', 'MC', 'CA', 'APC-A', 'TAB6-1'}
 
 def get_mode_polarity(mode):
     if mode in LOF_MODES:
@@ -31,11 +31,7 @@ def get_mode_polarity(mode):
     return 0
 
 def touch_set(g_name, m_chosen, *, ma):
-    ovr = {}
-    p_wt = ma.get_default_params()
-    p_wt.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
-    ma.apply_gene_mutation(g_name, m_chosen, 1.0, p_wt, {}, ovr)
-    return set(ovr.keys())
+    return ma.touch_set(g_name,m_chosen)
 
 def resolve_pair_conflicts(pairs, *, ma):
     pairs = list(pairs)
@@ -78,6 +74,8 @@ def bisect_bifurcation_dosage(base_ovr, target_gene, mode, alpha_min, alpha_max,
     between arrest and division.
     """
     p_wt = ma.get_default_params()
+    if mode=='MC' and ma.distribution_profile=='mutant_aware':
+        alpha_min,alpha_max=int(np.ceil(alpha_min)),int(np.floor(alpha_max))
     p_wt.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
     ovr_lo = dict(base_ovr)
     ma.apply_gene_mutation(target_gene, mode, alpha_min, p_wt, {}, ovr_lo)
@@ -89,7 +87,10 @@ def bisect_bifurcation_dosage(base_ovr, target_gene, mode, alpha_min, alpha_max,
         return None
     lo, hi = (alpha_min, alpha_max)
     for _ in range(n_steps):
-        mid = np.sqrt(lo * hi)
+        if mode=='MC' and ma.distribution_profile=='mutant_aware':
+            if hi-lo<=1:break
+            mid=(int(lo)+int(hi))//2
+        else:mid = np.sqrt(lo * hi)
         ovr_mid = dict(base_ovr)
         ma.apply_gene_mutation(target_gene, mode, mid, p_wt, {}, ovr_mid)
         div_mid = fast_eval_division_status(ovr_mid, ma=ma)
@@ -97,7 +98,7 @@ def bisect_bifurcation_dosage(base_ovr, target_gene, mode, alpha_min, alpha_max,
             lo = mid
         else:
             hi = mid
-    return np.sqrt(lo * hi)
+    return float(hi) if mode=='MC' and ma.distribution_profile=='mutant_aware' else np.sqrt(lo * hi)
 _L1_GRID = [(g, m) for g in GENE_NAMES for m in GROUP_BY_NAME[g]['modes']]
 np.random.RandomState(20260831).shuffle(_L1_GRID)
 _L1_IDX = {'i': 0}
@@ -151,7 +152,7 @@ def sample_bams_skeleton_and_modes(level, *, ma):
                     m1_pool = [m for m in ['GAL-OE', 'MC'] if m in GROUP_BY_NAME[g1]['modes']]
                     m1 = str(np.random.choice(m1_pool)) if m1_pool else 'KO'
                     if m1 in ['MC', 'GAL-OE']:
-                        bisection_spec = (g1, m1, 1.0 if m1 == 'MC' else 0.01, 30.0 if m1 == 'MC' else 12.0)
+                        bisection_spec = (g1, m1, ma.sample_scaling_factor_sobol(m1,g1,0.), ma.sample_scaling_factor_sobol(m1,g1,1.))
                 else:
                     m1_pool = list(GROUP_BY_NAME[g1]['modes'].keys())
                     m1 = str(np.random.choice(m1_pool))
@@ -168,7 +169,7 @@ def sample_bams_skeleton_and_modes(level, *, ma):
                 a, b = list(CONVERGENT_TARGETS.keys())[np.random.choice(len(CONVERGENT_TARGETS))]
                 g0, g1 = (a, b)
                 pairs[0] = (g0, 'KO' if 'KO' in GROUP_BY_NAME[g0]['modes'] else list(GROUP_BY_NAME[g0]['modes'].keys())[0])
-            m1_lofs = [m for m in ['KO', 'ts', 'db'] if m in GROUP_BY_NAME[g1]['modes']]
+            m1_lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF'] if m in GROUP_BY_NAME[g1]['modes']]
             m1 = str(np.random.choice(m1_lofs)) if m1_lofs else list(GROUP_BY_NAME[g1]['modes'].keys())[0]
             pairs.append((g1, m1))
         else:
@@ -180,7 +181,7 @@ def sample_bams_skeleton_and_modes(level, *, ma):
         visited = {g0}
         walk_history = [(g0, s0)]
         if s0 == 1 and np.random.rand() < 0.7:
-            lofs = [m for m in ['KO', 'ts', 'db'] if m in GROUP_BY_NAME[g0]['modes']]
+            lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF'] if m in GROUP_BY_NAME[g0]['modes']]
             if lofs:
                 m0 = 'KO' if 'KO' in lofs else lofs[0]
                 pairs[0] = (g0, m0)
@@ -205,11 +206,11 @@ def sample_bams_skeleton_and_modes(level, *, ma):
                     if oes:
                         mv = str(np.random.choice(oes))
                         if bisection_spec is None:
-                            bisection_spec = (v, mv, 1.0 if mv == 'MC' else 0.01, 30.0 if mv == 'MC' else 12.0)
+                            bisection_spec = (v, mv, ma.sample_scaling_factor_sobol(mv,v,0.), ma.sample_scaling_factor_sobol(mv,v,1.))
                     else:
                         mv = str(np.random.choice(list(GROUP_BY_NAME[v]['modes'].keys())))
                 elif is_compensation and u_polar == -1 and (sign == '-'):
-                    lofs = [m for m in ['KO', 'ts', 'db'] if m in GROUP_BY_NAME[v]['modes']]
+                    lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF'] if m in GROUP_BY_NAME[v]['modes']]
                     mv = str(np.random.choice(lofs)) if lofs else list(GROUP_BY_NAME[v]['modes'].keys())[0]
                 else:
                     mv = str(np.random.choice(list(GROUP_BY_NAME[v]['modes'].keys())))
@@ -252,7 +253,7 @@ def sample_bams_mutant_task(level=2, defaults=None, *, ma):
     desc_parts = []
     has_gal = False
     for g, m in pairs:
-        if m == 'GAL-OE':
+        if m in ('GAL-OE','GAL-MC'):
             has_gal = True
         alpha = ma.sample_scaling_factor(m, g)
         ma.apply_gene_mutation(g, m, alpha, p_wt, {}, ovr)
@@ -281,6 +282,8 @@ def execute_simulation_task(task_spec, *, ma):
             if alpha_star is not None:
                 jitter = float(np.random.choice([0.85, 0.95, 1.05, 1.2]))
                 refined_alpha = float(np.clip(alpha_star * jitter, a_min, a_max))
+                if target_m=='MC' and ma.distribution_profile=='mutant_aware':
+                    refined_alpha=float(np.clip(round(refined_alpha),np.ceil(a_min),np.floor(a_max)))
                 ma.apply_gene_mutation(target_g, target_m, refined_alpha, defaults, {}, ovr)
         except Exception:
             pass

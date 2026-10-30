@@ -206,6 +206,7 @@ class YeastLitModule(pl.LightningModule):
         wavelet_level=3,
         sensitivity_weight=1.0,
         system_id=None,
+        min_lr=1e-6,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -762,14 +763,16 @@ class YeastLitModule(pl.LightningModule):
 
         warmup_epochs = self.hparams.get('warmup_epochs', 10)
         max_epochs = self.max_epochs
-        eta_min = 1e-6
+        eta_min = float(self.hparams.get('min_lr', 1e-6))
+        if not math.isfinite(self.lr) or self.lr <= 0 or not math.isfinite(eta_min) or not 0 <= eta_min <= self.lr:
+            raise ValueError('min_lr must be finite and between zero and the peak learning rate')
 
         def lr_lambda(epoch):
             if epoch < warmup_epochs:
                 # 线性 warmup: 0 → 1
                 return epoch / max(warmup_epochs, 1)
             # Cosine annealing: 1 → eta_min/lr
-            progress = (epoch - warmup_epochs) / max(max_epochs - warmup_epochs, 1)
+            progress = min(1., max(0., (epoch - warmup_epochs) / max(max_epochs - warmup_epochs, 1)))
             return eta_min / self.lr + 0.5 * (1.0 - eta_min / self.lr) * (1.0 + math.cos(math.pi * progress))
 
         scheduler = LambdaLR(optimizer, lr_lambda)

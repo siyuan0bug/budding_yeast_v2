@@ -107,9 +107,9 @@ def sample_kdpp_mutant(level, kdpp_sampler, rng=np.random, *, ma):
         return sample_kdpp_mutant(level, kdpp_sampler, rng, ma=ma)
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
-        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
         ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
     if has_gal_oe:
         ovr['mdt'] = 150.0
@@ -224,7 +224,7 @@ class SignedDirectedGraphKDPP:
                 if has_neg and self.rng.rand() < 0.5:
                     m1_modes = list(self.ma.GROUP_BY_NAME[g1]['modes'].keys())
                     m2_modes = list(self.ma.GROUP_BY_NAME[g2]['modes'].keys())
-                    lofs_1 = [m for m in ['KO', 'ts', 'DAmP', 'pLOF', 'db'] if m in m1_modes]
+                    lofs_1 = [m for m in ['KO', 'ts', 'DAmP', 'pLOF'] if m in m1_modes]
                     oes_2 = [m for m in ['GAL-OE', 'MC'] if m in m2_modes]
                     if lofs_1 and oes_2:
                         assigned[g1] = str(self.rng.choice(lofs_1))
@@ -285,9 +285,9 @@ def sample_signed_kdpp_mutant(level, kdpp_sampler, rng=np.random, *, ma):
         return sample_signed_kdpp_mutant(level, kdpp_sampler, rng, ma=ma)
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
-        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
         ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
     if has_gal_oe:
         ovr['mdt'] = 150.0

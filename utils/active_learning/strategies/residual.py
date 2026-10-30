@@ -1,6 +1,7 @@
 """strategies residual services extracted from the pre-package implementation."""
 from budding_yeast_v2.utils.active_learning.oracle import PARAM_KEYS
 import numpy as np
+from budding_yeast_v2.data.dataset_archive import open_dataset
 import os
 import time
 import torch
@@ -35,7 +36,7 @@ def _al4pde_residual_sample(self, trainer, pl_module, dm, device, current_epoch)
     if param_keys is None:
         pool_ds = self.al_pool_dataset or getattr(dm, 'dataset_path', None)
         if pool_ds and os.path.exists(pool_ds):
-            npz_data = np.load(pool_ds, allow_pickle=True)
+            npz_data = open_dataset(pool_ds, allow_pickle=True)
             if 'param_names' in npz_data:
                 param_keys = list(npz_data['param_names'])
     if param_keys is None:
@@ -140,7 +141,7 @@ def _al4pde_residual_diversity_sample(self, trainer, pl_module, dm, device, curr
     if param_keys is None:
         pool_ds = self.al_pool_dataset or getattr(dm, 'dataset_path', None)
         if pool_ds and os.path.exists(pool_ds):
-            npz_data = np.load(pool_ds, allow_pickle=True)
+            npz_data = open_dataset(pool_ds, allow_pickle=True)
             if 'param_names' in npz_data:
                 param_keys = list(npz_data['param_names'])
     if param_keys is None:

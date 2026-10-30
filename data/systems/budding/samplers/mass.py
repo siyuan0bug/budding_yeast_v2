@@ -186,17 +186,15 @@ def sample_skeleton(level, boost=None):
     if cls == 'antag_core':   return _sample_antag_core(ki, boost), cls
     return _sample_orthogonal(ki, boost), cls
 def _assign_convergent_modes(genes):
-    """Universal Pathway Buffering / Genetic Suppressor mode assignment.
-    For convergent multigene skeletons [a, b, eff, ...]:
-    - First 2 parallel regulator inputs (a, b) receive Loss-of-Function (synthetic defect)
-    - 3rd effector gene receives Dosage Suppression (OE) if activated downstream,
-      or Bypass Suppression (LOF) if inhibited downstream.
-    - Additional genes draw naturally from _sample_mode.
-    Completely generic across the ODE topology, zero test-set hardcoding."""
+    """Loss-biased inputs and a mixed-dose effector exploration heuristic.
+
+    This does not infer suppressor direction from edge signs or guarantee rescue.
+    Degradation resistance (db) is not a generic loss of protein function.
+    """
     pairs = []
     for g in genes[:2]:
         modes = GROUP_BY_NAME[g]['modes']
-        lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF', 'db'] if m in modes]
+        lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF'] if m in modes]
         if lofs:
             m = 'KO' if 'KO' in lofs and np.random.rand() < 0.75 else str(np.random.choice(lofs))
         else:
@@ -207,7 +205,7 @@ def _assign_convergent_modes(genes):
         eff = genes[2]
         modes = GROUP_BY_NAME[eff]['modes']
         oes = [m for m in ['GAL-OE', 'MC'] if m in modes]
-        lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF', 'db'] if m in modes]
+        lofs = [m for m in ['KO', 'ts', 'DAmP', 'pLOF'] if m in modes]
         if oes and (not lofs or np.random.rand() < 0.60):
             m = str(np.random.choice(oes))
         elif lofs:
@@ -281,9 +279,9 @@ def sample_mass_mutant(level=1, *, ma):
         return sample_mass_mutant(level, ma=ma)
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
-        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
+        alpha = ma.sample_scaling_factor(m_chosen, g_name) if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db'] else 1.0
         ma.apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr)
     if has_gal_oe:
         ovr['mdt'] = 150.0

@@ -110,7 +110,7 @@ def targeted_pair(count):
     p_wt = get_default_params()
     p_wt.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
     sk = TARGETED_SKELETONS[count % len(TARGETED_SKELETONS)]
-    has_gal = any((m == 'GAL-OE' for g, m in sk['gofs']))
+    has_gal = any((m in ('GAL-OE','GAL-MC') for g, m in sk['gofs']))
     mdt = 150.0 if has_gal else float(np.random.choice([90.0, 150.0, 160.0], p=[0.75, 0.18, 0.07]))
     gof_scalars = {}
     for g, m in sk['gofs']:

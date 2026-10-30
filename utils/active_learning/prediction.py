@@ -4,6 +4,7 @@ import numpy as np
 import os
 import pytorch_lightning as pl
 import torch
+from budding_yeast_v2.utils.runtime_logging import log_stage, ProgressLog
 
 
 def train_acquisition_ensemble(primary, model_factory, trainer_factory, datamodule, *,
@@ -11,7 +12,7 @@ def train_acquisition_ensemble(primary, model_factory, trainer_factory, datamodu
     """Train independent selection members; retain member zero for evaluation.
 
     Mirrors the independent cold starts in AL4PDE Ensemble.train_n_epoch.
-    All members train on the same fixed-normalization data. Caller invokes this
+    All members train on the same current-round normalization/data. Caller invokes this
     only before an acquisition round, matching the official final-round shortcut.
     Each extra member gets a dedicated seed, trainer/optimizer and checkpoint.
     """
@@ -36,7 +37,9 @@ def train_acquisition_ensemble(primary, model_factory, trainer_factory, datamodu
                 pl.seed_everything(member_seed, workers=True)
                 member = model_factory()
                 trainer = trainer_factory(member_index)
-                trainer.fit(member, datamodule=datamodule)
+                with log_stage('auxiliary ensemble member training',round=round_index+1,
+                               member=member_index,seed=member_seed):
+                    trainer.fit(member, datamodule=datamodule)
                 path = os.path.join(checkpoint_dir, f'round_{round_index}_ensemble_member_{member_index}.ckpt')
                 trainer.save_checkpoint(path)
                 members.append(member.cpu())
@@ -142,6 +145,7 @@ def _compute_ensemble_uncertainty(self, device, pool_indices, batch_size=128):
     original_modes = [m.training for m in members]
     original_devices = [next(m.parameters(), torch.empty(0)).device for m in members]
     scores = []
+    progress=ProgressLog('ensemble uncertainty inference',len(pool_indices),members=len(members))
     try:
         for member in members:
             member.to(device)
@@ -160,6 +164,7 @@ def _compute_ensemble_uncertainty(self, device, pool_indices, batch_size=128):
                 else:
                     uncertainty = outputs.var(dim=0)
                 scores.append(uncertainty.reshape(len(indices), -1).mean(1).cpu())
+                progress.update(min(start+batch_size,len(pool_indices)))
     finally:
         for member, training, original_device in zip(members, original_modes, original_devices):
             member.to(original_device)

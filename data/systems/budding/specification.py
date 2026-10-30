@@ -44,15 +44,19 @@ class BuddingSystem:
             return sample_scaling_factor_sobol(mode,gene,u)
         import numpy as np
         from scipy.stats import beta
+        from .distributions.ranges import (MC_MIN,MC_MAX,log_quantile,CLB2_DB_RESIDUAL,
+                                           MEN_TS_RESIDUAL,NET1_BINDING_RESIDUAL)
         u = np.clip(u,1e-6,1.-1e-6)
         if mode=='MC':
-            return float(10.**(np.log10(1.5)+u*(np.log10(30.)-np.log10(1.5))))
+            return log_quantile(u,(MC_MIN,MC_MAX[gene]))
         if mode=='GAL-OE' and gene=='CLN2':
             return float(10.**(np.log10(.03)+u*(np.log10(.30)-np.log10(.03))))
         if mode=='ts' and gene!='CDC14':
+            if gene in ('TEM1','ESP1'):return log_quantile(u,MEN_TS_RESIDUAL)
+            if gene=='NET1':return log_quantile(u,NET1_BINDING_RESIDUAL)
             return float(.2*beta.ppf(u,.5,2.))
         if mode=='db':
-            if gene=='CLB2': return float(.04+u*(.15-.04))
+            if gene=='CLB2': return log_quantile(u,CLB2_DB_RESIDUAL)
             if gene=='PDS1': return float(u*.05)
             return 0.
         return sample_scaling_factor_sobol(mode,gene,u)

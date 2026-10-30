@@ -89,8 +89,11 @@ def fixture(cls,strategy,seed):
         p_mean=torch.zeros(1,141),p_std=torch.ones(1,141),t_max=210.,_Y=torch.full((1,39,steps),100.),
         _test_idx_real=[0],_mutant_names=names,_train_idx_synth=np.arange(train_count),
         denormalize_y=lambda value,*args:value)
-    if strategy in ('al4pde_uncertainty','al4pde_power'):
+    if strategy in SPECS and SPECS[strategy].requires_ensemble:
         cb.set_ensemble_members([model,ArtificialSurrogate(.02)])
+    if strategy.startswith('ours_'):
+        cb._pool_ovr = [{} for _ in range(count)]
+        cb._pool_initial_physical = torch.zeros(count,39,dtype=torch.float64)
     cb._build_broadcast_from_pool=lambda indices,dm,target_valid_num=None:{
         'indices':np.asarray(indices).tolist(),'target_valid_num':None if target_valid_num is None else int(target_valid_num)}
     return cb,model,dm

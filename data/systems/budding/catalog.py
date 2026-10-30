@@ -1,5 +1,13 @@
-"""Legal gene/mode catalog and conflict footprints from MA."""
+"""Legal synthetic controls, including documented Chen-mechanism extensions.
+
+PPX/Mcm1/SBF_MBF are functional modules, not experimentally calibrated alleles.
+Real-mutant definitions and the canonical ODE are independent of this catalog.
+"""
 import numpy as np
+from .distributions.ranges import RANGE_FINGERPRINT
+
+CATALOG_VERSION = 'gene_ranges_gal_mc_2026_10_29_' + RANGE_FINGERPRINT[:12]
+RESTORED_FUNCTIONAL_MODULES = frozenset({'PPX', 'Mcm1', 'SBF_MBF'})
 
 BINDING_GROUPS = {'G1': {'name': 'CLN2',
         'params': ['ksn2p', 'ksn2pp'],
@@ -15,10 +23,10 @@ BINDING_GROUPS = {'G1': {'name': 'CLN2',
         'modes': {'KO': 0.09,
                   'GAL-OE': 0.31,
                   'MC': 0.075,
+                  'GAL-MC': 0.075,
                   'ts': 0.035,
                   'db': 0.31,
-                  'pLOF': 0.15,
-                  'CA': 0.03}},
+                  'pLOF': 0.15}},
  'G4': {'name': 'CLB5',
         'params': ['ksb5p', 'ksb5pp', 'kdb5pp'],
         'P_bio_G': 0.04,
@@ -65,6 +73,10 @@ BINDING_GROUPS = {'G1': {'name': 'CLN2',
          'params': ['Cdc15T', 'kkpnetpp', 'init_Cdc15'],
          'P_bio_G': 0.035,
          'modes': {'KO': 0.25, 'GAL-OE': 0.25, 'MC': 0.25, 'ts': 0.25}},
+ 'G15': {'name': 'PPX',
+         'params': ['ksppx', 'kdppxpp', 'kppnetpp'],
+         'P_bio_G': 0.035,
+         'modes': {'KO': 0.25, 'GAL-OE': 0.25, 'ts': 0.25, 'db': 0.25}},
  'G16': {'name': 'PDS1',
          'params': ['kspdsp', 'ks1pdspp', 'ks2pdspp', 'kd2pdspp', 'kd3pdspp'],
          'P_bio_G': 0.04,
@@ -78,6 +90,14 @@ BINDING_GROUPS = {'G1': {'name': 'CLN2',
          'params': ['BUB2_active', 'init_BUB2'],
          'P_bio_G': 0.032,
          'modes': {'CKO': 1.0}},
+ 'G20': {'name': 'SBF_MBF',
+         'params': ['kasbf', 'ksn2pp', 'ksb5pp'],
+         'P_bio_G': 0.035,
+         'modes': {'KO': 1.0}},
+ 'G21': {'name': 'Mcm1',
+         'params': ['kamcm'],
+         'P_bio_G': 0.035,
+         'modes': {'ts': 0.5, 'KO': 0.5}},
  'G22': {'name': 'APC_Core',
          'params': ['ka20pp', 'ks20p', 'ks20pp', 'kscdh', 'init_CDH1T', 'init_CDH1'],
          'P_bio_G': 0.035,
@@ -108,6 +128,9 @@ GENE_ROLE = {'CLN2': 'dose',
  'CDC14': 'enzyme',
  'CDC15': 'enzyme',
  'TEM1': 'enzyme',
+ 'PPX': 'enzyme',
+ 'SBF_MBF': 'tf',
+ 'Mcm1': 'tf',
  'ESP1': 'enzyme',
  'NET1': 'enzyme',
  'APC_Core': 'enzyme',
@@ -117,6 +140,7 @@ GENE_ROLE = {'CLN2': 'dose',
 
 MODE_CLASS = {'KO': 'loss',
  'GAL-OE': 'expression',
+ 'GAL-MC': 'expression',
  'MC': 'expression',
  'ts': 'activity',
  'DAmP': 'activity',
@@ -156,11 +180,11 @@ TOUCH = {('CLN2', 'KO'): {'ksn2pp'},
  ('CLN3', 'MC'): {'C0'},
  ('CLB2', 'KO'): {'ksb2p', 'ksb2pp'},
  ('CLB2', 'GAL-OE'): {'ksb2p'},
+ ('CLB2', 'GAL-MC'): {'ksb2p'},
  ('CLB2', 'MC'): {'ksb2p', 'ksb2pp'},
  ('CLB2', 'ts'): {'ksb2p', 'ksb2pp'},
  ('CLB2', 'db'): {'kdb2pp', 'kdb2P'},
  ('CLB2', 'pLOF'): {'ksb2p', 'ksb2pp'},
- ('CLB2', 'CA'): {'kdib2'},
  ('CLB5', 'KO'): {'ksb5p', 'ksb5pp'},
  ('CLB5', 'GAL-OE'): {'ksb5p'},
  ('CLB5', 'MC'): {'ksb5p', 'ksb5pp'},
@@ -202,6 +226,13 @@ TOUCH = {('CLN2', 'KO'): {'ksn2pp'},
  ('CDC15', 'GAL-OE'): {'Cdc15T'},
  ('CDC15', 'MC'): {'Cdc15T'},
  ('CDC15', 'ts'): {'kkpnetpp'},
+ ('PPX', 'KO'): {'ksppx'},
+ ('PPX', 'GAL-OE'): {'ksppx'},
+ ('PPX', 'ts'): {'kppnetpp'},
+ ('PPX', 'db'): {'kdppxpp'},
+ ('SBF_MBF', 'KO'): {'kasbf', 'ksn2pp', 'ksb5pp'},
+ ('Mcm1', 'KO'): {'kamcm'},
+ ('Mcm1', 'ts'): {'kamcm'},
  ('PDS1', 'KO'): {'ks2pdspp', 'ks1pdspp'},
  ('PDS1', 'GAL-OE'): {'kspdsp'},
  ('PDS1', 'db'): {'kd2pdspp', 'kd3pdspp'},
@@ -222,10 +253,10 @@ COMPOSITE_ELIGIBLE = [n for n in GENE_NAMES
 
 
 def require_mutation(gene, mode):
-    """Reject removed synthetic controls before drawing randomness or editing inputs.
+    """Reject unsupported pairs before drawing randomness or editing inputs.
 
     This gate is shared by both profiles and candidate-pool auditing. Biological
     state names and the separate real-mutant table are not a sampling catalog.
     """
-    if gene not in GROUP_BY_NAME or (gene in ('TEM1', 'CDC15') and mode == 'DAmP'):
+    if gene not in GROUP_BY_NAME or mode not in GROUP_BY_NAME[gene]['modes']:
         raise ValueError(f'Unsupported Budding synthetic mutation: {gene}[{mode}]')

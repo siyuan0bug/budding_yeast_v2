@@ -1,0 +1,14 @@
+{
+  "pilot_samples": 5000,
+  "high_amplitude_rows": 533,
+  "baseline": "Predict per-variable transformed pilot mean; diagnostic energy share, not actual trained loss.",
+  "high_group_energy_share": {
+    "raw": 0.9191164172964672,
+    "log": 0.22490240201619607,
+    "log_z": 0.2509619531990303
+  },
+  "max_std_ratio": 1.698964647316345,
+  "max_std_ratio_variable": "F5P",
+  "clipping_note": "Finite negatives are retained in raw files; this diagnostic reproduces current log1p(max(y,0)).",
+  "loss_note": "Current hybrid_mse_rel computes both MSE and relative L2 in standardized log space, not physical space."
+}

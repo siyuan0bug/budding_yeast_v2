@@ -41,9 +41,9 @@ def sample_gibbs_sobol_mutant(level, gibbs_sampler, sobol_vec, rng=np.random, *,
     coord_idx = 0
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
-        if m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
+        if m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
             u_coord = sobol_vec[coord_idx % len(sobol_vec)]
             coord_idx += 1
             alpha = ma.sample_scaling_factor_sobol(m_chosen, g_name, u_coord)
@@ -68,6 +68,7 @@ def sample_pure_random_candidate(level, sobol_vec, rng, *, ma):
     - Level k selects k genes uniformly at random without replacement.
     - Mode chosen uniformly from gene's available modes.
     - Continuous multipliers sampled via Sobol low-discrepancy coordinates.
+    - Non-GAL environment: mdt 90/150/160 with probabilities 80%/15%/5%.
     """
     p_wt = ma.get_default_params()
     p_wt.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0.2})
@@ -100,11 +101,11 @@ def sample_pure_random_candidate(level, sobol_vec, rng, *, ma):
     coord_idx = 0
     for g_name, m_chosen in pairs:
         mut_descriptions.append(f'{g_name}[{m_chosen}]')
-        if m_chosen == 'GAL-OE':
+        if m_chosen in ('GAL-OE','GAL-MC'):
             has_gal_oe = True
         if m_chosen == 'KO':
             alpha = 0.0
-        elif m_chosen in ['GAL-OE', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
+        elif m_chosen in ['GAL-OE', 'GAL-MC', 'MC', 'ts', 'DAmP', 'pLOF', 'db']:
             u_coord = sobol_vec[coord_idx % len(sobol_vec)]
             coord_idx += 1
             alpha = ma.sample_scaling_factor_sobol(m_chosen, g_name, u_coord)
@@ -115,9 +116,9 @@ def sample_pure_random_candidate(level, sobol_vec, rng, *, ma):
         ovr['mdt'] = 150.0
     elif 'mdt' not in ovr:
         u_mdt = sobol_vec[-1]
-        if u_mdt < 0.75:
+        if u_mdt < 0.80:
             ovr['mdt'] = 90.0
-        elif u_mdt < 0.93:
+        elif u_mdt < 0.95:
             ovr['mdt'] = 150.0
         else:
             ovr['mdt'] = 160.0
