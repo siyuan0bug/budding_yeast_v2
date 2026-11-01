@@ -1,3 +1,5 @@
+> **2026-10-31 机制AL输入契约**：新策略复用既有gene_ranges输入和canonical mutation/初始化；辅助分类Z-score只在合成train拟合，拒绝legacy非train-only统计。ODE探针只做模型预测，不模拟、不修改pool，真正新增数据仍来自原候选ID。[实现与隔离](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+
 > **2026-10-30 运行内存优化**：pool/初始集、采样分布、ODE与归一化公式不变；ODE worker 仅传最终float32轨迹，P/实际IC仍float64，移除未使用虚拟X，入库分块归一化，冷启动前释放旧数据。逐轮继续使用无损引用清单。新增边反馈为额外审计，不替代样本字段。[说明](AL_OPTIMIZED_RESTART_2026-10-30.md)。
 
 > **2026-10-30 存储格式更新**：新AL改为共享初始数据＋新增块＋`rounds/round_XX/dataset.json`，不再重复写累计轨迹。训练/评测/相关分析支持新旧格式，原始轨迹精度不变；本批14项已完成逐字段验证转换，173.13→56.65GiB（含共享初始），释放116.48GiB；首末轮真实checkpoint重载通过。[布局、读取和验证](AL_DATASET_STORAGE_LAYOUT.md)。下方空间数字为转换前审计快照。

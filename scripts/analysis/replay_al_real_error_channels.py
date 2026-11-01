@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--initial',required=True,type=Path)
     parser.add_argument('--output',required=True,type=Path)
     parser.add_argument('--threads',type=int,default=2)
+    parser.add_argument('--strategies',nargs='+',default=None)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True);torch.set_num_threads(args.threads)
     manifest=json.loads(args.manifest.read_text())
     with np.load(args.initial,allow_pickle=False) as archive:
@@ -33,6 +34,7 @@ def main():
     variable_rows,group_rows,verification=[],[],[];selected_curves={}
     for task in manifest['tasks']:
         run=Path(task['experiment_dir']);strategy=task['strategy']
+        if args.strategies and strategy not in args.strategies:continue
         summary=json.loads((run/'summary/rounds_summary.json').read_text())
         if len(summary)!=4:continue
         model,hp=load_model_from_checkpoint(str(run/'rounds/round_03/model.ckpt'),device='cpu')
@@ -88,7 +90,7 @@ def main():
     for row,i in enumerate(ids):
         for col,(label,index) in enumerate(columns):
             ax=axes[row,col];ax.plot(np.linspace(0,210,500),target_raw[i,index],color='black',lw=2,label='ODE')
-            for method in ('al4pde_random','al4pde_max_dist','ours_interaction','ours_response_feedback'):
+            for method in (args.strategies or ('al4pde_random','al4pde_max_dist','ours_interaction','ours_response_feedback')):
                 if method in selected_curves:
                     ax.plot(np.linspace(0,210,500),selected_curves[method][row,index],lw=1,label=method)
             ax.set(title=str(names[i])+' / '+label,xlabel='Time (min)');ax.grid(alpha=.2)

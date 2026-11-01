@@ -52,7 +52,7 @@ def event_disagreement(physical):
             amplitude=np.log1p(np.maximum([clb.max(),clb[-1],ori.max(),trajectory[35].max(),esp[-1]],0))
             # Every descriptor lies in [0,1]; no raw amplitude dominance.
             rows.append(np.r_[one_hot,float(count>0),
-                divisions[0]/max(1,steps-1) if divisions else 1.,amplitude/(1+amplitude)])
+                divisions[0]/max(1,steps-1) if len(divisions) else 1.,amplitude/(1+amplitude)])
         descriptors.append(rows)
     return np.var(np.asarray(descriptors),axis=0).mean(1).astype(np.float32)
 
@@ -198,3 +198,6 @@ def write_audit(engine,directory,batch):
     if hasattr(engine,'_hybrid_edge_outputs'):
         from .hybrid_feedback import write_edges
         write_edges(engine,directory,index)
+    if hasattr(engine,'_mechanism_artifacts'):
+        from ..auxiliary.artifacts import write_artifacts
+        write_artifacts(engine,directory,index)

@@ -146,9 +146,11 @@ class EpochSummaryCallback(Callback):
     def on_train_epoch_start(self, trainer, pl_module):
         self.epoch_start_time = time.time()
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    def on_train_epoch_end(self, trainer, pl_module):
         if self.epoch_start_time is None:
             return
+        # Lightning finalizes epoch-reduced train_loss after validation. Reading
+        # it in the validation hook prints NaN first, then the previous epoch.
         epoch = trainer.current_epoch
         m = trainer.callback_metrics
         train_loss = float(m.get('train_loss', float('nan')))

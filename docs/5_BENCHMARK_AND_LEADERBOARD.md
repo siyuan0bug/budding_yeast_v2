@@ -1,3 +1,24 @@
+> **2026-10-31 16:34完成核查**：四项mechanism与Event重跑全部四轮完整、主模型500epoch/40800次更新、每项有效追加6万条；单项3小时16分至4小时31分，无本轮检出的训练错误。context最终MAE=0.087077/MSE=0.945067/RelL2=0.145252；support为0.092608/0.979995/0.153649。原启动器exit=1来自有意取消等待worker，独立sensitivity退出0。[完整证据、耗时与结果](AL_MECHANISM_COMPLETION_2026-10-31.md)。
+
+> **2026-10-31 新机制批次**：Pattern三个消融及ODE响应一致性已接入，结果使用`mechanism_v1_full`后缀；目前没有正式最终指标，不能混入已完成排行榜。126 real的开发使用历史继续披露。[实现与验证](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+
+> **2026-10-31 评测独立性说明**：126 real的逐株误差已多次用于设计/诊断，后续论文应将其使用历史作为开发评测披露；采集器不读test/real真值与完全独立盲评是不同要求。新增Pattern条件采集已实现并启动验证实验，尚无新性能结果。[方法与无泄漏协议](AL_PATTERN_CONDITIONAL_RESEARCH_DESIGN_2026-10-31.md)。
+
+> **2026-10-31 ours与完整baseline比较**：global_tail整体RelL2=0.129411、Corr=0.980956略好于Power，但MAE/MSE高9.03%/22.56%，逐株RelL2仅26/126胜出；Power综合和中间预算更强。固定Top20有收益，#124 ORI失分抵消部分收益；建议验证Power为主体、小比例tail/response。[完整比较与待测消融](AL_OPTIMIZED_RESULTS_AND_NEXT_STEPS_2026-10-31.md)。仅分析，未启动新方法。
+
+> **10:29重跑更新**：Event已在GPU0进入正式训练，约第33/100epoch。另修复epoch摘要loss滞后一轮/首epoch显示nan的问题；实际41轮CSV loss均有限，曲线和收敛统计正确。当前进程继续运行，新日志hook以后续启动生效。详见[本批审计](AL_OPTIMIZED_COMPLETION_AND_EVENT_FIX_2026-10-31.md)。
+
+> **2026-10-31 optimized批次检查**：10项完整、1项Event首次选样失败；完整项均实际500个主模型epochs、40800次更新及6万条追加。Event多分裂NumPy布尔判断已修复，通过36项回归和真实FNO512样本重放，单独后台冷启动重跑。整批原用时9小时36分，四卡并行；完成预算不等于严格收敛。[完整性、用时及结果](AL_OPTIMIZED_COMPLETION_AND_EVENT_FIX_2026-10-31.md)。
+
+> **2026-10-30 模型设计分析（无正式重训）**：读取快照为192份Budding CSV＋130份AL逐轮JSON；
+> 同一纯随机100k数据集54份非备份历史配置，指标内容去重50份。按参考Plus/hybrid三指标平均名次
+> 选20例，新增驱动/日程2×2 oracle诊断。#124主要瓶颈为上游cyclin驱动；#42本次冻结模型主要SSE
+> 通道为Vi20。冻结Plus替换三标记物读出，MAE 0.087015→0.078941、MSE 5.183655→4.722494，
+> 平均RelL2 0.142708→0.148833，存在退化；这些是确定性读出替换，不是新模型重训结果。
+> 已实现 `biom_refiner_marker_closure` 消融和15项相关验证；完整ICHFO仍为研究设计。
+> 数据含ODE生成的real-mutant条件轨迹，不能直接当作39变量实测时序。
+> [完整报告、20例、局限与复现](OPERATOR_DESIGN_AND_BADCASES_2026-10-30.md)。
+
 > **2026-10-30 22:06 后台已安排**：11项optimized批次已挂到tmux `al_budding_optimized_20261030_220508`；当前GPU0–3被其他用户占用，队列等待空闲，尚未开始正式训练。115项专项回归及真实FNO选样→256条ODE→入库/重载验证通过。[记录](AL_OPTIMIZED_RESTART_2026-10-30.md)。
 
 > **2026-10-30 优化批次准备/启动记录**：旧8项完整结果仍按原表保留；六项中断实验将从round0独立重跑，另有四新ours及修正event。统一full预算，不能将新方法选样验收当作预测提升。[协议与新目录](AL_OPTIMIZED_RESTART_2026-10-30.md)。

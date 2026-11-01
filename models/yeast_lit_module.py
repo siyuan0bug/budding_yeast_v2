@@ -32,7 +32,7 @@ from budding_yeast_v2.models.ours import (
     BioMechanisticOperator, BioMechFull,
     BioMechEventOnly, BioMechTitrationOnly, BioMechPathwayOnly,
     BioRefiner, BioRefinerCurvature,
-    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus,
+    BioRefinerPyramid, BioRefinerGraph, BioRefinerPlus, BioRefinerMarkerClosure,
     BioRefinerBifurcate, BioRefinerGraphFlux, BioRefinerMechanistic,
     BioMassActionRefiner,
     BioRefinerAttractor, BioRefinerCausalReach, BioRefinerAttractorPlus,
@@ -87,6 +87,7 @@ MODEL_REGISTRY = {
     'biom_refiner_graph': BioRefinerGraph,
     'biom_refiner_graph_attn': BioRefinerGraph,
     'biom_refiner_plus': BioRefinerPlus,
+    'biom_refiner_marker_closure': BioRefinerMarkerClosure,
     'biom_refiner_bifurcate': BioRefinerBifurcate,
     'biom_refiner_graph_flux': BioRefinerGraphFlux,
     'biom_refiner_mechanistic': BioRefinerMechanistic,
@@ -128,6 +129,7 @@ SINGLE_VARIABLE_GRAPH_MODELS = frozenset({
     'graph_resnet_film', 'gated_graph_resnet_film', 'multiscale_diffgraph',
     'dualpath_spectralgraph', 'bio_statespace_graph',
     'biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus',
+    'biom_refiner_marker_closure',
     'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic',
     'biom_mass_action_refiner', 'biom_mass_action',
     'biom_refiner_attractor', 'bio_refiner_attractor',
@@ -287,6 +289,10 @@ class YeastLitModule(pl.LightningModule):
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks)
         elif model_name in ('biom_refiner_graph', 'biom_refiner_graph_attn', 'biom_refiner_plus', 'biom_refiner_bifurcate', 'biom_refiner_graph_flux', 'biom_refiner_mechanistic', 'biom_mass_action_refiner', 'biom_mass_action', 'biom_refiner_attractor', 'bio_refiner_attractor', 'biom_refiner_causal_reach', 'bio_refiner_causal_reach', 'biom_refiner_attractor_plus', 'bio_refiner_attractor_plus', 'biom_refiner_causal_graph', 'biom_refiner_causal_graph_attn', 'biom_refiner_causal_plus', 'biom_refiner_causal', 'biom_refiner_dynamic_causal_plus', 'biom_refiner_dynamic_causal', 'biom_refiner_latch_causal_plus', 'biom_refiner_latch_causal', 'biom_refiner_dynamic_plus', 'biom_refiner_event_hybrid', 'bio_event_hybrid_refiner'):
+            self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
+                                    modes=modes, width=width, n_blocks=n_blocks,
+                                    adj_matrix=adj_matrix)
+        elif model_name == 'biom_refiner_marker_closure':
             self.model = ModelClass(num_vars=num_vars, param_dim=param_dim,
                                     modes=modes, width=width, n_blocks=n_blocks,
                                     adj_matrix=adj_matrix)

@@ -60,6 +60,7 @@ from .bio_mass_action_refiner import BioMassActionRefiner
 from .bio_refiner_attractor import BioRefinerAttractor
 from .bio_refiner_causal_reach import BioRefinerCausalReach
 from .bio_refiner_attractor_plus import BioRefinerAttractorPlus
+from .bio_refiner_marker_closure import BioRefinerMarkerClosure
 
 __all__ = [
     'NIPSYeastFNO', 'UltimateFNO', 'NIPSYeastWNO', 'NIPSYeastLNO',
@@ -78,6 +79,7 @@ __all__ = [
     'BioRefinerBifurcate', 'BioRefinerGraphFlux', 'BioRefinerMechanistic',
     'BioMassActionRefiner',
     'BioRefinerAttractor', 'BioRefinerCausalReach', 'BioRefinerAttractorPlus',
+    'BioRefinerMarkerClosure',
     'CausalMutantAdapter',
     'BioRefinerCausalBase', 'BioRefinerCausalCurvature',
     'BioRefinerCausalPyramid', 'BioRefinerCausalGraph',

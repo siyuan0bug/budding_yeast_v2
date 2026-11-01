@@ -1,4 +1,18 @@
+> **2026-10-31 AL辅助模型**：PatternClassifier为选样专用ExtraTrees，代码在`utils/active_learning/auxiliary/pattern_classifier.py`，不替换FNO或加入主模型选择。每轮保存joblib及train-only/OOF说明。[实现](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+
 # 1. 出芽酵母神经算子代理模型系统架构与 标准基线与原创模型全景 (Architecture & Model Zoo)
+
+# 2026-10-30：标记物闭合消融与后续研究设计
+
+新增 `biom_refiner_marker_closure`（`models/ours/bio_refiner_marker_closure.py`），继承
+BioRefinerPlus，保持输入 `(B,39,2,T)`、P `(B,141)` 和输出 `(B,39,T)`。
+在物理空间用已知线性驱动方程产生 ORI/BUD/SPN，以每次方向性交叉重置，使用并行 affine scan。
+其余36个输出保持原样。需要通过 DataModule/checkpoint 的 `set_stats` 绑定统计量；支持四种归一化。
+width192/modes24/n4 时与 Plus 同为9,321,111个可训练参数元素（复数按numel计1）。
+它是参数无增加的读出消融，尚未实现完整四事件闭环或条件干预训练；无正式重训性能结论。
+15项相关回归和真实ODE小数据2步bf16训练/checkpoint重载验证通过。
+架构、正式训练调用命令、54份历史配置/20例分析及 ICHFO 设计见
+[完整设计与证据](OPERATOR_DESIGN_AND_BADCASES_2026-10-30.md)。
 
 > **2026-10-21 标准 baseline 清理**：`models/baselines` 只保留选定的标准骨干和必要的参数/初值/时间输入输出适配。
 > 入口统一为 `mlp, resnet, unet, kan, transformer, mamba, deeponet, fno, wno, mwt, gnot, transolver, lno, neural_ode, sc_fno, bregman_fno, lamo, konode`。

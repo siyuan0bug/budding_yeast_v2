@@ -205,6 +205,8 @@ AL 与静态批训练的新实验结果默认根目录为机械盘 `/home/users/
 Budding 仿真后幅值拒绝已取消，旧六种启发式策略的参数门控保持；新增ours_response不加该门控。当前四轮、初始 KMeans + seed 随机切分、逐轮累计 train 重拟合和快照 L 字段契约以 [AL_EXPERIMENT_WORKFLOW.md](docs/AL_EXPERIMENT_WORKFLOW.md) 为准；旧三轮/Pattern 分层/冻结尺度说明不适用于新 AL。Fission AL 已支持 Random/Uncertainty/Power/BAIT/LCMD 五种通用策略；其余 Budding 专用策略明确拒绝。候选初值必须逐株预热，入口与成本边界见 [Fission AL](docs/FISSION_ACTIVE_LEARNING.md)。
 
 ### 6.2 当前在线策略与官方对齐状态
+
+**2026-10-31机制批次**：新增`ours_pattern_balance/context/support`及`ours_sensitivity`，辅助分类器在`utils/active_learning/auxiliary/`；核心只接收synthetic train和无标签pool视图。默认`AL_SUITE=mechanism`四项、`mechanism_v1_full`独立目录；旧清单可显式选择。四项mechanism及Event重跑已在2026-10-31完整完成，预算/辅助模型/审计核对通过，见[用时与结果](docs/AL_MECHANISM_COMPLETION_2026-10-31.md)及[实现与验证](docs/AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
 保留原 12 种在线策略：`al4pde_random`、`al4pde_uncertainty`、`al4pde_diversity`、`maal`、`al4pde_mass`、`al4pde_novelty`、`al4pde_residual`、`al4pde_residual_diversity`、`al4pde_bifurcation`、`al4pde_bifurcation_entropy`、`al4pde_event_entropy`、`al4pde_fisher_oed`；四个短别名继续兼容。
 
 新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，新增预测轨迹`al4pde_max_dist`后加上`ours_response`当前合计17种在线策略；Power 复用独立 ensemble，BAIT/LCMD 使用预测轨迹共享投影及实际 bmdal 选择器；LCMD 无 posterior transform。`coreset_maxdist` 尚未实现，不能用输出轨迹替代 latent 冒充支持。官方 8 个预置配置及未移植项见 [清单](docs/AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。

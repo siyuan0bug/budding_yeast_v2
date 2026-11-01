@@ -29,13 +29,14 @@ fi
 EXP_ROOT="${EXP_ROOT:-/home/users/zsy/mydata/budding_yeast/experiments}"
 DATA_DIR="${DATA_DIR:-/home/users/zsy/mydata/budding_yeast}"
 DATA_COHORT="${DATA_COHORT:-gene_ranges}"
-AL_SUITE="${AL_SUITE:-optimized}" # optimized: four new hybrids + six retries + corrected event
-if [[ "$AL_SUITE" != original && "$AL_SUITE" != research && "$AL_SUITE" != optimized ]]; then
-    echo 'AL_SUITE must be original, research or optimized' >&2; exit 2
+AL_SUITE="${AL_SUITE:-mechanism}" # train-only Pattern evidence and canonical ODE response
+if [[ "$AL_SUITE" != original && "$AL_SUITE" != research && "$AL_SUITE" != optimized && "$AL_SUITE" != mechanism ]]; then
+    echo 'AL_SUITE must be original, research, optimized or mechanism' >&2; exit 2
 fi
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-}"
 if [[ "$AL_SUITE" == research && -z "$EXPERIMENT_TAG" ]]; then EXPERIMENT_TAG=research_v1; fi
 if [[ "$AL_SUITE" == optimized && -z "$EXPERIMENT_TAG" ]]; then EXPERIMENT_TAG=optimized_v2; fi
+if [[ "$AL_SUITE" == mechanism && -z "$EXPERIMENT_TAG" ]]; then EXPERIMENT_TAG=mechanism_v1; fi
 if [[ -n "$EXPERIMENT_TAG" && ! "$EXPERIMENT_TAG" =~ ^[A-Za-z0-9_-]+$ ]]; then
     echo 'Invalid EXPERIMENT_TAG' >&2; exit 2
 fi
@@ -114,6 +115,14 @@ if [[ "$AL_SUITE" == optimized ]]; then
         "fno hybrid_mse_rel ours_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
         "fno hybrid_mse_rel al4pde_bait 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
         "fno hybrid_mse_rel ours_global_calibrated 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+    )
+fi
+if [[ "$AL_SUITE" == mechanism ]]; then
+    EXPERIMENTS=(
+        "fno hybrid_mse_rel ours_sensitivity 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno hybrid_mse_rel ours_pattern_balance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno hybrid_mse_rel ours_pattern_context 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+        "fno hybrid_mse_rel ours_pattern_support 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
     )
 fi
 

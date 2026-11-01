@@ -1,3 +1,5 @@
+> **2026-10-31 AL物理响应评分**：新增`ours_sensitivity`，用当前canonical 39维ODE的Torch适配/JVP检查合法突变方向上的模型响应；整数拷贝用有限割线，屏蔽事件附近。它是采集评分，不加入训练loss或修改solver。[实现、公式及验证](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+
 # 损失函数库与生物物理约束规范 (Loss Functions & Physics Constraints)
 
 > **2026-10-21 无pattern目标处理**：Fission原始pattern=None不再默认编码成B，内部ID=-1。

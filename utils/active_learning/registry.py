@@ -14,6 +14,9 @@ class StrategySpec:
 
 
 SPECS = {
+    **{name: StrategySpec(name,'strategies.pattern','_pattern_sample',True)
+       for name in ('ours_pattern_balance','ours_pattern_context','ours_pattern_support')},
+    'ours_sensitivity': StrategySpec('ours_sensitivity','strategies.sensitivity','_sensitivity_sample'),
     **{name: StrategySpec(name, 'strategies.hybrid', '_hybrid_sample', True)
        for name in ('ours_global_interaction','ours_global_response','ours_global_tail','ours_global_calibrated')},
     **{name: StrategySpec(name, 'strategies.experimental', '_experimental_sample', True)

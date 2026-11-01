@@ -1,3 +1,15 @@
+> **2026-10-31 16:34完成核查**：四项mechanism与Event重跑全部四轮完整、主模型500epoch/40800次更新、每项有效追加6万条；单项3小时16分至4小时31分，无本轮检出的训练错误。context最终MAE=0.087077/MSE=0.945067/RelL2=0.145252；support为0.092608/0.979995/0.153649。原启动器exit=1来自有意取消等待worker，独立sensitivity退出0。[完整证据、耗时与结果](AL_MECHANISM_COMPLETION_2026-10-31.md)。
+
+> **2026-10-31 机制采集已实现**：新增Pattern平衡/背景条件/连续动力学支撑三项及独立canonical ODE敏感性方法；辅助树与受限数据视图位于`utils/active_learning/auxiliary/`，默认mechanism四项新目录，旧清单显式保留。无新的最终性能结论。[代码、目标、边界和运行](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+
+> **2026-10-31 研究方向调整（未实现）**：用户要求机制层面的创新；固定比例融合只保留为工程消融。新候选围绕突变背景条件下的Pattern/连续响应真实证据支撑，附类别平衡与相图学习相关工作、统一采集目标及严格信息隔离；历史126 real已用于方法开发，需额外独立评测。[研究方案](AL_PATTERN_CONDITIONAL_RESEARCH_DESIGN_2026-10-31.md)。
+
+> **2026-10-31 ours与完整baseline比较**：global_tail整体RelL2=0.129411、Corr=0.980956略好于Power，但MAE/MSE高9.03%/22.56%，逐株RelL2仅26/126胜出；Power综合和中间预算更强。固定Top20有收益，#124 ORI失分抵消部分收益；建议验证Power为主体、小比例tail/response。[完整比较与待测消融](AL_OPTIMIZED_RESULTS_AND_NEXT_STEPS_2026-10-31.md)。仅分析，未启动新方法。
+
+> **10:29重跑更新**：Event已在GPU0进入正式训练，约第33/100epoch。另修复epoch摘要loss滞后一轮/首epoch显示nan的问题；实际41轮CSV loss均有限，曲线和收敛统计正确。当前进程继续运行，新日志hook以后续启动生效。详见[本批审计](AL_OPTIMIZED_COMPLETION_AND_EVENT_FIX_2026-10-31.md)。
+
+> **2026-10-31 optimized批次检查**：10项完整、1项Event首次选样失败；完整项均实际500个主模型epochs、40800次更新及6万条追加。Event多分裂NumPy布尔判断已修复，通过36项回归和真实FNO512样本重放，单独后台冷启动重跑。整批原用时9小时36分，四卡并行；完成预算不等于严格收敛。[完整性、用时及结果](AL_OPTIMIZED_COMPLETION_AND_EVENT_FIX_2026-10-31.md)。
+
 > **2026-10-30 22:06 后台已安排**：11项optimized批次已挂到tmux `al_budding_optimized_20261030_220508`；当前GPU0–3被其他用户占用，队列等待空闲，尚未开始正式训练。115项专项回归及真实FNO选样→256条ODE→入库/重载验证通过。[记录](AL_OPTIMIZED_RESTART_2026-10-30.md)。
 
 > **2026-10-30 新优化已接入**：新增 global_interaction / global_response / global_tail / global_calibrated 四策略，局部对照叠加全局预测覆盖；近期完整合成边校准单独消融。默认 optimized 批次含四新方法、六项未完成重跑及修正 event，共11项，每卡一项。旧结果保留，新方法尚无完整指标。[方法、资源修复和启动协议](AL_OPTIMIZED_RESTART_2026-10-30.md)。
