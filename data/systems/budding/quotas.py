@@ -3,15 +3,12 @@ import itertools
 import math
 import numpy as np
 from . import catalog
-from .distributions.ranges import copy_support,GAL_MODES
+from .distributions.ranges import EXACT_ZERO_TARGETS,copy_support,GAL_MODES
 
 def allele_options(gene,composites=True):
     modes=list(catalog.GROUP_BY_NAME[gene]['modes']);options=[(m,) for m in modes]
-    if composites and gene in catalog.COMPOSITE_ELIGIBLE:
-        synth=[m for m in ('GAL-OE','MC') if m in modes]
-        structural=[m for m in ('db','PM','CA') if m in modes]
-        options.extend(tuple(sorted((a,b))) for a,b in itertools.product(synth,structural)
-                       if not catalog.touch_set(gene,a)&catalog.touch_set(gene,b))
+    if composites:
+        options.extend(allele for (g, allele) in catalog.COMPOSITE_REAL_EVIDENCE if g == gene)
     return sorted(set(options))
 
 
@@ -30,7 +27,9 @@ def enumerate_combinations(composites=True):
                 if conflict:rejected+=1;continue
                 legal+=1
                 flat_modes=[m for allele in modes for m in allele]
-                continuous=any(m not in ('KO','CA','CSL','CKO','PM','MC','GAL-MC') for m in flat_modes)
+                continuous=any(m not in ('KO','CA','CSL','CKO','PM','MC','GAL-MC')
+                               and (g,m) not in EXACT_ZERO_TARGETS
+                               for g,allele in zip(group,modes) for m in allele)
                 capacity=None if continuous else (1 if GAL_MODES.intersection(flat_modes) else 3)*math.prod(
                     len(copy_support(g,m)) for g,allele in zip(group,modes) for m in allele if m in ('MC','GAL-MC'))
                 if capacity==3:fixed+=1

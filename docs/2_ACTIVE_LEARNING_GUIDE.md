@@ -1,6 +1,24 @@
+> **2026-11-14 流程与算法分离**：旧在线流程在`utils/archive/online/`，当前完整池流程在`sampling/benchmark/`，共同使用训练/评测服务。`registry.Method.implementation`支持独立`module:function`入口；新增规则只需文件和注册，不必改训练或workflow。`SamplingContext/SamplingResult`负责交互，`query.LabelOracle`负责真值权限与计费。轮次、预算、epochs等由流程配置决定。当前共享协议为`seed42_c0d0d9a0169c`，split/初始ID与整理前完全一致。[扩展示例](../utils/README.md)。下方更早状态保留为历史记录。
+
+> **2026-11-14 当前实现**：`run_al_budding.sh`默认完整池离线Benchmark、独立项目内baseline。最新协议`seed42_18bf9a3289fa`，每池90k候选、5k验证、5k测试，随机初始2k、五轮2k/4k/6k/8k/10k，epochs100/100/100/100/200、warmup5/5/5/5/10；归一化逐轮按累计训练集重拟合。用户已确认仅来源池验证用于checkpoint，两个来源测试均报告。结果不分A/B目录，标签访问条件仍计费。首批默认Random/TopK/LCMD-LL/BAIT-LL共8项，已建立后台队列和监控，按主机负载准入；全局4实验/2重加载，4–7号卡每卡单GPU进程。完整资源探针已完成但不是正式精度结果，训练预算尚未证明收敛。[最新实测与配置](BUDDING_SAMPLING_BENCHMARK_PLAN_2026-11-13.md#19-单项完整规模资源实测与首批配置2026-11-14当前)。下方较早状态保留为历史记录。
+
+> **2026-11-13最新状态**：mutation与匹配边际LHS各100000条完整轨迹已生成并完成结构、去重、real排除、初值、标签和LHS设计检查。LHS负值另有12条严格复算诊断；原池未覆盖，尚不能宣称全池严格精度证明。下方“未生成”是历史阶段记录。旧在线AL训练入口尚未切换到新完整池，本次没有启动训练。[完整验收](BUDDING_COMPLETE_POOLS_GENERATION_2026-11-13.md)。
+
+> **已实施：MA精确关闭（CDC14不变）**：CLB5/SIC1/PDS1-db、CDC20/CDC15/APC_Core-ts和APC-A对应通道改为确定性0，随机/逆CDF/赋值/容量/救援同步；MASS及其他分布保持。LHS边际已重编译，旧池版本失效，未生成新大型池。[修改前后与验证](BUDDING_EXACT_ZERO_UPDATE_2026-11-12.md)。
+
+> **当前规则更新（2026-11-12，禁用三模块后）**：PPX/SBF_MBF/Mcm1停止合成采样；19个活动遗传模块、64个单独模式、4个有real依据的同基因双模式，另保留CLB2专门GAL-MC。未覆盖模型参数由85增至90，均为±50%；混合边际已按新规则重算。下方22模块/71模式/10复合/85参数及旧概率为调整前记录。[当前配置、real复合明细与零值诊断](BUDDING_REAL_SUPPORTED_MODULES_AND_COMPOUNDS_2026-11-12.md)。
+
+> **2026-11-12范围更新与类型核对**：85个未被mutation覆盖的模型参数改为U(0.5WT,1.5WT)，±50%已写入边际配置；环境80/15/5与既有mutation强度不改。当前71个单独gene/mode中17个未见于126条real，另10个同基因复合状态中6个未见；这不是删除操作，也不代表其余类型的所有强度已校准。[完整清单与口径](BUDDING_REAL_MUTATION_COVERAGE_2026-11-12.md)。
+
+> **2026-11-12用户选定混合LHS及零值审计**：已有mutation覆盖参数按随机提案边际配权，85参数正值窗口为0.5～1.5WT。258个边际分量已编译，20000条提案CDF检查通过；10条原生零值对照均完成。参数置零不普遍等于基因KO；16个阈值保持正值，67个反应/调控关闭候选需逐项讨论，新增零点概率尚未赋值，联合LHS采样/10万完整池尚未生成。[配置与证据](BUDDING_MIXED_LHS_ZERO_POLICY_2026-11-12.md)。
+
+> **2026-11-12新范式（方案与范围审计，未切生产）**：两类各10万条完整仿真池LHS/随机mutation，与池内Uncertainty/BAIT/LCMD等选择器分层；mutation取消Sobol及强制均衡配额、保留强度分布，四轮train为2000→4000→7000→10000。141维参数/71规则边界表已整理，LHS上下界待确定；20万新轨迹未生成。[方案和清单](BUDDING_OFFLINE_POOL_PLAN_2026-11-12.md)。
+
+> **2026-11-02完整对比**：同FNO/数据/预算的22方法中，Pattern Context MSE最低0.945067（比Power低28.94%），但MAE高1.26%、汇总RelL2高10.28%，仍未全面胜出。逐株80/126 RelL2胜Power，少数badcase退步；MSE净改善主要由#50/#22/#62贡献。Balance和当前Sensitivity/Event无收益，Support未超过Context。[结果、badcase及采集诊断](AL_MECHANISM_COMPARISON_2026-11-02.md)。
+
 > **2026-10-31 16:34完成核查**：四项mechanism与Event重跑全部四轮完整、主模型500epoch/40800次更新、每项有效追加6万条；单项3小时16分至4小时31分，无本轮检出的训练错误。context最终MAE=0.087077/MSE=0.945067/RelL2=0.145252；support为0.092608/0.979995/0.153649。原启动器exit=1来自有意取消等待worker，独立sensitivity退出0。[完整证据、耗时与结果](AL_MECHANISM_COMPLETION_2026-10-31.md)。
 
-> **2026-10-31 机制采集已实现**：新增Pattern平衡/背景条件/连续动力学支撑三项及独立canonical ODE敏感性方法；辅助树与受限数据视图位于`utils/active_learning/auxiliary/`，默认mechanism四项新目录，旧清单显式保留。无新的最终性能结论。[代码、目标、边界和运行](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+> **2026-10-31 机制采集已实现**：新增Pattern平衡/背景条件/连续动力学支撑三项及独立canonical ODE敏感性方法；辅助树与受限数据视图位于`utils/sampling/ours/auxiliary/`，默认mechanism四项新目录，旧清单显式保留。无新的最终性能结论。[代码、目标、边界和运行](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
 
 > **2026-10-31 研究方向调整（未实现）**：用户要求机制层面的创新；固定比例融合只保留为工程消融。新候选围绕突变背景条件下的Pattern/连续响应真实证据支撑，附类别平衡与相图学习相关工作、统一采集目标及严格信息隔离；历史126 real已用于方法开发，需额外独立评测。[研究方案](AL_PATTERN_CONDITIONAL_RESEARCH_DESIGN_2026-10-31.md)。
 
@@ -87,7 +105,7 @@
 
 > **Fission 已适配五种通用 AL 策略**：Random、Uncertainty、Power、LCMD、BAIT 共用 `train.py` 闭环。候选先做原生逐株预热，选中后生成完整轨迹；原 BIO/Pattern/缺失标签保持不变，其他 Budding 专用策略仍拒绝。命令、初值成本和验证范围见 [Fission AL](FISSION_ACTIVE_LEARNING.md)。
 
-> **模块整理已完成**：生产实现移至 `utils/active_learning/`，旧 `al_callback.py` 保留兼容入口；15 种策略和别名由 registry 统一管理。初始化元数据对齐与跨轮缓存问题分别修复，HPO 不再静默挂载无效 callback。当前接口和验证见 [拆包说明](AL_PACKAGE_REFACTOR.md)。
+> **模块整理已完成**：生产实现移至 `utils/sampling/`，旧 `al_callback.py` 保留兼容入口；15 种策略和别名由 registry 统一管理。初始化元数据对齐与跨轮缓存问题分别修复，HPO 不再静默挂载无效 callback。当前接口和验证见 [拆包说明](AL_PACKAGE_REFACTOR.md)。
 
 > **Power / BAIT / LCMD 已接入**：新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，273 项回归通过；LCMD 使用代理预测特征，不要求预仿真。latent coreset 本轮仅作接口设计说明，未修改模型。官方实际 8 个预置配置的逐项对应、ODE 特征适配和命令见 [Power/BAIT 与官方清单](AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。
 
@@ -119,7 +137,7 @@
 > 因此不能将本轮修复称为零泄漏或完整 AL 状态恢复。见 [运行契约修复](RUNTIME_CONTRACT_FIX_2026-10-19.md)。
 
 > **版本**：v3.0 (2026-10)  
-> **核心定位**：出芽酵母代理模型主动学习（Active Learning, AL）全景技术指南。以 [utils/al_callback.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py) 为唯一代码真理源，系统梳理历史经典策略的演进脉络，深度剖析现代 **AL4PDE 闭环架构与 10 大生产级主动学习算法**。
+> **核心定位**：出芽酵母代理模型主动学习（Active Learning, AL）全景技术指南。历史在线入口为 [utils/archive/online/legacy.py](../utils/archive/online/legacy.py)，当前完整池接口以 [utils/README.md](../utils/README.md) 为准；下文按历史版本说明，系统梳理历史经典策略的演进脉络，深度剖析现代 **AL4PDE 闭环架构与 10 大生产级主动学习算法**。
 
 ---
 
@@ -241,7 +259,7 @@
 
 ## 三、10 大生产级 AL4PDE 主动学习策略详解
 
-以下 10 大策略在 [utils/al_callback.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/al_callback.py) 中通过 `--al_strategy <name>` 统一调用：
+以下 10 大策略在 [utils/archive/online/legacy.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/archive/online/legacy.py) 中通过 `--al_strategy <name>` 统一调用：
 
 ### 3.1 `al4pde_random` (无偏高维均匀基线)
 - **原理**：从未标注的 1M 候选池中完全随机均匀抽取 $K$ 个样本。
@@ -304,7 +322,7 @@
 
 ## 四、生化物理残差计算与剪枝引擎 (`ode_residual_engine.py`)
 
-生化反应方程包含极度刚性（Stiff）的瞬态快变量，直接计算全变量残差会导致数值爆炸。[utils/ode_residual_engine.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/ode_residual_engine.py) 实现了工业级残差流速引擎：
+生化反应方程包含极度刚性（Stiff）的瞬态快变量，直接计算全变量残差会导致数值爆炸。[utils/physics/residuals.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/physics/residuals.py) 实现了工业级残差流速引擎：
 
 ### 4.1 7 大极快变量剪枝机制
 在计算 ODE 残差时，自动**舍弃 7 个微秒级准稳态快变量**：
@@ -404,3 +422,31 @@ bash run_al_pure_random_1m.sh
 为了攻克 Pattern C 崩溃瓶颈，下一代主动学习候选池必须升级为**双轨制混合候选池**：
 - **80% 连续探索池 (Continuous Exploration Pool)**：保留 80 万连续非线性点，负责探测相空间连续分岔与未知鞍点；
 - **20% 离散基因型格点池 (Discrete Genotype Lattice Pool)**：通过离散组合生成包含 1~4 个关键基因严格置零 ($P_i = 0$) 或强启动子倍增 ($P_j = 20\times$) 的组合扰动样本，为多基因敲除外推提供坚实的支撑集支持。
+# 2026-11-13：完整池准备阶段
+
+按用户/导师最终规则，LHS90背景参数±50%、45参数匹配mutation提案边际；mutation模块集合等概率、强度全随机。两个10万完整轨迹池已正常完成，输入去重/real排除、初值/标签及LHS分层核对通过，数值负值另有严格复算诊断，原池未覆盖。这里只完成新生成后端与读取契约，旧在线AL训练入口尚未切换；后续离线选择须复用完整源池、固定holdout并遵守2000→4000→7000→10000训练预算。后续须明确选择器可以访问完整池的哪些字段；real评测数据不得用于采集得分或调参。[文件、seed、全量验收及数值边界](BUDDING_COMPLETE_POOLS_GENERATION_2026-11-13.md)。
+
+2026-11-14：完整池Benchmark输出已整理；同来源测试逐样本CSV、原风格双轴loss与126株图、私有恢复状态及最终eval软链接见[SAMPLING_OUTPUTS_2026-11-14.md](SAMPLING_OUTPUTS_2026-11-14.md)。
+
+2026-11-15：用户确认恢复逐epoch同池test与real监控，新增只读服务与完整五曲线日志/图。测试不影响模型选择或采样。历史缺失值不补造，完整说明及预览见[SAMPLING_OUTPUTS_2026-11-14.md](SAMPLING_OUTPUTS_2026-11-14.md)末节。
+
+2026-11-15：GPU0–3启动8种独立baseline×两完整池的16项纯Relative L2批次，严格复用原split和D0，并收紧资源限制。 详见[BUDDING_REL_L2_BATCH_2026-11-15.md](BUDDING_REL_L2_BATCH_2026-11-15.md)。
+
+
+## 2026-11-17近期baseline基础实现完成
+
+已接入Physics-PRE差分模板保护、OED后验/UCB和`oed_temporal`生成适配、OGAS条件DDPM+CFG/密度比及`ogas_round_projected`轮次式合法投影适配，并有`random_generate`共同生成流程对照。统一入口`bash run_al_budding.sh generate ...`，不自动启动长实验。原版OGAS异步连续在线流程、HGGS及PEAKS回归版仍未完成，不能写成已完整复现作者全部实验。
+
+18项新增CPU测试全部通过，另通过原有Physics-PRE两变体与冷启动多轮路径定向回归（当时23项合计通过）；实际canonical ODE→小FNO训练→评测→恢复闭环已验证，含失败补采、冻结源覆盖引用、CFG、密度比、SHA损坏拒绝。默认1000扩散步/50采样步单独有限性测试通过。82个既有Budding/data根目录Python文件实现前后逐字节一致；两种生产池catalog/范围和LHS原配置SHA验证通过。没有使用GPU或开展正式多seed。
+
+参数、初值、ODE、事件、分布、real碰撞救援及数值政策均通过现有提案器/仿真器调用；算法不得提交任意生成的物理向量。新增成功轨迹仅存一次，初始数据和每轮快照用源引用；生成器状态仅保留两恢复点；ODE开始/结束和内部重试计费。大规模生成流程资源开销尚未测量，不直接套用固定池16并发。详见[近期baseline实现](RECENT_BASELINE_IMPLEMENTATION_2026-11-17.md)。
+
+
+## 2026-11-17：OGAS异步在线适配入口
+
+`ogas_async_projected`已实现同次训练前向反馈、后台条件DDPM、异步ODE及有界replay；`random_async`提供同流程随机对照。新输入从既有规则生成，不读取原pool未查询真值，biology/initial/ODE不改。合法投影、完整轨迹、CPU生成器、初始归一化冻结和项目validation-best均为适配，不称作者Melissa全复现。原fixed-pool五轮冷启动/逐轮refit保持。详见[逐项核查及运行入口](BASELINE_FIDELITY_AND_OGAS_ONLINE_2026-11-17.md)。
+
+
+## 2026-11-17：PEAKS/HGGS/ERACS/Low-Rank回归扩展
+
+已接入`peaks_regression`流式IDS（实际Relative梯度×selected-reference kernel、cache分位数/refresh、新+旧batch）、`eracs_regression`动态SNR/带权Batch-OMP重选、`low_rank`梯度能量上的Algorithm2带权有放回敏感度，以及`hggs_projected`的GF/pilot/global保留＋GMM/MGS/合法投影生成。算法独立保存在baseline，动态/生成流程复用公共训练与评测。不得把这些任务适配写成作者原分类/频率/PDE全实验的逐项复现。数学公式、入口、对照与成本见[详细说明](REGRESSION_SAMPLING_BASELINES_2026-11-17.md)。

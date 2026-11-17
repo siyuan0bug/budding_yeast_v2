@@ -1,5 +1,6 @@
 """Original diffusion and signed-directed k-DPP kernels and curvature statistic."""
 import numpy as np
+from ..catalog import expand_composites
 from scipy.linalg import expm
 
 class GraphDiffusionKDPP:
@@ -90,17 +91,7 @@ def sample_kdpp_mutant(level, kdpp_sampler, rng=np.random, *, ma):
     else:
         genes = kdpp_sampler.sample(level)
         pairs = [(g, ma._sample_mode(g)) for g in genes]
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', [])
-        if g in ma.COMPOSITE_ELIGIBLE and rng.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(rng.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(rng.choice(synth))))
+    expanded = expand_composites(pairs, rng)
     pairs = expanded
     pairs = ma._resolve_conflicts(pairs)
     if not pairs:
@@ -268,17 +259,7 @@ def sample_signed_kdpp_mutant(level, kdpp_sampler, rng=np.random, *, ma):
     else:
         genes = kdpp_sampler.sample_genes(level)
         pairs = kdpp_sampler.coordinate_modes(genes)
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', [])
-        if g in ma.COMPOSITE_ELIGIBLE and rng.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(rng.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(rng.choice(synth))))
+    expanded = expand_composites(pairs, rng)
     pairs = expanded
     pairs = ma._resolve_conflicts(pairs)
     if not pairs:

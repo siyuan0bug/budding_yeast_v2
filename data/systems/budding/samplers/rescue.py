@@ -24,6 +24,7 @@ def rescue_budding(overrides, description, backend, rng):
     redraws a candidate in the same L stratum. Fixed event modes are not jittered.
     """
     from ..real_mutants import effective_inputs
+    from ..catalog import mutation_pairs_compatible
 
     pairs = parse_pairs(description)
     defaults = backend.defaults()
@@ -37,7 +38,8 @@ def rescue_budding(overrides, description, backend, rng):
             return False
         if mode in ('GAL-OE','GAL-MC') and overrides.get('mdt', defaults['mdt']) != 150.:
             return False
-        if any(g==gene and (mode=='GAL-MC' or m=='GAL-MC') for j,(g,m) in enumerate(pairs) if j!=index):
+        if any(not mutation_pairs_compatible((gene,mode), pair)
+               for j,pair in enumerate(pairs) if j!=index):
             return False
         others = set().union(*(backend.touch_set(g,m) for j,(g,m) in enumerate(pairs) if j != index))
         return not (backend.touch_set(gene, mode) & others)
@@ -66,9 +68,15 @@ def rescue_budding(overrides, description, backend, rng):
         eligible = [(i,modes) for i,modes in eligible if modes]
         if eligible:
             index, modes = eligible[int(rng.choice(len(eligible)))]
-            result = redraw(index, str(rng.choice(modes)))
-            if result is not None:
-                return result
+            # A mode name can now be input-equivalent to KO (CDC20-ts). Try
+            # the other legal weak modes on this same selected gene before
+            # falling back to the 30% arm; do not lose an available DAmP rescue.
+            while modes:
+                mode = str(rng.choice(modes))
+                result = redraw(index, mode)
+                if result is not None:
+                    return result
+                modes = [m for m in modes if m != mode]
 
     # The 30% arm (also the fallback when no KO can be softened): try the
     # existing allele first, then a legal alternative on that same module.

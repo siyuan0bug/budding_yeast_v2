@@ -200,7 +200,7 @@ def replay_checkpoint(ckpt_path, names, p, synth, real, truth, mean, std, out_di
     import torch
     from budding_yeast_v2.models.ours.bio_refiner_plus import BioRefinerPlus
     from budding_yeast_v2.models.ours.graph_contracts import set_graph_load_policy
-    from budding_yeast_v2.utils.metrics import calculate_metrics
+    from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
 
     torch.set_num_threads(4)
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)

@@ -20,7 +20,7 @@ def replay(row,cache_path,out,device,batch_size,legacy_all_rows=False,historical
     import torch
     from budding_yeast_v2.eval import load_model_from_checkpoint
     from budding_yeast_v2.data.normalization import normalize_y,normalize_p,denormalize_y
-    from budding_yeast_v2.utils.metrics import calculate_metrics
+    from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
     from budding_yeast_v2.scripts.analysis.dataset_diagnosis.audit_six_patterns import features
     directory=out/('replay_historical' if historical_code else 'replay_all_rows' if legacy_all_rows else 'replay')/row.run_id;directory.mkdir(parents=True,exist_ok=True)
     if (directory/'provenance.json').exists():return

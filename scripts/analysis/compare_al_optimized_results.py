@@ -1,7 +1,8 @@
 """Compare full-budget AL outcomes and diagnose accepted acquisition components.
 
-All benchmark labels are post-hoc only. No models are trained, no ODEs queried,
-and no production configuration is modified. Prior and current complete results
+All benchmark labels are post-hoc only. No surrogate models are trained or ODEs
+queried; optional historical calibration fits are diagnostic only. No production
+configuration is modified. Prior and current complete results
 are combined by strategy; obsolete event implementations are excluded.
 """
 import argparse
@@ -80,6 +81,7 @@ def main():
     p.add_argument('--initial',type=Path,required=True)
     p.add_argument('--top20',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--focus',nargs='+',help='Strategies shown in figures and paired-case tables')
     args=p.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     runs={};pending=[]
     for path in args.manifest:
@@ -147,7 +149,12 @@ def main():
     (args.output/'status.json').write_text(json.dumps(dict(checked=datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),
         complete={k:str(v) for k,v in runs.items()},excluded_or_pending=pending,
         note='seed42; official global relative L2 differs from mean per-mutant Relative_L2'),indent=2))
-    for strategy in ['ours_global_tail','ours_global_response','ours_global_interaction','ours_global_calibrated']:
+    focus=args.focus or ['al4pde_random','al4pde_max_dist','al4pde_power','al4pde_lcmd','al4pde_uncertainty',
+           'ours_global_response','ours_global_tail','ours_global_calibrated']
+    missing=set(focus)-set(runs)
+    if missing:raise ValueError(f'Focus strategies missing complete compatible results: {sorted(missing)}')
+    for strategy in dict.fromkeys(['ours_global_tail','ours_global_response','ours_global_interaction','ours_global_calibrated']+focus):
+        if strategy not in runs:continue
         local=final[final.strategy==strategy].set_index('Mutant').loc[reference.index]
         out=pd.DataFrame(dict(Mutant=reference.index,delta_mae=local.MAE-reference.MAE,delta_mse=local.MSE-reference.MSE,
                               delta_rel=local.Relative_L2-reference.Relative_L2))
@@ -155,8 +162,6 @@ def main():
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    focus=['al4pde_random','al4pde_max_dist','al4pde_power','al4pde_lcmd','al4pde_uncertainty',
-           'ours_global_response','ours_global_tail','ours_global_calibrated']
     rounds=pd.DataFrame(all_rounds)
     fig,axes=plt.subplots(1,2,figsize=(13,5),constrained_layout=True)
     for strategy in focus:

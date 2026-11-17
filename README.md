@@ -1,4 +1,8 @@
+> **2026-11-14 职责解耦更新**：专用`offline_fno.py`已移除。当前流程只做编排与数据适配；模型仍在`models/`，公共训练在`utils/training/runner.py`，推理/指标/报告在`utils/evaluation/`，数据读取与归一化在`data/`。旧在线流程隔离在`utils/archive/online`并保留兼容。新增方法通常只需算法文件＋注册；新流程复用公共服务，不复制训练器。[模块边界与扩展方式](utils/README.md)。
+
 # 酿酒酵母细胞周期神经算子动力学建模与主动学习系统 (Budding Yeast Neural Operators & Active Learning)
+
+> **2026-11-14 当前采样实验入口**：`utils/sampling/baseline/`集中基线，`utils/sampling/ours/`集中项目方法；其余工具按训练、物理、评测、实验管理归类。`run_al_budding.sh`默认使用两个100k完整池的离线Benchmark，seed42、随机初始2000、累计2000→4000→6000→8000→10000；历史1M在线流程需显式`SAMPLING_MODE=online`。当前参数逐维Z-score，轨迹log1p后Z-score，逐轮按已查询训练集重新拟合。下方百万池、四轮及旧成绩属于历史说明，不能当作新协议结果。详见[目录与命令](utils/README.md)及[最新五轮规则](docs/BUDDING_SAMPLING_BENCHMARK_PLAN_2026-11-13.md#16-2026-11-14-五轮等量追加与冻结统计的边界)。首批8项已建立后台队列，按主机负载准入，尚无正式结果。
 
 > **2026-10-21 模型清理**：baseline 只保留 18 个标准实现，入口为 `mlp/resnet/unet/kan/transformer/mamba/deeponet/fno/wno/mwt/gnot/transolver/lno/neural_ode/sc_fno/bregman_fno/lamo/konode`。
 > 旧改造版已删除；标准入口没有额外参数调制/生物图模块。旧实验表是历史实现的结果，不能作为当前标准模型的论文结果。

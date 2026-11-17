@@ -1,5 +1,6 @@
 """Original Sobol allocation for Gibbs and parameter pools; quantiles provided by selected profile."""
 import numpy as np
+from ..catalog import expand_composites
 from .gibbs import GibbsBoltzmannGraphSampler
 from ..distributions.quantiles import sample_scaling_factor_sobol
 
@@ -22,17 +23,7 @@ def sample_gibbs_sobol_mutant(level, gibbs_sampler, sobol_vec, rng=np.random, *,
     else:
         genes = gibbs_sampler.sample_genes(level, rng=rng)
         pairs = [(g, ma._sample_mode(g)) for g in genes]
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', [])
-        if g in ma.COMPOSITE_ELIGIBLE and rng.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(rng.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(rng.choice(synth))))
+    expanded = expand_composites(pairs, rng)
     pairs = expanded
     pairs = ma._resolve_conflicts(pairs)
     if not pairs:
@@ -81,17 +72,7 @@ def sample_pure_random_candidate(level, sobol_vec, rng, *, ma):
         modes = sorted(ma.GROUP_BY_NAME[g]['modes'].keys())
         m = str(rng.choice(modes))
         pairs.append((g, m))
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', {})
-        if g in ma.COMPOSITE_ELIGIBLE and rng.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(rng.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(rng.choice(synth))))
+    expanded = expand_composites(pairs, rng)
     pairs = expanded
     pairs = ma._resolve_conflicts(pairs)
     if not pairs:

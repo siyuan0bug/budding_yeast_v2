@@ -1,3 +1,65 @@
+> **2026-11-17 20:47 seed42补跑已启动**：tmux `budding_extensions_seed42_20261117`；队列`/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling_extensions/seed42_20261117/`，`tasks.json`给出逐项结果目录。30项=两池各11种方法/变体+4个流程随机对照，旧完成8方法不重跑；FNO/seed42、0–3号卡先4后最多8、每卡最多2、系统100GiB可用底线、自有PSS不设硬上限、W&B offline。实际GPU小探针及最终6项队列测试通过；不代表所有长流程已完成。Low-Rank平方梯度能量是Algorithm2任务适配，不是原文梯度范数实验原样复现。生物82文件SHA变化0；有界RAM缓存减轻重复解压，动态入口嵌套I/O锁已修复。详见docs/SEED42_BASELINE_EXTENSIONS_2026-11-17.md。下方未启动等为历史状态。
+
+> **2026-11-17 四类回归baseline已接入**：`dynamic --method peaks_regression/eracs_regression`、`run --method low_rank`、`generate --method hggs_projected`。PEAKS先初始训练再流式percentile/cache/new+old，回归selected-reference kernel替代分类logit；ERACS谱协方差SNR<tau触发带权Batch-OMP动态替换；Low-Rank Algorithm2在gradient-energy定义basis-loss，保留有放回重要性权重，不冒充唯一10k；HGGS有GF/pilot/global保留及GMM/MGS，目标投影后仅提交canonical原提案。独立代码，不执行参考库。新增17专项通过（两池/随机对照/真实ODE/训练及eval恢复）；此前联合48和旧流程6通过，存在重叠不可相加。生物82文件SHA变化0，未用GPU、未开正式实验。动态初始归一化冻结/持续optimizer，旧固定池五轮refit不改；源引用/新块一次/标签和历史曝光计费。详见docs/REGRESSION_SAMPLING_BASELINES_2026-11-17.md。不能套用旧16并发结论，下方“尚未完成四方法”为历史盘点。
+
+> **2026-11-17 baseline出处更正**：Uncertainty是QBC（Seung/Opper/Sompolinsky，COLT1992）＋Top-K，AL4PDE2025是参考框架，不能当作新提出的2025方法。HGGS正式AAAI2025，2024仅本地预印本；符合近期要求但完整GF/MGS未实现。PEAKS/ERACS/LowRank仍待完整回归/动态/basis-loss适配，不能只因不同于五轮流程就拒绝；五项新增方法仅可按核查过的核心及适配范围表述，不能统称完整作者复现。详见docs/BASELINE_ATTRIBUTION_AND_FIDELITY_2026-11-17.md。本次仅核查与文档更正，没有修改算法/生物规则或启动实验。
+
+> **2026-11-17 OGAS在线适配已接入**：新增`ogas_async_projected`与`random_async`，同次训练前向难度→有界CPU生成器线程→新合法提案投影→异步canonical ODE→FIFO replay；生物82文件SHA变化0，禁止改规则。在线依据11月12日OGAS v2修正密度权重/AdamW/日程，旧round入口明确v1。33项近期/在线CPU测试通过（含真实ODE、训练/评测中断恢复和best同步）；初始统计冻结、persistent训练、validation-best及合法投影均为明确适配，非Melissa/PDE完整复现，不套用固定池16并发结论。旧固定池五轮逐轮refit不变；未用GPU、未开正式实验。详见docs/BASELINE_FIDELITY_AND_OGAS_ONLINE_2026-11-17.md。下方“OGAS仅round/尚未接入online”为此前状态。
+
+> **2026-11-17近期baseline已开始落地**：用户明确生物规则只复用不能修改；82个Budding/data根目录旧Python文件前后SHA一致。新增baseline/oed.py与ogas.py（Bayes后验/UCB、条件DDPM+CFG、密度比/反馈/探索）；generation/独立CLI/只读domain/policy/store/cohorts/runner，入口run_al_budding.sh generate。18项新增CPU测试通过，另有旧Physics-PRE/多轮定向回归通过；实际小规模canonical ODE→FNO→eval→恢复闭环、失败补采、QC源引用、损坏拒绝与默认1000/50扩散采样已验证。两池catalog/range与原LHS配置SHA相符；未用GPU、未启动正式多seed。OGAS仅`ogas_round_projected`轮次合法投影适配，不是原版异步在线全复现；HGGS/PEAKS回归版未完成。新增轨迹分块仅存一次，初始/累计用引用，政策恢复点最多2，ODE开始/结束/重试单独计费。不可直接复用固定池16并发结论。说明docs/RECENT_BASELINE_IMPLEMENTATION_2026-11-17.md；开题时间建议docs/BIBM_RESEARCH_SCHEDULE_2026-11-17.md（2027日程未公布，9月是目标）。
+
+> **2026-11-17 最新baseline范围**：用户要求至少2～3项2025～2026近期方法，明确允许HGGS/OED/OGAS生成新输入，不能继续只因固定池限制拒绝。路线第10节以Physics-PRE2026/OED2026/OGAS2026为近期主对照、PEAKS2025补充；尚未实现/验证的不能提前算作有结果。LL=输出前隐藏特征，当前FNO128×T投影512；Physics-PRE已预测事件mask±4步，需分连续段/事件重置/初值核查，不能用未选真值事件时刻。新增事件增强项须独立命名，不冒充论文原版。生成类复用合法规则并报告全部ODE成本/在线训练对照。本轮仅更新方案，未启动仿真/训练。
+
+> **2026-11-17 多seed前核查与baseline清单**：主80/辅助16轮全部完成且best正确；mutation best前四轮97～100、末轮183～200，LHS首轮54、末轮123～164，不得说所有池都在尾声或没有几十epoch的best。VeSSAL LHS追加中65.93%随机补齐（作者允许fill_random），mutation3.74%，需注明/进一步对账，不能称纯VeSSAL筛选。已读本地10PDF/14参考仓库，路线docs/SAMPLING_BASELINE_ROADMAP_2026-11-17.md：优先独立复现MaxDet/kmeans++/KMeans-Herding，现有Physics-PRE/Lev补跑，GradMatch作监督池方向；不import官方参考、不改变论文原流程冒充复现。本轮仅阅读/计划与CPU核查，未启动多seed或新增算法。
+
+> **2026-11-17 批次已全部完成并分析**：seed42_a866aef5d988两池16项全部退出0，80轮、10080幅real图，best/history/ID切分核对通过。墙钟3:17:04，PSS峰151.96GiB、最低可用538.82GiB，守护未中止。mutation Power MAE0.15030/MSE2.25805/Relative1.05698最优；Random0.17746/3.44796/12.36778。Random/LCMD的Relative约89%/88%来自CDH1T零目标预测错误，不能当作全变量同比退化；Uncertainty #124贡献MSE78.84%。同池初始2000一致，末轮验证平台且best正确；LHS跨域输入背景常量Z-score外推异常必须单列OOD。仅seed42、没有ours结果，不因本次分析改变协议。新工具scripts/analysis/analyze_complete_sampling_batch.py；报告analysis/sampling_results_20261117/report.md及docs/5最新节。下方02:51启动中等为历史记录。
+
+> **2026-11-17 最新资源验证及正式启动配置**：12/16项完整规模资源测试全部退出0；每项10000训练样本、2epoch及90k候选LCMD/BAIT/双模型推理。12项861.60秒/PSS131.86GiB/最低可用571.57GiB；16项1041.31秒/PSS178.76GiB/最低可用522.32GiB。16项采用available内存策略，12项为strict，非纯单因素比较；不代表五轮收敛或辅助ensemble训练已验证。正式离线batch默认总16／GPU0–3每卡4／加载8／评分4，系统有效可用100GiB底线，无自有PSS上限。全局IO PSI>5%还须设备busy>=90%且queue>=16或await>=250ms持续60秒才停止；设备信息缺失回退strict20秒。memory PSI仅预警，低于可用100GiB停止；CPU负载准入保护保留。runner候选评分已接入公共槽，等待耗时独立记录。W&B离线，协议seed42_a866aef5d988（修复池、逐轮refit、normalized-best、保留last）；旧结果不覆盖。资源报告resource_profiles/scoring_limited_12_16_20261117/report.md。下方更低并发及“未接入/运行中”均为历史记录。
+
+> **2026-11-17 追查11月14日中午12点左右异常（用户更正）**：确认历史scratch探针concurrent.py遮蔽标准库，PyTorch→asyncio→concurrent.futures误执行该文件；模块顶层Popen两个resources.py子进程，子进程再次import torch形成递归启动，父进程90秒超时无清理。11:52启动、11:54父退出，后代日志最后写到13:14；14:53快照可用682GiB但load1=162.18。该缺陷是强过载解释，但没有12点进程/内存采样，且账号无权读取kern.log.1/syslog.1，不能断言触发OOM或唯一根因。原脚本已按原字节/哈希保全并隔离为concurrent_probe_20261114.py.disabled，静态/真实标准库导入恢复；未重放探针或启动GPU。报告analysis/incident_20261114_1200/report.md。临时入口不要使用concurrent.py/asyncio.py/multiprocessing.py等遮蔽标准库的名字，子进程启动须有main guard和异常清理；禁止通过重放递归链验证。
+
+> **2026-11-16 用户新要求已完成：按剩余内存控制**：已取消BatchMemoryGuard固定96GiB自有内存上限，PSS仅记录，旧SAMPLING_BATCH_MAX_PSS_GIB也不再影响生产；可用内存128GiB底线及持续IO/内存PSI保护保留。模拟PSS200GiB/可用400GiB继续的回归通过，总22项通过。IO4/6/8同流程8项加载379.43/299.19/211.40秒，IO8比IO4缩短44.28%；默认总8项／每卡2项／IO8。IO4完整资源阶段含2epoch及90k评分，8项退出0，PSS峰90.22GiB、最低可用600.24GiB；IO6/8仅加载，按设计停止。全部是warm-cache单次诊断，无冷缓存/五轮吞吐结论；探针已释放，未启动正式重训。报告resource_profiles/io_scaling_available_memory_20261116/report.md。下方96GiB及IO3是此前历史规则，不能重新引入。
+
+> **2026-11-16 并发复测完成**：新离线默认总8项／每卡2项／重加载3项，共享任务队列。IO2下8项完整规模2epoch训练及90k LCMD/BAIT/ensemble推理退出全0，PSS峰91.61GiB、最低可用578.13GiB；IO3加载比IO2缩短22.44%（739.23→573.33秒），仅warm-cache诊断，未覆盖IO3完整五轮或辅助训练。守护保留96GiB自有PSS/128GiB可用底线，新增IO full PSI>5%或memory some PSI>1%持续20秒只停止登记进程组。22项CPU回归通过；未启动正式重训，不保证冷缓存或其他用户突发负载下绝对安全。报告resource_profiles/io_concurrency_comparison_20261116/report.md及docs/BUDDING_REL_L2_BATCH_2026-11-15.md。
+
+> **2026-11-16 数值修复已完成**：生产BDF默认1e-8/1e-10，已知TEM1总量异常同输入1e-10/1e-12重试，每次5秒最多两次；失败补采至足量，有限负值不丢弃。mutation3/LHS8共11条已发布`_numerical_qc/dataset.json`修补视图，原池不动，不复制全轨迹。新默认协议seed42_a866aef5d988，四缓存硬链接、输入/ID/切分及原126real参考保持；10项旧实验曾用错误标签，需区分数据修复与normalized-best迁移的重训范围。17项CPU回归通过，未启动正式训练。详见docs/NUMERICAL_POOL_REPAIR_2026-11-16.md。
+
+> **2026-11-16 用户确认保留末epoch纯权重**：共享训练每轮最后epoch额外保存一次state_dir/last_weights.ckpt，含实际预处理契约、无optimizer/scheduler/callback状态；best仍rounds/round_XX/model.ckpt并用于后续选样。完成后仍删resume，meta保存best_epoch与last路径/epoch/哈希；缺失/改动last拒绝直接复用完成缓存。26项定向CPU回归通过，未给历史实验伪造last，未启动正式训练。复核生成哈希及磁盘数据：TEM1总量GAL参数范围[2,8]、部分初值约束确实存在；完整池仿真出口没有逐时间总量约束检查。异常为求解精度问题，源池暂未修改。
+
+> **2026-11-16 最新全流程审计**：20万轨迹逐块审计发现11条数值疑点（mutation 3条TEM1明显越总量、LHS 4条越总量和4条明显负尾），严格复算11/11恢复且Pattern组未变。最严重mutation row38053原TEM1峰125.75→严格4.17、总量4.19，未被上午任何方法训练；11条均不在固定val/test，7条曾被部分方法选入。建议定点修正后冻结长跑，当前源池未改、未启动正式训练。已补raw预测/validation非有限保护及真实epoch LR日志（lr_next另存），未改优化/损失/预算，45项CPU回归通过。详见docs/EXPERIMENT_FLOW_AUDIT_2026-11-16.md；不得把schema审计通过等同全部轨迹无数值伪影，也不得宣称历史real主结果被Inf污染。记录126real已被反复观察用于开发反馈、单seed等方法学边界。
+
+> **2026-11-16 最新checkpoint协议**：用户确认改用同池合成validation的归一化Relative L2最低值（`validation_metric=normalized_loss`、monitor=`val_loss_synth`），应用于主模型及辅助ensemble、逐轮评测和后续采样。每轮仍仅以累计已查询训练集重拟合P/Y归一化，轮内冻结并重新编码固定validation；物理验证Relative留作诊断，正式eval仍为物理MAE/MSE/Relative/Corr。epsilon0.01、无loss上限、梯度裁剪1及100/100/100/100/200epoch均保留。新协议`seed42_b5bff21cb8de`已从`seed42_02eebd57592f`派生，四个输入/切分缓存硬链接复用；新目录不覆盖上午16项。已核查两池首轮best均不同，模型相关方法要完整重跑；Random可复用原样本ID补训。本次只准备并验证代码/协议，没有启动整批正式训练。
+
+> **2026-11-16 上午旧协议完成**：此前用户选择物理逐样本/变量Relative L2选best（`val_sample_channel_rel_l2`），只看同池合成validation；验证推理float32与独立评测一致，训练仍bf16。协议`seed42_02eebd57592f`，eps0.01、相同源池/初始集/切分，四个缓存硬链接复用旧协议。offline批次默认总6项、每卡最多2项、IO2；实测2→4→6预处理后6项训练/评测PSS峰值67.744GiB，最低可用645.465GiB。入口内置owned-child内存watchdog，96GiB PSS/128GiB可用底线；仅信号停止本批隔离进程组，普通失败按CONTINUE_ON_ERROR处理。GPU4--7独占规则保留。正式16项已全部完成、退出码全0，tmux已退出；新旧32项/160轮/20160幅图数量核查通过。统一重算real的smooth eps0.01 Relative L2后，mutation新配置平均MAE/MSE/RelL2分别退化15.9%/35.0%/20.3%，LHS基本持平。新Random/Power最终best选56/36epoch；小分母物理通道主导评分，不能把变差单独归因于loss。结果及边界见analysis/sampling_protocol_comparison_20261116/report.md。
+
+> **2026-11-16 最新：恢复平滑分母，eps=0.01**：用户最终选择训练与物理评测均用 `sqrt(||target||_time²+0.01²)`，默认无loss上限、梯度范数裁剪1。训练仍在归一化空间，正式eval保留原始物理空间，数值相同不代表尺度相同。指标版本 `physical_sample_channel_rel_l2_smooth_eps001_v3`，输出schema v5；不与smooth eps0.1或max历史分数混算。checkpoint记录实际eps/规则，显式历史floor checkpoint仍可准确读取；新建训练均默认smooth eps0.01。此前max epsilon对照仅为历史诊断，不作为当前规则的验证。详见损失文档第12节。
+
+> **2026-11-15 最终指令：训练与评测均默认不截断**：RelativeL2Loss及其生产复用项默认max_clamp=None；eps=.1、梯度范数裁剪1、非有限loss检查和既有归一化保护保留。旧pooled指标的归档实现与Python引用均已删除，历史结果不改写。历史诊断可显式指定cap，不能把它用于新训练默认。新checkpoint记录training_objective_definition实际eps/cap/空间。下方“训练cap未改/旧指标归档”均为此前阶段记录；当前规则见损失文档第10节。
+
+> **2026-11-15 最新：仅用新物理Relative L2**：旧pooled指标已从生产计算／展示移除，仅归档历史复现。公共relative_l2_loss、Relative L2字段、CSV rel_l2和逐epoch物理监控统一为新sample/channel定义，不截断；新JSON/CSV/history有physical_sample_channel_rel_l2_v1版本，禁止与旧结果混算。训练默认cap10未动；用户要求的60epoch冷启动两臂对照已完整完成且两臂loss/梯度全部有限，详情见损失文档第9节。下方“旧pooled保留”是此前阶段记录，不代表当前生产实现。
+
+> **2026-11-15 eval最终口径与cap对照**：用户明确最终eval精度指标只在物理空间计算。新增优先指标`sample_channel_rel_l2`：逐样本／变量沿时间求`||error||/sqrt(||truth||²+.1²)`再平均，无cap；旧pooled Relative L2保留。JSON/CSV/预测图/performance/W&B已接入；独立eval直接读原始真值，不用编码／解码重建标签。归一化训练loss只作训练诊断，不混作物理指标。训练默认cap10未改：同一BAIT异常状态的两分支20epoch恢复实验显示取消cap修复CDC14T，却使合成validation整体物理误差退化，不能直接全局移除。详见docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md第7/8节。未覆盖旧正式结果、未重启正式批次。
+
+> **2026-11-15纯Relative L2批次**：用户要求后续默认训练损失rel_l2（原hybrid=MSE+0.2rel）。新日志train/val/test归一化loss统一现有RelativeL2Loss，MSE另存诊断，物理评测/验证选checkpoint口径保留。GPU0–3共16项8baseline×2pool，最多4并行、2重加载、2绘图worker/项；watchdog自有进程树PSS上限96GiB、有效MemAvailable底线128GiB。源池不重生成，新协议seed42_bb035a147b38硬链接旧输入/划分，旧8项归档experiments/archive/budding_sampling_hybrid_mse_rel_20261115。详见docs/BUDDING_REL_L2_BATCH_2026-11-15.md。
+
+> **2026-11-15 逐epoch监控**：用户要求恢复完整旧式loss信息。主模型每epoch只读评测同池test和real，日志含train/val_synth/test_synth/test_real/test_real_denorm及验证macro、LR/耗时。测试不参与选checkpoint/梯度/采样；checkpoint仍由验证macro选择。只读监控独立在utils/training/monitoring.py，分batch、不复制轨迹并恢复RNG；aux成员不重复评测。旧8项缺失的逐epoch测试值不能补造；仅新训练完整记录。详见docs/SAMPLING_OUTPUTS_2026-11-14.md末节。
+
+> **日志与指标展示**：完整池结果排序real_mutants→synth_test→cross_pool_test；默认仅log_event阶段事件有时间戳，普通输出和EPOCH不自动加。EPOCH去重复别名、简化小数，CSV/W&B精度不改。已完成日志原文压缩保留于_state/train.original.log.gz；展示整理不得改指标数值或冒充重训。
+
+> **2026-11-14 输出整理**：完整池benchmark每轮输出model.ckpt/history.csv/loss.png/dataset.json/selection.json/eval；eval含real及同来源合成test逐样本CSV。恢复/辅助模型/W&B集中_state，轨迹仅引用源池；不得恢复重复快照和summary JSON。原样式双轴loss准确区分validation与test。详见docs/SAMPLING_OUTPUTS_2026-11-14.md。
+
+> **2026-11-14 用户新增基线约束**：正式采样baseline必须在项目内独立实现，不得import、动态exec或读取`baselines/sampling`参考代码执行；也不通过已安装作者包绕过此要求。官方论文/代码仅用于开发对照验证，参考源码不得随本轮修改。将来新增baseline同样遵守。当前正式实验已确认：FNO下Random/Uncertainty/LCMD-LL/BAIT-LL × mutation/LHS，共8项；验证显存、并发和实现后再启动。
+
+> **2026-11-14 共享服务器保护**：用户报告并发I/O/内存压力影响登录。已在用户授权的6号GPU完成单进程完整规模资源探针：PSS峰值13.89GiB、GPU allocated峰值1.48GiB；6号卡已释放。默认从临时2/1调整到全局4实验、2重加载跨进程锁，动态检查有效MemAvailable、load、memory/IO PSI；批量子进程降低nice/ionice优先级。不得仅因显存够用增加并发，不清理全机page cache或终止其他用户任务。该限制是协作式调度，不能宣称已设置cgroup硬限额。诊断默认CPU单线程、CUDA不可见；GPU验证仅使用明确空闲且授权的卡。
+
+> **2026-11-14 用户确认验证范围**：mutation模型仅以mutation validation选checkpoint，LHS模型仅以LHS validation选checkpoint，测试仍报告两个来源。避免mutation训练中90维固定背景导致LHS输入Z约2.5e7而支配共同验证均值。当前协议`seed42_18bf9a3289fa`，原split/initial/input缓存与上一协议硬链接同一inode，源池/归一化算法不改。
+
+> **GPU独占规则（用户明确要求）**：4、5、6、7号卡每卡最多一个GPU计算进程，不能因显存空余启动第二个。同一进程内多模型可以顺序执行；绘图/监控子进程不能初始化CUDA。当前用户仅额外授权6号卡进行单项资源测试，正式实验仍按0–3号卡的既有约定。不要把6号卡用于同卡并发测试。
+
+> **2026-11-14 解耦规范**：遵从用户最新要求，按职责独立组织而非追求文件最少。通用训练为`utils/training/runner.py`，当前流程适配为`utils/sampling/benchmark/rounds.py`；候选生成、算法、流程、训练、评测相互分离。不要新建模型专用训练器，也不要把全部服务塞进CLI入口。旧在线引擎在`utils/archive/online/`，通过兼容别名支持Fission/历史重放。当前接口以`utils/README.md`为准。
+
+> **2026-11-14当前组织**：用户已确认统一采用`utils/sampling/`，作者基线放`baseline/`，项目方法放`ours/`。其余工具按`training/physics/evaluation/experiments`归类，旧Python模块路径由`utils/_compat.py`延迟路由，不再新增散落的旧模块。`run_al_budding.sh`默认完整池离线Benchmark，`SAMPLING_MODE=online`仅用于历史在线实验。下文1M池与旧实验默认值属于历史记录；当前协议及实现状态以`docs/BUDDING_SAMPLING_BENCHMARK_PLAN_2026-11-13.md`为准。
+
 # AGENTS.md — 出芽酵母细胞周期神经算子项目 AI Agent 工作指南
 
 > **适用对象**：面向所有介入本项目的 AI Agent（如 Claude, Gemini, GPT 等）与核心研发人员。
@@ -20,8 +82,8 @@
   - [4.1 统一 Forward 接口契约](#41-统一-forward-接口契约)
   - [4.2 标准基线模型体系 (`models/baselines/`)](#42-40-基线模型体系-modelsbaselines)
   - [4.3 30+ 原创生物算子体系 (`models/ours/`)](#43-30-原创生物算子体系-modelsours)
-- [五、损失函数与物理约束体系 (`utils/losses.py`)](#五损失函数与物理约束体系-utilslossespy)
-- [六、主动学习 (Active Learning) 体系 (`utils/al_callback.py`)](#六主动学习-active-learning-体系-utilsal_callbackpy)
+- [五、损失函数与物理约束体系 (`utils/training/losses.py`)](#五损失函数与物理约束体系-utilslossespy)
+- [六、主动学习 (Active Learning) 体系 (`utils/archive/online/legacy.py`)](#六主动学习-active-learning-体系-utilsal_callbackpy)
   - [6.1 1M 免预仿真纯参数空间候选池架构](#61-1m-免预仿真纯参数空间候选池架构)
   - [6.2 当前在线策略与官方对齐状态](#62-当前在线策略与官方对齐状态)
 - [七、数据生成、归一化与生物网络图谱 (`data/`)](#七数据生成归一化与生物网络图谱-data)
@@ -47,8 +109,8 @@
 | 代码类型 | 必须存放的目标目录 | 示例 / 说明 | 注册与合规要求 |
 |:---|:---|:---|:---|
 | **神经网络模型** | `models/baselines/` 或 `models/ours/` | 如新基线 `mamba_no.py`，新原创 `bio_refiner_v3.py` | 必须在 [models/yeast_lit_module.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/models/yeast_lit_module.py) 的 `MODEL_REGISTRY` 中注册，并提供标准 `forward_ic_time` 接口。 |
-| **损失函数 / 物理约束** | `utils/losses.py` | 如新损失 `AdaptivePhaseLoss` | 必须在 [utils/losses.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/losses.py) 的 `LOSS_REGISTRY` 中注册，支持课程学习权重调度。 |
-| **主动学习策略 / 物理残差** | `utils/active_learning/` / `utils/ode_residual_engine.py` | 如新 AL4PDE 策略实现 | 策略在 `utils/active_learning/strategies/` 实现并注册到 `registry.py`；统一返回 SelectionPlan，仿真/入库由 engine 驱动。`al_callback.py` 只保留兼容导入。 |
+| **损失函数 / 物理约束** | `utils/training/losses.py` | 如新损失 `AdaptivePhaseLoss` | 必须在 [utils/training/losses.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/training/losses.py) 的 `LOSS_REGISTRY` 中注册，支持课程学习权重调度。 |
+| **主动学习策略 / 物理残差** | `utils/sampling/` / `utils/physics/residuals.py` | 如新 AL4PDE 策略实现 | 作者基线在 `utils/sampling/baseline/`，项目方法在 `utils/sampling/ours/`；方法统一登记到 `sampling/registry.py`；当前选择器返回 SamplingResult，查询由 query.LabelOracle负责，流程调用公共训练/评测服务；历史 SelectionPlan/engine 仅在archive/online。`al_callback.py` 只保留兼容导入。 |
 | **数据生成器 / 空间采样器** | `data/` | 如 `gibbs_sobol_sampler.py`, `bams_dataset_generator.py` | 保持模块化独立运行，支持 `--seed` 与 `--data_dir` 参数。 |
 | **持久生产级分析 / 评测工具** | `scripts/analysis/` 或 `scripts/eval/` | 如 `analyze_experiments.py`, `eval_ensemble_benchmark.py` | 必须使用 `argparse` 提供标准命令行参数，长期保留供科研人员复用。 |
 | **自动化单元测试 / 回归测试** | `tests/` | 如 `test_bio_refiner_causal.py`, `verify_training_loop.py` | 供开发验证与 CI 冒烟测试使用，已被 `.gitignore` 忽略。 |
@@ -58,8 +120,8 @@
 > [!IMPORTANT]
 > **每当向代码库新增功能或产生新的实验结果时，必须在对应的 `docs/` 文档中同步更新：**
 > 1. **新增模型/模块**：在 `models/` 编写并注册新模型后，必须同步在 [docs/1_ARCHITECTURE_AND_MODELS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/1_ARCHITECTURE_AND_MODELS.md) 补充模型架构说明、输入输出、参数量与调用命令。
-> 2. **新增主动学习策略**：在 `utils/active_learning/strategies/` 实现并注册新策略后，必须同步在 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md) 补充数学设计、采样目标函数与实测性能。
-> 3. **新增损失函数/物理约束**：在 `utils/losses.py` 新增损失后，必须同步在 [docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md) 补充数学公式与梯度特性。
+> 2. **新增主动学习策略**：在 `utils/sampling/ours/` 实现并注册新策略后，必须同步在 [docs/2_ACTIVE_LEARNING_GUIDE.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/2_ACTIVE_LEARNING_GUIDE.md) 补充数学设计、采样目标函数与实测性能。
+> 3. **新增损失函数/物理约束**：在 `utils/training/losses.py` 新增损失后，必须同步在 [docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/3_LOSSES_AND_PHYSICS_CONSTRAINTS.md) 补充数学公式与梯度特性。
 > 4. **新增数据生成器/归一化**：在 `data/` 编写新生成引擎或验证归一化后，必须同步在 [docs/4_DATASETS_AND_NORMALIZATION.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/4_DATASETS_AND_NORMALIZATION.md) 补充采样空间分布与物理基准。
 > 5. **实验完成/评测出炉**：任何批次实验（如 `run_pipeline.sh`, `run_al_budding.sh` 等）运行完毕后，必须运行分析脚本提取关键指标，并同步更新至 [docs/5_BENCHMARK_AND_LEADERBOARD.md](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/5_BENCHMARK_AND_LEADERBOARD.md)（与对应的专门指南中），严禁只在终端汇报而导致专著文档脱节！
 
@@ -171,9 +233,9 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 
 ---
 
-## 五、损失函数与物理约束体系 (`utils/losses.py`)
+## 五、损失函数与物理约束体系 (`utils/training/losses.py`)
 
-[utils/losses.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/losses.py) 注册了 17 种现代损失函数（统一通过 `--loss_type` 调用）：
+[utils/training/losses.py](file:///home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/utils/training/losses.py) 注册了 17 种现代损失函数（统一通过 `--loss_type` 调用）：
 
 | 损失名称 (`loss_type`) | 对应实现类 | 核心组成与设计目的 |
 |:---|:---|:---|
@@ -193,9 +255,9 @@ python scripts/analysis/analyze_experiments.py --exp_dir experiments/al_pure_ran
 
 ---
 
-## 六、主动学习 (Active Learning) 体系 (`utils/al_callback.py`)
+## 六、主动学习 (Active Learning) 体系 (`utils/archive/online/legacy.py`)
 
-**当前组织**：`utils/active_learning/` 按 engine、pool、prediction/features、oracle、dataset/io、strategies 拆分；旧 `utils/al_callback.py` 为 16 行兼容入口。新增策略只向 registry 注册，CLI/ensemble 需求由同一清单派生。`tune.py` 当前明确仅支持 `--al_strategy none`。接口、归档与验证见 [拆包说明](docs/AL_PACKAGE_REFACTOR.md)。
+**当前组织**：`utils/sampling/`只保留算法、契约、注册和流程；旧engine/pool/ODE查询器及兼容入口隔离在`utils/archive/online`。新规则通过统一受限视图接入，不在算法中调用训练、写数据或查询real。以下6.1–6.2主要描述历史在线协议。`tune.py` 当前明确仅支持 `--al_strategy none`。接口、归档与验证见 [拆包说明](docs/AL_PACKAGE_REFACTOR.md)。
 
 ### 6.1 1M 免预仿真纯参数空间候选池架构
 
@@ -206,7 +268,7 @@ Budding 仿真后幅值拒绝已取消，旧六种启发式策略的参数门控
 
 ### 6.2 当前在线策略与官方对齐状态
 
-**2026-10-31机制批次**：新增`ours_pattern_balance/context/support`及`ours_sensitivity`，辅助分类器在`utils/active_learning/auxiliary/`；核心只接收synthetic train和无标签pool视图。默认`AL_SUITE=mechanism`四项、`mechanism_v1_full`独立目录；旧清单可显式选择。四项mechanism及Event重跑已在2026-10-31完整完成，预算/辅助模型/审计核对通过，见[用时与结果](docs/AL_MECHANISM_COMPLETION_2026-10-31.md)及[实现与验证](docs/AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+**2026-10-31机制批次**：新增`ours_pattern_balance/context/support`及`ours_sensitivity`，辅助分类器在`utils/sampling/ours/auxiliary/`；核心只接收synthetic train和无标签pool视图。默认`AL_SUITE=mechanism`四项、`mechanism_v1_full`独立目录；旧清单可显式选择。四项mechanism及Event重跑已在2026-10-31完整完成，预算/辅助模型/审计核对通过，见[用时与结果](docs/AL_MECHANISM_COMPLETION_2026-10-31.md)及[实现与验证](docs/AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
 保留原 12 种在线策略：`al4pde_random`、`al4pde_uncertainty`、`al4pde_diversity`、`maal`、`al4pde_mass`、`al4pde_novelty`、`al4pde_residual`、`al4pde_residual_diversity`、`al4pde_bifurcation`、`al4pde_bifurcation_entropy`、`al4pde_event_entropy`、`al4pde_fisher_oed`；四个短别名继续兼容。
 
 新增 `al4pde_power`、`al4pde_bait`、`al4pde_lcmd`，新增预测轨迹`al4pde_max_dist`后加上`ours_response`当前合计17种在线策略；Power 复用独立 ensemble，BAIT/LCMD 使用预测轨迹共享投影及实际 bmdal 选择器；LCMD 无 posterior transform。`coreset_maxdist` 尚未实现，不能用输出轨迹替代 latent 冒充支持。官方 8 个预置配置及未移植项见 [清单](docs/AL_POWER_BAIT_AND_OFFICIAL_INVENTORY.md)。
@@ -289,3 +351,8 @@ untyped 补充组成，不从旧 NPZ 读取连边；默认 hybrid 为 226 条非
 AL精度边界：`_pool_initial_physical`用于精确来源保存（Budding float64），模型缓存由`refresh_model_inputs(dm)`统一生成float32；train.py每轮必须调用它，时间轴匹配IC dtype。不能直接normalize_y原始float64初值后推理；此次六策略首轮故障及真实checkpoint验证见docs/AL_DTYPE_FIX_2026-10-28.md。
 
 2026-10-30 新AL优化：默认 AL_SUITE=optimized，四个 global_* 策略＋六项中断重跑＋修正event；full预算不变，GPU0–3各一项，旧结果不可覆盖。方法/内存修复/验证见 docs/AL_OPTIMIZED_RESTART_2026-10-30.md。
+
+
+2026-11-17 02:51正式批次已在tmux `budding_sampling_formal_20261117`启动，输出 `/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/seed42_a866aef5d988/`；批日志 `batch/launcher.log`，单项 `<pool>/<method>/seed_42/train.log`。45项资源CPU回归和3项小流程回归通过，dry-run16项及参考SHA核对通过。
+
+02:54复核：16个正式run进程均存活且WANDB_MODE=offline、GPU仅0–3；mutation/VeSSAL已完成首轮至少16epoch，loss有限，其余正在加载/预处理。启动核查记录batch/startup_verification.json。尚不能声称整批五轮完成或所有后续评分均通过。

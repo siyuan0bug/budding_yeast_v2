@@ -6,8 +6,8 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[3]))
 import torch
-from budding_yeast_v2.utils.checkpoint_evaluation import predict_real_checkpoints
-from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.utils.evaluation.checkpoints import predict_real_checkpoints
+from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
 
 
 def main():

@@ -16,8 +16,8 @@ import torch
 from budding_yeast_v2.eval import load_model_from_checkpoint
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.dataset_archive import open_dataset
-from budding_yeast_v2.utils.active_learning import ActiveLearningEngine
-from budding_yeast_v2.utils.active_learning.registry import build_strategy
+from budding_yeast_v2.utils.sampling import ActiveLearningEngine
+from budding_yeast_v2.utils.sampling.registry import build_strategy
 
 
 def main():

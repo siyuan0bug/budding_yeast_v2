@@ -1,4 +1,4 @@
-"""Sampling-module graph with restored equation-based functional controls."""
+"""Sampling-module graph restricted to currently active mutation modules."""
 import numpy as np
 from .catalog import GROUP_BY_NAME, GENE_NAMES
 
@@ -53,6 +53,11 @@ MODULE_EDGES = [('CLB2', 'CDC20', '+'),
  ('SBF_MBF', 'CLN2', '+'),
  ('SBF_MBF', 'CLB5', '+'),
  ('SBF_MBF', 'PDS1', '+')]
+
+# Inactive mutation nodes are excluded from selection graphs. This is not the
+# molecular ODE/relation graph; the corresponding biological states remain.
+MODULE_EDGES = [edge for edge in MODULE_EDGES
+                if edge[0] in GROUP_BY_NAME and edge[1] in GROUP_BY_NAME]
 
 GENE_WEIGHT_ARM = 'uniform'      # 'uniform' (v5.1 default) | 'degree' | 'engine'
 

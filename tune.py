@@ -22,7 +22,7 @@ from typing import Dict, Any
 # 确保能从父目录导入 budding_yeast_v2 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from budding_yeast_v2.utils.active_learning.registry import CLI_STRATEGIES
+from budding_yeast_v2.utils.sampling.registry import CLI_STRATEGIES
 
 import torch
 import numpy as np
@@ -39,7 +39,7 @@ except ImportError:
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule, MODEL_REGISTRY
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.preprocessing_contract import TRAIN_FIT_SCOPE
-from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
 
 
 def sample_model_aware_hparams(trial: optuna.Trial, model_name: str) -> Dict[str, Any]:

@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt
 from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.models.components.hano import REACTIONS, NUM_REACTIONS
-from budding_yeast_v2.utils.physics_eqns_torch import params_tensor_to_dict
+from budding_yeast_v2.utils.physics.budding import params_tensor_to_dict
 
 EVENT_NAMES = ['ev1_division', 'ev2_S_exit', 'ev3_DNA_replication', 'ev4_spindle']
 REL_NAMES = ['complex', 'kinase', 'phosphatase', 'transcription', 'ubiquitination', 'gk_switch']

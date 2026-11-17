@@ -7,7 +7,7 @@ import re
 from .dataset_utils import load_yeast_dataset_universal
 from .yeast_graph import build_yeast_graph
 from .normalization import (check_norm_type, transform_y, normalize_y, normalize_p,
-                            denormalize_y, denormalize_p)
+                            denormalize_y, denormalize_p, NormalizationStats)
 from .preprocessing_contract import (dataset_contract, make_preprocessing_state,
                                      validate_preprocessing_state, assert_compatible,
                                      check_fit_scope, TRAIN_FIT_SCOPE)
@@ -142,7 +142,9 @@ class YeastDataModule(pl.LightningDataModule):
         #    全部划入测试集 (test_real); 新训练的归一化统计量只用合成训练拆分。
         #    这不保证等价输入跨拆分隔离，重复样本分组策略尚未修改。
         # ================================================================
-        has_lhs = any('_LHS_' in str(name) for name in mutant_names)
+        # Independent-parameter LHS has no real-mutant parent families.
+        has_lhs = ('sampling_paradigm' not in metadata
+                   and any('_LHS_' in str(name) for name in mutant_names))
         self.is_mass_dataset = not has_lhs
 
         if 'is_real' in metadata:
@@ -287,29 +289,14 @@ class YeastDataModule(pl.LightningDataModule):
                 value = state.get(key)
                 setattr(self, key, value.clone() if isinstance(value, torch.Tensor) else None)
         else:
-            if self.norm_type == 'asinh_scale':
-                sub_n = min(len(fit_indices), 20000)
-                s_c_np = np.quantile(np.maximum(Y[fit_indices[:sub_n]].numpy(), 0.0),
-                                     0.90, axis=(0, 2), keepdims=True)
-                self.s_c = torch.tensor(np.maximum(s_c_np, 0.01), dtype=torch.float32)
-            Y_trans = transform_y(Y[fit_indices], self.norm_type, self.s_c)
-            self.mean_y = Y_trans.mean(dim=(0, 2), keepdim=True)
-            self.std_y = Y_trans.std(dim=(0, 2), keepdim=True) + 1e-6
-            P_fit = Params[fit_indices]
-            P_trans = torch.log10(P_fit.clamp(min=1e-8)) if self.norm_type == 'asinh_scale' else P_fit
-            self.p_mean = P_trans.mean(dim=0, keepdim=True)
-            self.p_std = P_trans.std(dim=0, keepdim=True)
-            if self.norm_type in ('log1p', 'linear'):
-                self.p_std = self.p_std + 1e-6
-            del Y_trans
+            NormalizationStats.fit(Params[fit_indices], Y[fit_indices], self.norm_type).bind(self)
         print(f'📐 Normalization: {self.norm_type}; fit_scope={self.fit_scope}; '
               f'{"restored checkpoint statistics" if self._expected_preprocessing is not None else f"fit rows={len(fit_indices)}"}')
         Y_norm = self.normalize_y(Y)
         Params_norm = self.normalize_p(Params)
 
-        IC = Y_norm[:, :, 0:1].expand(-1, -1, T_STEPS)
-        t_grid = torch.linspace(0, 1, T_STEPS).reshape(1, 1, T_STEPS).expand(num_mutants, num_vars, T_STEPS)
-        X = torch.stack([IC, t_grid], dim=2)
+        initial = metadata.get('y_init', raw_data[:, :, 0])
+        X, _ = NormalizationStats.from_datamodule(self).encode(param_conds, initial, T_STEPS)
 
         # 映射 Pattern 分岔形态标签为 0 (A), 1 (B), 2 (C)
         def _to_pat_id(lbl):
@@ -325,6 +312,11 @@ class YeastDataModule(pl.LightningDataModule):
         pattern_ids = torch.tensor([_to_pat_id(lbl) for lbl in pattern_labels], dtype=torch.long)
 
         self.train_dataset_synth = TensorDataset(X[train_idx_synth], Params_norm[train_idx_synth], Y_norm[train_idx_synth], pattern_ids[train_idx_synth])
+        if 'sample_weights' in metadata:
+            weights = torch.as_tensor(metadata['sample_weights'], dtype=torch.float32)
+            if weights.shape != (num_mutants,) or not torch.isfinite(weights).all() or (weights < 0).any():
+                raise ValueError('Dataset sample_weights are invalid or misaligned')
+            self.train_dataset_synth = TensorDataset(*self.train_dataset_synth.tensors, weights[train_idx_synth])
         self.val_dataset_synth = TensorDataset(X[val_idx_synth], Params_norm[val_idx_synth], Y_norm[val_idx_synth])
         self.test_dataset_synth = TensorDataset(X[test_idx_synth], Params_norm[test_idx_synth], Y_norm[test_idx_synth])
         self.test_dataset_real = TensorDataset(X[test_idx_real], Params_norm[test_idx_real], Y_norm[test_idx_real])
@@ -439,9 +431,14 @@ class YeastDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset_synth, batch_size=self.batch_size_synth,
-                          shuffle=True, drop_last=True, num_workers=self.num_workers, pin_memory=True)
+                          shuffle=True, drop_last=getattr(self,'drop_last_train',True),
+                          generator=getattr(self,'loader_generator',None),
+                          num_workers=self.num_workers, pin_memory=True)
 
     def val_dataloader(self):
+        if hasattr(self, '_external_validation'):
+            return [DataLoader(dataset,batch_size=self.val_batch_size,shuffle=False,num_workers=self.num_workers)
+                    for dataset in self._external_validation]
         return [
             DataLoader(self.val_dataset_synth, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
@@ -450,6 +447,20 @@ class YeastDataModule(pl.LightningDataModule):
             DataLoader(self.test_dataset_real, batch_size=self.val_batch_size,
                        shuffle=False, num_workers=self.num_workers, pin_memory=True),
         ]
+
+    def set_validation_data(self, domains, metric='sample_channel_rel_l2'):
+        """Attach only permitted synthetic validation domains; never refit stats."""
+        stats = NormalizationStats.from_datamodule(self)
+        self._external_validation = []
+        for inputs, truth in domains:
+            x, p = stats.encode(inputs.params, inputs.initial, self.T_STEPS)
+            physical = torch.as_tensor(truth,dtype=torch.float32)
+            self._external_validation.append(TensorDataset(x,p,stats.targets(physical),physical))
+        if not self._external_validation or any(not len(part) for part in self._external_validation):
+            raise ValueError('Synthetic validation domains must be nonempty')
+        if metric not in ('normalized_loss','sample_channel_rel_l2','macro_trajectory_rel_l2'):
+            raise ValueError('Unknown synthetic validation metric')
+        self.validation_metric = metric
 
     @property
     def test_data(self):

@@ -12,7 +12,7 @@ from budding_yeast_v2.data.dataset_archive import read_dataset_rows
 from budding_yeast_v2.data.normalization import normalize_p, normalize_y, denormalize_y
 from budding_yeast_v2.data.systems.budding.pattern_groups import pattern_group_metadata
 from budding_yeast_v2.eval import load_model_from_checkpoint
-from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
 
 
 def main():

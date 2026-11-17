@@ -18,7 +18,7 @@ from budding_yeast_v2.data.systems.budding.parameters import PARAM_KEYS
 from budding_yeast_v2.data.systems.budding.real_mutants import REAL_MUTANTS
 from budding_yeast_v2.data.systems.budding.specification import BuddingSystem
 from budding_yeast_v2.data.systems.budding.distributions.ranges import (
-    MC_MAX,MC_MIN,GAL_CLB2,CLB2_DB_RESIDUAL,MEN_TS_RESIDUAL,NET1_BINDING_RESIDUAL)
+    MC_MAX,MC_MIN,GAL_CLB2,CLB2_DB_RESIDUAL,MEN_TS_RESIDUAL,NET1_BINDING_RESIDUAL,EXACT_ZERO_TARGETS)
 
 GAL_KEYS=dict(CLN2='ksn2p',CLN3='C0',CLB2='ksb2p',CLB5='ksb5p',SIC1='ksc1p',CDC6='ksf6p',
               SWI5='ksswip',CDC20='ks20p',CDC14='ks14',NET1='ksnet',TEM1='Tem1T',CDC15='Cdc15T',
@@ -36,7 +36,8 @@ GAL_BOUNDS['CLB2']=GAL_CLB2
 
 
 def support(gene,mode,branch=''):
-    """Exact source bounds at the audit date; distinct from midpoint quantiles."""
+    """Current MA effective-control bounds, including fixed channel closures."""
+    if (gene,mode) in EXACT_ZERO_TARGETS:return 0.,0.
     if mode=='MC':return float(MC_MIN),float(MC_MAX[gene])
     if mode=='GAL-MC':return .24,1.2
     if mode=='GAL-OE':return GAL_BOUNDS[gene]

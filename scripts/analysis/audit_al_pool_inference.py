@@ -15,8 +15,8 @@ from torch.utils.data import TensorDataset
 
 from budding_yeast_v2.eval import load_model_from_checkpoint
 from budding_yeast_v2.data.normalization import normalize_p, normalize_y
-from budding_yeast_v2.utils.active_learning import ActiveLearningEngine
-from budding_yeast_v2.utils.active_learning.registry import strategy_spec
+from budding_yeast_v2.utils.sampling import ActiveLearningEngine
+from budding_yeast_v2.utils.sampling.registry import strategy_spec
 
 STRATEGIES = ('al4pde_random','al4pde_uncertainty','al4pde_power',
               'al4pde_max_dist','al4pde_lcmd','al4pde_bait','ours_response')

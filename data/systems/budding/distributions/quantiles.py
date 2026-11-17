@@ -2,17 +2,19 @@
 import numpy as np
 from ..catalog import require_mutation
 from scipy.stats import beta, norm
-from .ranges import (copy_quantile,log_quantile,GAL_CLB2,CLB2_DB_RESIDUAL,
+from .ranges import (EXACT_ZERO_TARGETS,copy_quantile,log_quantile,GAL_CLB2,CLB2_DB_RESIDUAL,
                      MEN_TS_RESIDUAL,NET1_BINDING_RESIDUAL)
 
-def sample_scaling_factor_sobol(mode, g_name, u):
+def sample_scaling_factor_sobol(mode, g_name, u, *, exact_zero=True):
     """
-    Maps a low-discrepancy uniform coordinate u in [0, 1] to the exact physiological
-    parameter scaling factor via Inverse-CDF (Quantile Transformation).
-    Matches mutant_aware.py ranges and distributions 100% identically.
+    Map a probability coordinate to the selected MA strength law. Fixed channel
+    closures return zero. exact_zero=False retains the historical scalar law
+    used by the separate MASS profile's compatibility fallback.
     """
     if g_name is not None:
         require_mutation(g_name, mode)
+    if exact_zero and (g_name,mode) in EXACT_ZERO_TARGETS:
+        return 0.0
     u = np.clip(u, 1e-06, 1.0 - 1e-06)
     if mode == 'GAL-MC':
         return copy_quantile(g_name,u,mode)

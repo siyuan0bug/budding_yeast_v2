@@ -98,7 +98,7 @@ def main():
     import torch
     from budding_yeast_v2.eval import load_model_from_checkpoint
     from budding_yeast_v2.data.normalization import normalize_y,normalize_p,denormalize_y
-    from budding_yeast_v2.utils.metrics import calculate_metrics
+    from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
     torch.set_num_threads(4)
     checkpoint=torch.load(run.checkpoint,map_location='cpu',weights_only=False,mmap=True);pp=checkpoint['preprocessing_contract']
     model,_=load_model_from_checkpoint(run.checkpoint,device='cpu',graph_load_policy='checkpoint');model.to(args.device).eval()

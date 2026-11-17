@@ -1,5 +1,6 @@
 """MA structure-aware selection, unchanged quotas, mixture and convergent coordination."""
 import numpy as np
+from ..catalog import expand_composites
 from ..catalog import GROUP_BY_NAME, GENE_NAMES, COMPOSITE_ELIGIBLE
 from .. import topology as graph
 from .common import QuotaPicker, next_L1_cell, _sample_mode, _resolve_conflicts
@@ -262,17 +263,7 @@ def sample_mass_mutant(level=1, *, ma):
             pairs = _assign_convergent_modes(genes)
         else:
             pairs = [(g, _sample_mode(g)) for g in genes]
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = GROUP_BY_NAME.get(g, {}).get('modes', [])
-        if g in COMPOSITE_ELIGIBLE and np.random.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(np.random.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(np.random.choice(synth))))
+    expanded = expand_composites(pairs, np.random)
     pairs = expanded
     pairs = _resolve_conflicts(pairs)
     if not pairs:

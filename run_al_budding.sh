@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Budding AL batch pipeline: edit SEEDS and EXPERIMENTS below, then run once.
-# Same GPU: bounded concurrent queue. Different GPUs: concurrent queues.
+# Budding sampling benchmark: list | prepare | run | generate | dynamic | extensions | batch (default).
+# Offline: --config JSON, --methods ..., --gpus 0 1 2 3; see utils/README.md.
+# Historical online mode: SAMPLING_MODE=online, then SEEDS/EXPERIMENTS below apply.
+# Bounded GPU slots pull work from a shared queue in the default offline mode.
 # DRY_RUN=1 prints all tasks without creating files or starting training.
 set -euo pipefail
 TASK_ROOT="${AL_SCRIPT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
@@ -9,9 +11,36 @@ export PYTHONPATH="$(dirname -- "$TASK_ROOT")${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 TASK_PYTHON="${PYTHON_BIN:-/home/users/zsy/.conda/envs/neuralop/bin/python}"
 
+# Complete labelled pools are the new default. Keep the historical online
+# parameter-pool workflow explicitly available for reproducing old experiments.
+SAMPLING_MODE="${SAMPLING_MODE:-offline}"
+if [[ "$SAMPLING_MODE" == offline ]]; then
+    # Host RAM/IO, rather than GPU RAM alone, limits experiment concurrency.
+    # 2026-11-17: 16 full-size resource workers passed; loading/scoring are separate slots.
+    export SAMPLING_MAX_TOTAL_JOBS="${SAMPLING_MAX_TOTAL_JOBS:-16}"
+    export SAMPLING_IO_CONCURRENCY="${SAMPLING_IO_CONCURRENCY:-8}"
+    export MAX_JOBS_PER_GPU="${MAX_JOBS_PER_GPU:-4}"
+    export SAMPLING_MIN_AVAILABLE_GIB="${SAMPLING_MIN_AVAILABLE_GIB:-100}"
+    if (( $# == 0 )); then set -- batch; fi
+    if [[ "$1" == extensions ]]; then
+        shift
+        exec "$TASK_PYTHON" "$TASK_ROOT/scripts/launch/run_sampling_extensions.py" "$@"
+    fi
+    if [[ "$1" == batch ]]; then
+        export SAMPLING_SCORING_CONCURRENCY="${SAMPLING_SCORING_CONCURRENCY:-4}"
+        export SAMPLING_IO_GUARD_POLICY="${SAMPLING_IO_GUARD_POLICY:-disk_correlated}"
+        export SAMPLING_MEMORY_PRESSURE_POLICY="${SAMPLING_MEMORY_PRESSURE_POLICY:-available}"
+    fi
+    exec "$TASK_PYTHON" -m budding_yeast_v2.utils.sampling.benchmark.cli "$@"
+elif [[ "$SAMPLING_MODE" != online ]]; then
+    echo 'SAMPLING_MODE must be offline or online' >&2
+    exit 2
+fi
+
 # ==================== Shared experiment settings ====================
 # Current cohort: balanced module/allele pool; regenerate an independent initial
 # dataset from this pool once, then share it across all model/strategy rows.
+TASK_LOSS_TYPE="${LOSS_TYPE:-rel_l2}"
 SEEDS=(42)                         # e.g. (42 1024 3407); SEED_LIST also overrides
 INIT_TRAIN="${INIT_TRAIN:-10000}"
 POOL_SIZE="${POOL_SIZE:-1000000}"; POOL_SEED="${POOL_SEED:-42}"
@@ -78,51 +107,51 @@ export AL_SIM_WORKERS="${AL_SIM_WORKERS:-4}"
 EXPERIMENTS=(
     # FNO only; preserve one model/training protocol across AL baselines.
     # GPU 0: random + output-trajectory MaxDist.
-    "fno hybrid_mse_rel al4pde_random 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-    "fno hybrid_mse_rel al4pde_max_dist 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+    "fno $TASK_LOSS_TYPE al4pde_random 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+    "fno $TASK_LOSS_TYPE al4pde_max_dist 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
     # GPU 1: ensemble Top-K + LCMD.
-    "fno hybrid_mse_rel al4pde_uncertainty 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-    "fno hybrid_mse_rel al4pde_lcmd 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+    "fno $TASK_LOSS_TYPE al4pde_uncertainty 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+    "fno $TASK_LOSS_TYPE al4pde_lcmd 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
     # GPU 2: power sampling + within-background response uncertainty.
-    "fno hybrid_mse_rel al4pde_power 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
-    "fno hybrid_mse_rel ours_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+    "fno $TASK_LOSS_TYPE al4pde_power 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+    "fno $TASK_LOSS_TYPE ours_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
     # GPU 3: BAIT.
-    "fno hybrid_mse_rel al4pde_bait 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+    "fno $TASK_LOSS_TYPE al4pde_bait 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
 )
 if [[ "$AL_SUITE" == research ]]; then
     EXPERIMENTS+=(
-        "fno hybrid_mse_rel ours_response_marginal 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-        "fno hybrid_mse_rel ours_response_feedback 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-        "fno hybrid_mse_rel ours_interaction 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
-        "fno hybrid_mse_rel ours_invariance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
-        "fno hybrid_mse_rel ours_event 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-        "fno hybrid_mse_rel ours_error 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-        "fno hybrid_mse_rel ours_coverage 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+        "fno $TASK_LOSS_TYPE ours_response_marginal 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno $TASK_LOSS_TYPE ours_response_feedback 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno $TASK_LOSS_TYPE ours_interaction 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+        "fno $TASK_LOSS_TYPE ours_invariance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+        "fno $TASK_LOSS_TYPE ours_event 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno $TASK_LOSS_TYPE ours_error 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno $TASK_LOSS_TYPE ours_coverage 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
     )
 fi
 if [[ "$AL_SUITE" == optimized ]]; then
     # Finished v1 runs remain in their original directories. Every row below
     # starts from round 0 under an independent optimized_v2 result namespace.
     EXPERIMENTS=(
-        "fno hybrid_mse_rel ours_global_interaction 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-        "fno hybrid_mse_rel al4pde_uncertainty 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-        "fno hybrid_mse_rel ours_event 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-        "fno hybrid_mse_rel ours_global_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-        "fno hybrid_mse_rel al4pde_power 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-        "fno hybrid_mse_rel ours_invariance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-        "fno hybrid_mse_rel al4pde_lcmd 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
-        "fno hybrid_mse_rel ours_global_tail 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
-        "fno hybrid_mse_rel ours_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
-        "fno hybrid_mse_rel al4pde_bait 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
-        "fno hybrid_mse_rel ours_global_calibrated 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+        "fno $TASK_LOSS_TYPE ours_global_interaction 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno $TASK_LOSS_TYPE al4pde_uncertainty 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno $TASK_LOSS_TYPE ours_event 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno $TASK_LOSS_TYPE ours_global_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno $TASK_LOSS_TYPE al4pde_power 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno $TASK_LOSS_TYPE ours_invariance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno $TASK_LOSS_TYPE al4pde_lcmd 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+        "fno $TASK_LOSS_TYPE ours_global_tail 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+        "fno $TASK_LOSS_TYPE ours_response 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+        "fno $TASK_LOSS_TYPE al4pde_bait 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+        "fno $TASK_LOSS_TYPE ours_global_calibrated 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
     )
 fi
 if [[ "$AL_SUITE" == mechanism ]]; then
     EXPERIMENTS=(
-        "fno hybrid_mse_rel ours_sensitivity 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
-        "fno hybrid_mse_rel ours_pattern_balance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
-        "fno hybrid_mse_rel ours_pattern_context 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
-        "fno hybrid_mse_rel ours_pattern_support 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
+        "fno $TASK_LOSS_TYPE ours_sensitivity 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 0"
+        "fno $TASK_LOSS_TYPE ours_pattern_balance 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 1"
+        "fno $TASK_LOSS_TYPE ours_pattern_context 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 2"
+        "fno $TASK_LOSS_TYPE ours_pattern_support 24 192 4 512 1e-3 $TASK_PRESET_EPOCHS $TASK_PRESET_FINAL $TASK_PRESET_WARMUP $TASK_PRESET_FINAL_WARMUP 3"
     )
 fi
 

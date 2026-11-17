@@ -7,8 +7,8 @@ import time
 
 import numpy as np
 
-from budding_yeast_v2.utils.active_learning.strategies.response import background_graph
-from budding_yeast_v2.utils.active_learning.strategies.query_design import interaction_blocks, invariance_edges
+from budding_yeast_v2.utils.sampling.ours.response import background_graph
+from budding_yeast_v2.utils.sampling.ours.query_design import interaction_blocks, invariance_edges
 
 
 def sha256(path):

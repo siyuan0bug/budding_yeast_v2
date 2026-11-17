@@ -42,7 +42,18 @@ def module_metadata(candidate, system):
             except ValueError:
                 invalid.append((gene, mode))
     if system=='budding':
-        from .budding.distributions.ranges import GAL_MC_BASE,GAL_MC_MIN,GAL_MC_MAX
+        from .budding.catalog import mutation_pairs_compatible
+        from .budding.distributions.ranges import EXACT_ZERO_TARGETS,GAL_MC_BASE,GAL_MC_MIN,GAL_MC_MAX
+        from .budding.parameters import get_default_params
+        defaults=get_default_params()
+        for gene,mode in pairs:
+            for key in EXACT_ZERO_TARGETS.get((gene,mode), ()):
+                if candidate.overrides.get(key,defaults[key]) != 0.:
+                    invalid.append((gene,mode))
+        for index, pair in enumerate(pairs):
+            for previous in pairs[:index]:
+                if pair[0] == previous[0] and not mutation_pairs_compatible(pair, previous):
+                    invalid.append(tuple(pair))
         components=[]
         for gene,mode in pairs:
             if mode!='GAL-MC':continue

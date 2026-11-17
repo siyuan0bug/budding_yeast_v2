@@ -1,5 +1,6 @@
 """Original uniform and weighted random selection algorithms; explicit backend argument."""
 import numpy as np
+from ..catalog import expand_composites
 
 def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_max=0.0001, *, ma):
     """
@@ -20,17 +21,7 @@ def sample_pure_random_mutant(level, rng, enable_ko_interval=False, ko_interval_
         modes = sorted(ma.GROUP_BY_NAME[g]['modes'].keys())
         m = str(rng.choice(modes))
         pairs.append((g, m))
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', {})
-        if g in ma.COMPOSITE_ELIGIBLE and rng.random() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(rng.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(rng.choice(synth))))
+    expanded = expand_composites(pairs, rng)
     pairs = expanded
     pairs = ma._resolve_conflicts(pairs, rng=rng)
     if not pairs:

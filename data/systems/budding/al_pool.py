@@ -21,7 +21,7 @@ from .quotas import enumerate_combinations, waterfill_quotas
 from .specification import BuddingSystem
 from .real_mutants import effective_inputs, is_duplicate_real_mutant
 from .samplers.rescue import parse_pairs, rescue_budding
-from .distributions.ranges import copy_support,GAL_MODES,AMPLITUDE_MODES,RANGE_FINGERPRINT
+from .distributions.ranges import EXACT_ZERO_TARGETS,copy_support,GAL_MODES,AMPLITUDE_MODES,RANGE_FINGERPRINT
 
 POOL_CONTRACT = 'budding_module_allele_equal_gene_ranges_2026_10_29'
 
@@ -37,7 +37,8 @@ def finite_options(cell, backend):
         return None
     pairs = parse_pairs(cell['alleles'])
     defaults = backend.defaults()
-    draws = [copy_support(gene,mode) if mode in ('MC','GAL-MC') else (1.,) for gene,mode in pairs]
+    draws = [copy_support(gene,mode) if mode in ('MC','GAL-MC') else
+             (0.,) if (gene,mode) in EXACT_ZERO_TARGETS else (1.,) for gene,mode in pairs]
     rows = {}
     for alphas in itertools.product(*draws):
         overrides = {}
@@ -143,7 +144,8 @@ def _propose_group(task):
         else:
             overrides={};alphas=[];coordinates=CoordinateRNG(point)
             for gene,mode in pairs[i]:
-                alpha=(backend.sample_scaling_factor_sobol(mode,gene,coordinates.random())
+                alpha=(0. if (gene,mode) in EXACT_ZERO_TARGETS else
+                       backend.sample_scaling_factor_sobol(mode,gene,coordinates.random())
                        if mode in AMPLITUDE_MODES else 1.)
                 alphas.append(float(alpha))
                 backend.apply_gene_mutation(gene,mode,alpha,defaults,defaults.copy(),overrides,rng=coordinates)

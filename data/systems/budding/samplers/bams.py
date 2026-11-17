@@ -1,5 +1,6 @@
 """Original signed walks and bifurcation bisection; refined overrides remain paired with their trajectory."""
 import numpy as np
+from ..catalog import expand_composites, first_mutation_conflict
 from ..catalog import GENE_NAMES, GROUP_BY_NAME
 from ..topology import MODULE_EDGES
 
@@ -38,24 +39,16 @@ def resolve_pair_conflicts(pairs, *, ma):
     rounds = 20
     while len(pairs) > 1 and rounds > 0:
         rounds -= 1
-        touched = {}
-        conflict = None
-        for i, (g, m) in enumerate(pairs):
-            ts = touch_set(g, m, ma=ma)
-            for pk in ts:
-                if pk in touched:
-                    conflict = (i, touched[pk])
-                    break
-                touched[pk] = i
-            if conflict is not None:
-                break
+        conflict = first_mutation_conflict(pairs)
         if conflict is None:
             break
         i, j = conflict
         gj = pairs[j][0]
         modes_j = list(GROUP_BY_NAME[gj]['modes'].keys())
         pairs[j] = (gj, str(np.random.choice(modes_j)))
-    return pairs
+    # The bounded redraw can exhaust its attempts; finish with the shared
+    # conflict/drop policy so it cannot export an unauthorized compound.
+    return ma._resolve_conflicts(pairs)
 
 def fast_eval_division_status(ovr, tf=180, *, ma):
     """
@@ -225,18 +218,7 @@ def sample_bams_skeleton_and_modes(level, *, ma):
                 visited.add(v)
                 mv = str(np.random.choice(list(GROUP_BY_NAME[v]['modes'].keys())))
                 pairs.append((v, mv))
-    COMPOSITE_ELIGIBLE = [n for n in GENE_NAMES if any((m in GROUP_BY_NAME[n]['modes'] for m in ('GAL-OE', 'MC'))) and any((m in GROUP_BY_NAME[n]['modes'] for m in ('db', 'PM', 'CA')))]
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = GROUP_BY_NAME.get(g, {}).get('modes', {})
-        if g in COMPOSITE_ELIGIBLE and np.random.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(np.random.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(np.random.choice(synth))))
+    expanded = expand_composites(pairs, np.random)
     pairs = resolve_pair_conflicts(expanded, ma=ma)
     return (pairs, strat_desc, bisection_spec)
 

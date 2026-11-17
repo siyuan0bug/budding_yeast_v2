@@ -1,4 +1,8 @@
-> **2026-10-31 AL辅助模型**：PatternClassifier为选样专用ExtraTrees，代码在`utils/active_learning/auxiliary/pattern_classifier.py`，不替换FNO或加入主模型选择。每轮保存joblib及train-only/OOF说明。[实现](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
+> **2026-11-14 模型与执行分离**：所有模型定义继续由`models/`负责；专用`offline_fno.py`已移除。通用训练服务接受模型factory和准备好的DataModule，复用`YeastLitModule`训练step/优化器/调度器，已用FNO与DeepONet检查。输出统一为Lightning checkpoint，`eval.py`共用`evaluation/checkpoints.py`加载。当前完整池的适配仅在`sampling/benchmark/rounds.py`。[职责边界](../utils/README.md)。
+
+> **2026-11-14 FNO采样特征接口**：`FNO.forward(x,p,return_features=True)`返回`(prediction,last_hidden)`，最后隐藏张量形状`B×128×T`，供LL配置选择器使用；默认`forward(x,p)`输出和state_dict键保持原样，新增`forward_ic_time`同义入口。采样时LL和预测轨迹分别按共同随机投影形成512维特征，同一轮train/pool复用投影。辅助分类器留在`utils/sampling/ours/auxiliary`，canonical RHS移到`utils/physics/canonical_rhs.py`。[当前目录与加载方式](../utils/README.md)。
+
+> **2026-10-31 AL辅助模型**：PatternClassifier为选样专用ExtraTrees，代码在`utils/sampling/ours/auxiliary/pattern_classifier.py`，不替换FNO或加入主模型选择。每轮保存joblib及train-only/OOF说明。[实现](AL_MECHANISM_IMPLEMENTATION_2026-10-31.md)。
 
 # 1. 出芽酵母神经算子代理模型系统架构与 标准基线与原创模型全景 (Architecture & Model Zoo)
 
@@ -107,7 +111,7 @@ width192/modes24/n4 时与 Plus 同为9,321,111个可训练参数元素（复数
                             │                                            │
                             ▼                                            ▼
 ┌──────────────────────────────────────────────┐    ┌──────────────────────────────────────────────┐
-│            utils/losses.py (损失计算)        │    │         utils/al_callback.py (主动学习)      │
+│            utils/training/losses.py (损失计算)        │    │         utils/archive/online/legacy.py (主动学习)      │
 │ - 17 种损失函数 (MSE, RelL2, GradNorm 等)    │    │ - 10 大生产级 AL4PDE 策略                    │
 │ - 可微物理方程与软事件掩码约束              │    │ - 1M 纯参数候选池内存映射与在线 ODE 标注     │
 └──────────────────────────────────────────────┘    └──────────────────────────────────────────────┘

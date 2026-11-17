@@ -60,7 +60,7 @@ NUM_VARS = 39
 
 # 参数键索引 (延迟导入避免循环依赖, 141 维)
 try:
-    from budding_yeast_v2.utils.physics_eqns_torch import PARAM_KEYS
+    from budding_yeast_v2.utils.physics.budding import PARAM_KEYS
     _P_IDX = {k: i for i, k in enumerate(PARAM_KEYS)}
 except Exception:  # pragma: no cover
     _P_IDX = {}
@@ -367,7 +367,7 @@ def verify_stoichiometry(n_checks=8, seed=0):
     验证化学计量分解的正确性: 对随机状态/参数,
     S @ true_flux_rates(y, p) 必须与 eqns_torch(y, p) 逐项一致。
     """
-    from budding_yeast_v2.utils.physics_eqns_torch import eqns_torch, params_tensor_to_dict
+    from budding_yeast_v2.utils.physics.budding import eqns_torch, params_tensor_to_dict
     from budding_yeast_v2.data.systems.budding.parameters import get_default_params
 
     torch.manual_seed(seed)

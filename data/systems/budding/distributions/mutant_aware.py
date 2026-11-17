@@ -1,7 +1,7 @@
 """Approved mutant-aware amplitudes; unmodified modes retain their prior laws."""
 import numpy as np
 from ..catalog import require_mutation
-from .ranges import (sample_copies,log_uniform,GAL_CLB2,CLB2_DB_RESIDUAL,
+from .ranges import (EXACT_ZERO_TARGETS,sample_copies,log_uniform,GAL_CLB2,CLB2_DB_RESIDUAL,
                      MEN_TS_RESIDUAL,NET1_BINDING_RESIDUAL)
 
 def sample_scaling_factor(mode, g_name=None, *, rng=None):
@@ -9,6 +9,8 @@ def sample_scaling_factor(mode, g_name=None, *, rng=None):
         require_mutation(g_name, mode)
     """Use the caller's stream; omitted rng preserves legacy global sampling."""
     rng = np.random if rng is None else rng
+    if (g_name,mode) in EXACT_ZERO_TARGETS:
+        return 0.0
     if mode == 'GAL-MC':
         return sample_copies(g_name,rng,mode)
     if mode == 'GAL-OE':
@@ -54,8 +56,6 @@ def sample_scaling_factor(mode, g_name=None, *, rng=None):
             return log_uniform(rng,MEN_TS_RESIDUAL)
         if g_name == 'NET1':
             return log_uniform(rng,NET1_BINDING_RESIDUAL)
-        if g_name in ('CDC20', 'CDC15', 'APC_Core'):
-            return float(rng.uniform(0.0, 0.01))
         u = rng.beta(a=0.5, b=2.0)
         return float(0.2 * u)
     elif mode == 'DAmP':
@@ -66,9 +66,7 @@ def sample_scaling_factor(mode, g_name=None, *, rng=None):
     elif mode == 'db':
         if g_name == 'CLB2':
             return log_uniform(rng,CLB2_DB_RESIDUAL)
-        elif g_name == 'PDS1':
-            return float(rng.uniform(0.0, 0.01))
-        elif g_name in ('CLB5', 'SIC1', 'PPX'):
+        elif g_name == 'PPX':
             return float(rng.uniform(0.0, 0.01))
         else:
             return 0.0

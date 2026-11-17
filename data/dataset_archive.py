@@ -54,6 +54,10 @@ def resolve_dataset_path(path):
 def open_dataset(path, *, allow_pickle=True):
     path = resolve_dataset_path(path)
     if path.suffix == '.json':
+        with path.open() as handle:
+            kind = json.load(handle).get('format')
+        if kind == 'yeast_sampling_selection':
+            return SelectionArchive(path)
         return ManifestArchive(path, allow_pickle=allow_pickle)
     return np.load(path, allow_pickle=allow_pickle)
 
@@ -74,6 +78,10 @@ def dataset_field_chunks(path, key='data', chunk_size=512):
     path = resolve_dataset_path(path)
     if path.suffix == '.json':
         with open_dataset(path) as archive:
+            if isinstance(archive, SelectionArchive):
+                for start in range(0, len(archive.selection_rows), chunk_size):
+                    yield start, archive.store.read(archive.selection_rows[start:start + chunk_size], (key,))[key]
+                return
             spec = archive.manifest['fields'][key]
             pieces = spec.get('pieces')
             if pieces is None:
@@ -109,6 +117,9 @@ def read_dataset_rows(path, rows, key='data'):
     rows = np.asarray(rows, dtype=np.int64)
     if rows.ndim != 1 or not len(rows) or (rows < 0).any():
         raise ValueError('Supply a nonempty one-dimensional set of row indices')
+    source=resolve_dataset_path(path)
+    if source.suffix=='.json' and json.loads(source.read_text()).get('format')==FORMAT:
+        return TrajectoryStore(source).read(rows,(key,))[key]
     result, copied = None, 0
     for start, block in dataset_field_chunks(path, key):
         if result is None:
@@ -272,6 +283,65 @@ class ManifestArchive(Mapping):
         self.close()
 
 
+class SelectionArchive(Mapping):
+    """Ordered complete-pool row references, readable without dataset duplication.
+
+    Selected training snapshots explicitly keep all referenced rows in train;
+    legacy DataModule consumers must not silently split them a second time.
+    """
+    def __init__(self, path):
+        self.path = Path(path).resolve()
+        value = json.loads(self.path.read_text())
+        if value.get('version') != 1:
+            raise ValueError('Unsupported sampling selection version')
+        self.store = TrajectoryStore((self.path.parent / value['source']).resolve())
+        if self.store.digest != value['source_sha256']:
+            raise ValueError('Sampling selection source has changed')
+        self.selection_rows = np.asarray(value['rows'], dtype=np.int64)
+        if (self.selection_rows.ndim != 1 or (self.selection_rows < 0).any()
+                or (self.selection_rows >= self.store.count).any()
+                or len(np.unique(self.selection_rows)) != len(self.selection_rows)):
+            raise ValueError('Invalid sampling selection row identities')
+        n = len(self.selection_rows)
+        self.overrides = dict(dataset_role=np.array('selected_training_reference'),
+            split_policy=np.array('offline_selected_training'),
+            split_seed=np.array(value.get('provenance', {}).get('seed', 42)),
+            split_train=np.arange(n, dtype=np.int64),
+            split_val=np.array([], dtype=np.int64), split_test=np.array([], dtype=np.int64),
+            split_real=np.array([], dtype=np.int64))
+        if value.get('weights') is not None:
+            weights = np.asarray(value['weights'], dtype=np.float64)
+            if weights.shape != (n,) or not np.isfinite(weights).all() or (weights < 0).any():
+                raise ValueError('Invalid sampling selection weights')
+            self.overrides['sample_weights'] = weights
+        self.files = list(dict.fromkeys([*self.store.fields, *self.overrides]))
+
+    def __iter__(self):
+        return iter(self.files)
+
+    def __len__(self):
+        return len(self.files)
+
+    def __contains__(self, key):
+        return key in self.files
+
+    def __getitem__(self, key):
+        if key in self.overrides:
+            return self.overrides[key]
+        if key not in self.store.fields:
+            raise KeyError(key)
+        return self.store.read(self.selection_rows, (key,))[key]
+
+    def close(self):
+        self.store._cache.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
 def write_dataset_manifest(path, arrays, segments, *, provenance=None):
     """Reference matching fields; store only differing metadata locally.
 
@@ -379,3 +449,149 @@ def verify_dataset_equal(original, manifest):
             if not _equal(before[key], after[key]):
                 raise ValueError(f'Dataset changed during compaction: {key}')
     return True
+
+
+from collections import OrderedDict
+
+def atomic_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
+    fd, temporary = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as handle:
+            handle.write(encoded + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                    allow_nan=False).encode()).hexdigest()
+
+
+class TrajectoryStore:
+    """Read requested rows only; no full-pool trajectory tensor or label cache.
+
+    This is owned by the runner/oracle, never attached to PoolInputs passed to a
+    selector. Chunk hashes are checked on first access and cached by file identity.
+    """
+    def __init__(self, path, cache_chunks=2):
+        path = Path(path)
+        self.path = (path / 'dataset.json' if path.is_dir() else path).resolve()
+        self.manifest = json.loads(self.path.read_text())
+        if self.manifest.get('format') != FORMAT:
+            raise ValueError('A complete yeast dataset manifest is required')
+        self.digest = file_sha256(self.path)
+        self.count = int(self.manifest['rows'])
+        self.cache_chunks = int(cache_chunks)
+        self._cache = OrderedDict()
+        self._verified = {}
+        self._source_sizes = {}
+
+    @property
+    def fields(self):
+        return self.manifest['fields']
+
+    def _array(self, source_id, key):
+        identity = (source_id, key)
+        if identity in self._cache:
+            self._cache.move_to_end(identity)
+            return self._cache[identity]
+        source = self.manifest['sources'][source_id]
+        path = (self.path.parent / source['path']).resolve()
+        stat = path.stat()
+        stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if self._verified.get(source_id) != stamp:
+            if file_sha256(path) != source['sha256']:
+                raise ValueError(f'Changed pool block: {path}')
+            self._verified[source_id] = stamp
+        with np.load(path, allow_pickle=False) as archive:
+            value = archive[key]
+        self._cache[identity] = value
+        while len(self._cache) > max(1, self.cache_chunks):
+            self._cache.popitem(last=False)
+        return value
+
+    def scalar(self, key):
+        spec = self.fields[key]
+        if 'source' not in spec:
+            raise ValueError(f'{key} is a row field')
+        return self._array(spec['source'], spec.get('key', key)).copy()
+
+    def read(self, rows, keys=('data',)):
+        rows = np.asarray(rows, dtype=np.int64)
+        if rows.ndim != 1 or (rows < 0).any() or (rows >= self.count).any():
+            raise ValueError('Invalid pool row indices')
+        output = {}
+        for key in keys:
+            spec = self.fields[key]
+            if 'pieces' not in spec:
+                output[key] = self.scalar(key)
+                continue
+            result = np.empty((len(rows), *spec['shape'][1:]), dtype=spec['dtype'])
+            offset = 0
+            for item in spec['pieces']:
+                piece = self.manifest['segments'][item] if isinstance(item, int) else item
+                if 'count' in piece:
+                    n = int(piece['count'])
+                elif piece.get('rows') is not None:
+                    n = len(piece['rows'])
+                else:
+                    sid = piece['source']
+                    if sid not in self._source_sizes:
+                        # Production complete-pool manifests omit the optional
+                        # segment count. Read tiny input IDs, never trajectories.
+                        self._source_sizes[sid] = len(self._array(sid, 'candidate_ids'))
+                    n = self._source_sizes[sid]
+                hits = np.flatnonzero((rows >= offset) & (rows < offset + n))
+                if len(hits):
+                    local = rows[hits] - offset
+                    if piece.get('rows') is not None:
+                        local = np.asarray(piece['rows'], dtype=np.int64)[local]
+                    result[hits] = self._array(piece['source'], piece.get('key', key))[local]
+                offset += n
+            if offset != self.count:
+                raise ValueError('Pool manifest row count mismatch')
+            output[key] = result
+        return output
+
+    def inputs(self):
+        keys = ('params', 'y_init', 'candidate_ids', 'mutant_names', 'is_real')
+        values = self.read(np.arange(self.count), keys)
+        if values['is_real'].any():
+            raise ValueError('Complete selection pools must not contain real references')
+        if not np.isfinite(values['params']).all() or not np.isfinite(values['y_init']).all():
+            raise ValueError('Nonfinite pool inputs')
+        return values
+
+    def snapshot(self, path, rows, *, weights=None, provenance=None):
+        rows = np.asarray(rows, dtype=np.int64)
+        if len(np.unique(rows)) != len(rows):
+            raise ValueError('Snapshot rows must be unique; aggregate draw multiplicities first')
+        # Validation without reading true trajectories.
+        if rows.ndim != 1 or (rows < 0).any() or (rows >= self.count).any():
+            raise ValueError('Invalid snapshot rows')
+        value = dict(format='yeast_sampling_selection', version=1,
+                     source=str(self.path), source_sha256=self.digest,
+                     rows=rows.tolist(), provenance=provenance or {})
+        if weights is not None:
+            weights = np.asarray(weights, dtype=float)
+            if weights.shape != rows.shape or not np.isfinite(weights).all() or (weights < 0).any():
+                raise ValueError('Malformed selection weights')
+            value['weights'] = weights.tolist()
+        atomic_json(path, value)
+
+
+def read_selection(path, keys=('data',)):
+    value = json.loads(Path(path).read_text())
+    if value.get('format') != 'yeast_sampling_selection':
+        raise ValueError('Unsupported selection manifest')
+    store = TrajectoryStore(value['source'])
+    if store.digest != value['source_sha256']:
+        raise ValueError('Selection source manifest changed')
+    return store.read(value['rows'], keys)

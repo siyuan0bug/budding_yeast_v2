@@ -14,11 +14,14 @@ def load_yeast_dataset_universal(dataset_path, *, return_metadata=False):
         from .systems.budding.pattern_groups import PATTERN_GROUP_FIELDS
         metadata={key:dataset[key] for key in ('system_id','schema_version','is_real','time_grid','variable_names','param_names','artifact_kind',
                   'labels','biological_labels_available','levels','requested_levels','module_counts',
+                  'sampling_paradigm','dataset_role','mutation_available','sample_weights','y_init',
                   'split_policy','split_seed','split_train','split_val','split_test','split_real',*PATTERN_GROUP_FIELDS) if key in dataset}
     if data.ndim!=3 or param_matrix.ndim!=2 or len(param_matrix)!=len(data) or len(names)!=len(data) or len(pattern_labels)!=len(data):
         raise ValueError('Dataset trajectory, parameter and label rows do not agree')
     if not np.isfinite(data).all() or not np.isfinite(param_matrix).all():
         raise ValueError('Dataset contains nonfinite trajectories or parameters')
+    if 'y_init' in metadata and (metadata['y_init'].shape!=data.shape[:2] or not np.isfinite(metadata['y_init']).all()):
+        raise ValueError('Dataset initial states must be finite and match B,V')
     if 'is_real' in metadata and metadata['is_real'].shape!=(len(data),):
         raise ValueError('Dataset is_real must have one flag per sample')
     if 'time_grid' in metadata:

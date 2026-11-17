@@ -18,7 +18,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[3]))
 import numpy as np
 import torch
 from budding_yeast_v2.data.dataset_archive import open_dataset
-from budding_yeast_v2.utils.active_learning.registry import strategy_spec
+from budding_yeast_v2.utils.sampling.registry import strategy_spec
 
 
 def read(path):

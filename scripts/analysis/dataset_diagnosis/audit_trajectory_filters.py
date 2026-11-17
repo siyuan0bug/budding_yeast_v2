@@ -14,7 +14,7 @@ ROOT=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT.parent))
 from budding_yeast_v2.scripts.analysis.dataset_diagnosis.audit_six_patterns import chunks
 from budding_yeast_v2.data.systems.budding.states import VARIABLE_NAMES
-from budding_yeast_v2.utils.ode_residual_engine import VectorizedYeastODE
+from budding_yeast_v2.utils.physics.residuals import VectorizedYeastODE
 
 
 def main():

@@ -44,8 +44,8 @@ from budding_yeast_v2.models.ours import (
     HANO, HANO_NoEvent, HANO_NoFlux, HANO_NoGraph, HANO_Refine, HANO_Dual
 )
 
-from budding_yeast_v2.utils.losses import LOSS_REGISTRY, get_curriculum_weights
-from budding_yeast_v2.utils.metrics import relative_l2_loss
+from budding_yeast_v2.utils.training.losses import LOSS_REGISTRY, get_curriculum_weights
+from budding_yeast_v2.utils.evaluation.metrics import relative_l2_loss
 
 
 MODEL_REGISTRY = {
@@ -442,10 +442,26 @@ class YeastLitModule(pl.LightningModule):
 
     def on_save_checkpoint(self, checkpoint):
         self._inject_model_stats()
+        if self.hparams.loss_type == 'rel_l2':
+            checkpoint['training_objective_definition'] = dict(
+                name='relative_l2_sample_channel', space='normalized',normalization_type=self.norm_type,
+                eps=float(self.criterion.eps), max_clamp=self.criterion.max_clamp,
+                denominator_rule=self.criterion.denominator_rule,
+                reduction='mean_sample_channel_after_time_l2')
         if self._preprocessing_state is not None:
             checkpoint['preprocessing_contract'] = copy.deepcopy(self._preprocessing_state)
 
     def on_load_checkpoint(self, checkpoint):
+        objective = checkpoint.get('training_objective_definition', {})
+        if self.hparams.loss_type == 'rel_l2' and objective.get('name') == 'relative_l2_sample_channel':
+            eps = float(objective['eps'])
+            if not math.isfinite(eps) or eps <= 0:
+                raise ValueError('Checkpoint Relative L2 eps must be finite and positive')
+            rule = objective.get('denominator_rule', 'sqrt_target_time_l2_squared_plus_eps_squared')
+            if rule not in ('sqrt_target_time_l2_squared_plus_eps_squared', 'max_target_time_l2_eps'):
+                raise ValueError(f'Unknown checkpoint Relative L2 denominator rule: {rule!r}')
+            self.criterion.eps = eps
+            self.criterion.denominator_rule = rule
         # Baseline names now refer to standard architectures; old modified
         # checkpoints are intentionally not reconstructed under these names.
         hp = checkpoint.get('hyper_parameters', {})
@@ -639,10 +655,14 @@ class YeastLitModule(pl.LightningModule):
         return trajectory
 
     def training_step(self, batch, batch_idx):
+        sample_weights = None
         sensitivity_batch = batch if isinstance(batch, dict) else None
         if sensitivity_batch is not None:
             x, p, y = (batch[key] for key in ('x', 'p', 'y'))
             pat_id = batch.get('pattern')
+            sample_weights = batch.get('sample_weight')
+        elif len(batch) == 5:
+            x, p, y, pat_id, sample_weights = batch
         elif len(batch) == 4:
             x, p, y, pat_id = batch
         else:
@@ -653,6 +673,10 @@ class YeastLitModule(pl.LightningModule):
         lam_pen, lam_sm = get_curriculum_weights(curr_ep, self.max_epochs)
 
         weights = torch.ones(len(x), dtype=torch.float32, device=self.device)
+        if sample_weights is not None:
+            if self.hparams.loss_type not in ('mse_only', 'hybrid_mse_rel', 'rel_l2'):
+                raise ValueError('Nonuniform coreset weights require an explicitly supported per-sample loss')
+            weights = sample_weights.to(device=self.device, dtype=torch.float32)
 
         if self.hparams.model_name.startswith('hano') and self.training:
             if self.hparams.rollout_type == 'autoregressive':
@@ -738,14 +762,47 @@ class YeastLitModule(pl.LightningModule):
             for k, v in self.criterion._last_metrics.items():
                 self.log(f'train_{k}', v, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
+        if not torch.isfinite(loss):
+            raise FloatingPointError('Nonfinite training objective')
         self.log('train_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         x_v, p_v, y_v = batch[:3]
-        pred = self.forward_ic_time(x_v, p_v)
+        dm=getattr(getattr(self,'_trainer',None),'datamodule',None)
+        physical_metric=getattr(dm, 'validation_metric', None)
+        if physical_metric in ('normalized_loss','sample_channel_rel_l2'):
+            # Match the independent physical evaluator's float32 inference;
+            # training may still use bf16 mixed precision.
+            with torch.autocast(device_type=x_v.device.type,enabled=False):
+                pred = self.forward_ic_time(x_v.float(), p_v.float())
+        else:
+            pred = self.forward_ic_time(x_v, p_v)
+        if pred.shape != y_v.shape or not torch.isfinite(pred).all() or not torch.isfinite(y_v).all():
+            raise FloatingPointError('Nonfinite/misaligned normalized validation prediction or target')
+        mse_monitor=F.mse_loss(pred,y_v)
+        normalized_loss=self.criterion(pred,y_v) if self.hparams.loss_type=='rel_l2' else mse_monitor
+        if not torch.isfinite(normalized_loss):
+            raise FloatingPointError('Nonfinite normalized validation loss; refusing checkpoint selection')
+        if physical_metric in ('normalized_loss','macro_trajectory_rel_l2','sample_channel_rel_l2'):
+            # Only explicitly attached synthetic validation domains enter here.
+            # Physical targets remain exact, including finite negative values.
+            if dataloader_idx == 0:
+                self.log('val_loss_synth', normalized_loss, on_step=False, on_epoch=True,
+                         add_dataloader_idx=False, sync_dist=True)
+            if dataloader_idx==0 and self.hparams.loss_type=='rel_l2':
+                self.log('val_mse_norm',mse_monitor,on_step=False,on_epoch=True,
+                         add_dataloader_idx=False,sync_dist=True)
+            target = batch[3].double()
+            physical = self.denormalize_y(pred).double()
+            from budding_yeast_v2.utils.evaluation.metrics import trajectory_relative_errors, sample_channel_relative_errors
+            errors = (sample_channel_relative_errors(physical,target).mean(1)
+                      if physical_metric in ('normalized_loss','sample_channel_rel_l2') else trajectory_relative_errors(physical,target))
+            totals = self._validation_totals.setdefault(dataloader_idx, torch.zeros(2,device=self.device,dtype=torch.float64))
+            totals += torch.stack((errors.sum(), errors.new_tensor(len(errors))))
+            return errors.mean()
         target = y_v
-        mse_val = F.mse_loss(pred, target)
+        mse_val = normalized_loss
 
         if dataloader_idx == 0:
             self.log('val_loss_synth', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
@@ -753,16 +810,33 @@ class YeastLitModule(pl.LightningModule):
             self.log('test_loss_synth', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
         elif dataloader_idx == 2:
             self.log('test_loss_real', mse_val, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
-            # 计算真实物理空间下的 Real Mutants 损失 (使用 metrics.py 同款 Relative L2 Loss, eps=0.1 物理基底截断保护)
+            # Canonical physical sample/channel Relative L2; eps protects the
+            # time norm denominator and the error ratio is never capped.
             pred_real = self.denormalize_y(pred)
             target_real = self.denormalize_y(target)
-            rel_l2_real = relative_l2_loss(pred_real, target_real, eps=0.1)
+            rel_l2_real = relative_l2_loss(pred_real, target_real)
             # 1. 新标准名称 (显式标注反归一化物理空间与相对 L2 误差)
             self.log('test_real_denorm_rel_l2', rel_l2_real, on_step=False, on_epoch=True, prog_bar=True, add_dataloader_idx=False, sync_dist=True)
             # 2. 兼容历史别名
             self.log('test_loss_real_denorm', rel_l2_real, on_step=False, on_epoch=True, add_dataloader_idx=False, sync_dist=True)
 
         return mse_val
+
+    def on_validation_epoch_start(self):
+        self._validation_totals = {}
+
+    def on_validation_epoch_end(self):
+        if not getattr(self,'_validation_totals',None):
+            return
+        means = []
+        for value in self._validation_totals.values():
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                torch.distributed.all_reduce(value)
+            means.append(value[0]/value[1])
+        metric=getattr(self.trainer.datamodule,'validation_metric',None)
+        key='val_sample_channel_rel_l2' if metric in ('normalized_loss','sample_channel_rel_l2') else 'val_macro_rel_l2'
+        self.log(key, torch.stack(means).mean(), prog_bar=True,
+                 logger=self.trainer.logger is not None, sync_dist=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)

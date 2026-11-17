@@ -1,4 +1,4 @@
-"""MA single-sample solver; initialization factored without changing assignments/order."""
+"""Canonical MA biology with bounded, checked high-accuracy integration."""
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
@@ -8,6 +8,8 @@ from .states import initial_conds
 from .states import nMASS, nCLN2, nCLB2, nCLB5, nSIC1, nCDC6, nC2, nC5, nF2, nF5, nSIC1P, nC2P, nC5P, nCDC6P, nF2P, nF5P, nSWI5T, nSWI5, nIEP, nCDC20T, nCDC20, nCDH1T, nCDH1, nCDC14T, nCDC14, nNET1T, nNET1, nRENT, nTEM1, nCDC15, nPPX, nPDS1, nESP1, nORI, nBUD, nSPN, nVi20, nlte1, nBUB2
 from .ode import eqns, event1, event2, event3, event4
 from .phenotypes import analyze_cell_viability_unified, analyze_mass_pattern
+from .solver_policy import (SOLVER_POLICY, RTOL, ATOL, RETRY_RTOL, RETRY_ATOL,
+                            numerical_flags)
 
 def prepare_initial_conditions(ovr):
     p = get_default_params(); y0 = initial_conds()
@@ -44,14 +46,14 @@ def prepare_initial_conditions(ovr):
     return p, y0, is_mad2_ko, is_bub2_ko
 
 @bounded_simulation
-def simulate_mutant(name, ovr, tf=210, ns=500):
+def _integrate_mutant(name, ovr, tf=210, ns=500, *, rtol=RTOL, atol=ATOL):
     p, y0, is_mad2_ko, is_bub2_ko = prepare_initial_conditions(ovr)
     tr, yr = [0], [y0]; eh = []; bd = []; md = []; t0 = 0; lc = 0
     try:
         while t0 < tf and lc < 300:
             lc += 1
             sol = solve_ivp(eqns, [t0, tf], y0, args=(p,), method='BDF', 
-                            events=[event1, event2, event3, event4], rtol=1e-4, atol=1e-6)
+                            events=[event1, event2, event3, event4], rtol=rtol, atol=atol)
             validate_segment(sol, t0, tf, len(y0))
             tr.extend(sol.t[1:]); yr.extend(sol.y.T[1:])
             if sol.status == 1:
@@ -89,3 +91,39 @@ def simulate_mutant(name, ovr, tf=210, ns=500):
     bio_l = analyze_cell_viability_unified(eh, bd, md, max_m, max_b2)
     pat_l = analyze_mass_pattern(yu[nMASS])
     return name, yu, bio_l, pat_l
+
+
+def simulate_mutant(name, ovr, tf=210, ns=500, *, diagnostics=None):
+    """Keep the four-value public API; retry the same input, never clip a truth.
+
+    Each attempt retains the shared five-second deadline (at most two attempts,
+    below the parent process-pool watchdog). Failed inputs are returned to the
+    generator for replacement. Negative values alone never reject a sample.
+    """
+    from ... import simulation_guards
+    p, initial, _, _ = prepare_initial_conditions(ovr)
+    info = diagnostics if diagnostics is not None else {}
+    info.update(solver='BDF', solver_policy=SOLVER_POLICY, attempts=[],
+                timeout_s=simulation_guards.DEFAULT_SIM_TIMEOUT)
+    result = None
+    finite_negative_fallback = None
+    for rtol, atol in ((RTOL, ATOL), (RETRY_RTOL, RETRY_ATOL)):
+        result = _integrate_mutant(name, ovr, tf, ns, rtol=rtol, atol=atol)
+        entry = dict(rtol=rtol, atol=atol, success=result[1] is not None)
+        if result[1] is not None:
+            entry.update(numerical_flags(result[1], p, initial))
+        info['attempts'].append(entry)
+        info.update(rtol=rtol, atol=atol)
+        if result[1] is not None and not entry['tem1_total_violation']:
+            if not entry['significant_negative'] or len(info['attempts']) == 2:
+                info.update(entry, status='success')
+                return result
+            finite_negative_fallback = (result, dict(entry))
+    if finite_negative_fallback is not None:
+        # A failed numerical cross-check alone cannot turn the user's accepted
+        # finite-negative policy into a rejection rule.
+        result, entry = finite_negative_fallback
+        info.update(entry, status='success', negative_recheck_failed=True)
+        return result
+    info['status'] = 'numerical_failure_or_timeout'
+    return name, None, 'Inviable: Numerical Failure', 'Pattern_C: Exponential-Arrest (==0)'

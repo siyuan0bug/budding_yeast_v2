@@ -16,7 +16,7 @@ def main():
     import torch
     from budding_yeast_v2.eval import load_model_from_checkpoint
     from budding_yeast_v2.data.normalization import normalize_y,normalize_p,denormalize_y
-    from budding_yeast_v2.utils.metrics import calculate_metrics
+    from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
     torch.set_num_threads(4);runs=pd.read_csv(args.output/'primary_runs.csv');rows=[]
     for _,run in runs[runs.kind.eq('al')&runs.model.eq('fno')&runs.strategy.isin(['al4pde_uncertainty','al4pde_power'])].iterrows():
         for r in range(3):

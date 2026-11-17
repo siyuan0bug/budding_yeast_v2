@@ -45,7 +45,7 @@ ARCHIVED_METHODS = (
 
 def class_methods(path, name):
     if Path(path).resolve() == (ROOT/'utils/al_callback.py').resolve():
-        from budding_yeast_v2.utils.active_learning import ActiveLearningEngine
+        from budding_yeast_v2.utils.sampling import ActiveLearningEngine
         result = {}
         for name, member in ActiveLearningEngine.__dict__.items():
             if isinstance(member, staticmethod):
@@ -97,7 +97,7 @@ def numerical_ast(node):
 def budding_pool_compatibility_probe(archived):
     """Audit explicit system dispatch/dynamic width changes separately from scores."""
     from unittest.mock import patch
-    from budding_yeast_v2.utils.active_learning import ActiveLearningEngine, pool, fission
+    from budding_yeast_v2.utils.sampling import ActiveLearningEngine, pool, fission
     # Candidate generation intentionally changed under the approved exact-3 policy.
     # Acquisition-score ASTs remain audited separately; check the shared policy here.
     from budding_yeast_v2.data.systems.sampling_policy import POOL_RATIOS
@@ -235,7 +235,7 @@ def power_bait_probe(official):
 
 def lcmd_probe(official):
     from budding_yeast_v2.utils.al_callback import ActiveLearningCallback
-    from budding_yeast_v2.utils.active_learning.backends import selection_module
+    from budding_yeast_v2.utils.sampling.backends import selection_module
     from bmdal_reg.bmdal.features import Features
     from bmdal_reg.bmdal.feature_maps import IdentityFeatureMap
     from bmdal_reg.bmdal.feature_data import TensorFeatureData

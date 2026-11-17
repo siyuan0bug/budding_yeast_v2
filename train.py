@@ -13,9 +13,10 @@ if 'PYTHONPATH' in os.environ:
 else:
     os.environ['PYTHONPATH'] = _repo_root
 
+from budding_yeast_v2.utils.training.runner import make_trainer, EpochSummaryCallback
 import time
 import argparse
-from budding_yeast_v2.utils.active_learning.registry import CLI_STRATEGIES, STRATEGY_NAMES, strategy_spec, validate_system
+from budding_yeast_v2.utils.sampling.registry import CLI_STRATEGIES, STRATEGY_NAMES, strategy_spec, validate_system
 import math
 import json
 import torch
@@ -35,18 +36,13 @@ from budding_yeast_v2.models.yeast_lit_module import (
 )
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.preprocessing_contract import TRAIN_FIT_SCOPE
-from budding_yeast_v2.utils.metrics import calculate_metrics
-from budding_yeast_v2.utils.curve_logger import TrainingCurveCallback, extract_and_plot_from_log
-from budding_yeast_v2.utils.runtime_logging import (
+from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
+from budding_yeast_v2.utils.experiments.curves import TrainingCurveCallback, extract_and_plot_from_log
+from budding_yeast_v2.utils.experiments.logging import (
     install_timestamped_streams, install_stack_diagnostics, log_event, log_stage,
 )
 
-VARIABLE_NAMES = [
-    "MASS", "CLN2", "CLB2", "CLB5", "SIC1", "CDC6", "C2", "C5", "F2", "F5",
-    "SIC1P", "C2P", "C5P", "CDC6P", "F2P", "F5P", "SWI5T", "SWI5", "IEP", "CDC20T",
-    "CDC20", "CDH1T", "CDH1", "CDC14T", "CDC14", "NET1T", "NET1", "RENT", "TEM1", "CDC15",
-    "PPX", "PDS1", "ESP1", "ORI", "BUD", "SPN", "Vi20", "lte1", "BUB2"
-]
+from budding_yeast_v2.data.systems.budding.states import VARIABLE_NAMES
 
 class SimToRealVisualizerCallback(Callback):
     def __init__(self, plot_every_n_epochs=10, seed=42):
@@ -136,39 +132,10 @@ class SimToRealVisualizerCallback(Callback):
         finally:
             pl_module.train(was_training)
 
-class EpochSummaryCallback(Callback):
-    """每个 epoch 结束后用 print 输出训练摘要, 确保日志文件中可见 (不依赖 tqdm 终端渲染)."""
 
-    def __init__(self):
-        super().__init__()
-        self.epoch_start_time = None
 
-    def on_train_epoch_start(self, trainer, pl_module):
-        self.epoch_start_time = time.time()
 
-    def on_train_epoch_end(self, trainer, pl_module):
-        if self.epoch_start_time is None:
-            return
-        # Lightning finalizes epoch-reduced train_loss after validation. Reading
-        # it in the validation hook prints NaN first, then the previous epoch.
-        epoch = trainer.current_epoch
-        m = trainer.callback_metrics
-        train_loss = float(m.get('train_loss', float('nan')))
-        val_synth = float(m.get('val_loss_synth', float('nan')))
-        test_synth = float(m.get('test_loss_synth', float('nan')))
-        test_real_mse = float(m.get('test_loss_real', float('nan')))
-        test_real_denorm = float(m.get('test_real_denorm_rel_l2', m.get('test_loss_real_denorm', float('nan'))))
-        lr = trainer.optimizers[0].param_groups[0]['lr'] if trainer.optimizers else 0.0
-        elapsed = time.time() - self.epoch_start_time
-        gn_str = ""
-        if 'train_w_clb2' in m:
-            gn_str = f" | GN[clb2={float(m['train_w_clb2']):.2f}, sic1={float(m['train_w_sic1']):.2f}, max={float(m.get('train_w_max', 0.0)):.2f}]"
-        print(f"[Epoch {epoch+1:03d}/{trainer.max_epochs:03d}] "
-              f"train_loss={train_loss:.6f} | val_synth={val_synth:.6f} | "
-              f"test_synth={test_synth:.6f} | test_real_mse={test_real_mse:.6f} | "
-              f"test_real_denorm_rel_l2={test_real_denorm:.4f}"
-              f"{gn_str} | "
-              f"lr={lr:.2e} | {elapsed:.1f}s", flush=True)
+
 
 def main():
     parser = argparse.ArgumentParser(description='Train Yeast Model')
@@ -178,7 +145,7 @@ def main():
     parser.add_argument('--sensitivity_path', type=str, default=None)
     parser.add_argument('--sensitivity_weight', type=float, default=1.0)
     parser.add_argument('--wavelet', type=str, default='haar')
-    parser.add_argument('--loss_type', type=str, default='physics_informed')
+    parser.add_argument('--loss_type', type=str, default='rel_l2')
     parser.add_argument('--dataset_name', type=str, required=True)
     parser.add_argument('--system',choices=('auto','budding','fission'),default='auto')
     parser.add_argument('--adj_matrix_path', type=str, default=None)
@@ -354,7 +321,7 @@ def main():
     pl.seed_everything(args.seed, workers=True)
 
     # 导入实验管理工具库
-    from budding_yeast_v2.utils.exp_utils import (
+    from budding_yeast_v2.utils.experiments.paths import (
         build_experiment_dir,
         generate_hparams_signature,
         save_metadata,
@@ -505,8 +472,8 @@ def main():
 
     if args.al_strategy in AL4PDE_STRATEGIES:
         # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
-        from budding_yeast_v2.utils.active_learning import ActiveLearningEngine
-        from budding_yeast_v2.utils.active_learning.io import round_record, metric_text
+        from budding_yeast_v2.utils.sampling import ActiveLearningEngine
+        from budding_yeast_v2.utils.archive.online.io import round_record, metric_text
         NUM_AL_ROUNDS = args.num_al_rounds
         device_str = 'cuda' if args.device in ('cuda','gpu','auto') and torch.cuda.is_available() else 'cpu'
         print(f"🚀 [al4pde v2.3 外层重训] 策略={args.al_strategy.upper()} | "
@@ -601,10 +568,10 @@ def main():
                 json.dump(dict(policy=args.al_round_seed_policy, seed=round_seed), handle)
             model = build_fresh_model()  # 冷启动: 全新随机初始化 + 全新余弦周期
             curve_callback = TrainingCurveCallback(save_dir=round_dir, exp_name=f"{run_name}_round{r+1}", loss_type=args.loss_type, model_name=args.model,round_output=True)
-            from budding_yeast_v2.utils.active_learning.logging import make_round_logger, log_round_evaluation
-            from budding_yeast_v2.utils.active_learning.convergence import LossChangeMonitor
+            from budding_yeast_v2.utils.archive.online.logging import make_round_logger, log_round_evaluation
+            from budding_yeast_v2.utils.training.convergence import LossChangeMonitor
             round_logger=make_round_logger(logger.experiment,actual_exp_dir,r)
-            trainer = pl.Trainer(
+            trainer = make_trainer(
                 max_epochs=args.max_epochs,
                 logger=round_logger,
                 callbacks=[lr_monitor, EpochSummaryCallback(), curve_callback, LossChangeMonitor(round_dir)],
@@ -660,19 +627,19 @@ def main():
                 train_loss_trend_pct_per_epoch=change.get('train_trend_pct'),
                 val_mse_trend_pct_per_epoch=change.get('val_trend_pct'))
             histories.append(curve_callback.curve_logger)
-            from budding_yeast_v2.utils.active_learning.reporting import save_summary
+            from budding_yeast_v2.utils.archive.online.reporting import save_summary
             with log_stage('round summary and loss plots',round=r+1):
                 save_summary(actual_exp_dir,al_curve_records,histories,metrics)
 
             # 4. Select with independently trained members, matching official top_k.
             if not is_last_round:
                 if args.al_strategy != 'none' and strategy_spec(args.al_strategy).requires_ensemble:
-                    from budding_yeast_v2.utils.active_learning import train_acquisition_ensemble
+                    from budding_yeast_v2.utils.sampling import train_acquisition_ensemble
 
                     def build_member_trainer(member_index):
                         # Primary member owns evaluation/W&B curves; auxiliaries
                         # only fit the same data and save their selection weights.
-                        return pl.Trainer(
+                        return make_trainer(
                             max_epochs=args.max_epochs, logger=False,
                             callbacks=[LossChangeMonitor(os.path.join(round_dir,'ensemble',f'member_{member_index:02d}'))],
                             enable_checkpointing=False,
@@ -722,7 +689,7 @@ def main():
 
         print("🌱 [Baseline Mode] 未启用主动学习，数据集在全生命周期锁定。")
 
-        trainer = pl.Trainer(
+        trainer = make_trainer(
             max_epochs=args.max_epochs,
             logger=logger,
             callbacks=callbacks,

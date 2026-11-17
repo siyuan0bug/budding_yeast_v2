@@ -59,7 +59,8 @@ class BuddingSystem:
             if gene=='CLB2': return log_quantile(u,CLB2_DB_RESIDUAL)
             if gene=='PDS1': return float(u*.05)
             return 0.
-        return sample_scaling_factor_sobol(mode,gene,u)
+        # Preserve the separate MASS profile's historical scalar interface.
+        return sample_scaling_factor_sobol(mode,gene,u,exact_zero=False)
 
     def __getattr__(self, name):
         # Shared selection utilities have per-run reset managed by the driver.

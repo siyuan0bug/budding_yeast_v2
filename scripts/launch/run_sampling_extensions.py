@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Seed42 completion queue for independent fixed-pool/dynamic/generative baselines.
+
+No model or selection implementation lives here. Every child uses the public
+run_al_budding.sh CLI. Only Popen-owned isolated groups are monitored/signalled.
+"""
+import argparse
+import csv
+from dataclasses import asdict
+from datetime import datetime
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+from zoneinfo import ZoneInfo
+
+ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT.parent))
+from budding_yeast_v2.data.dataset_archive import atomic_json,file_sha256,fingerprint,TrajectoryStore
+from budding_yeast_v2.utils.sampling.benchmark.runner import source_inventory,experiment_lock
+from budding_yeast_v2.utils.sampling.benchmark.protocol import BenchmarkConfig
+from budding_yeast_v2.utils.experiments.resources import resource_state,memory_status
+from budding_yeast_v2.utils.experiments.memory_guard import BatchMemoryGuard
+
+DATA=Path('/home/users/zsy/mydata/budding_yeast')
+PROTOCOL=DATA/'benchmarks/budding_sampling/seed42_a866aef5d988'
+
+
+def tasks():
+    # First four exercise the newly implemented kernels on the real workload.
+    primary=[('run','low_rank'),('dynamic','peaks_regression'),('dynamic','eracs_regression'),
+             ('generate','hggs_projected'),('run','lev_input'),('run','clustering_sensitivity'),
+             ('run','clustering_sensitivity_wor'),('run','physics_pre_topk'),('run','physics_pre_power'),
+             ('generate','oed_temporal'),('generate','ogas_async_projected')]
+    controls=[('generate','random_generate'),('generate','random_async'),
+              ('dynamic','random_stream'),('dynamic','random_dynamic')]
+    rows=[]
+    for pool in ('mutation','lhs'):
+        for kind,name in primary[:4]:rows.append(dict(kind=kind,method=name,pool=pool))
+    for kind,name in primary[4:]+controls:
+        for pool in ('mutation','lhs'):rows.append(dict(kind=kind,method=name,pool=pool))
+    return [dict(row,task_id=f"{row['pool']}_{row['method']}",status='pending') for row in rows]
+
+
+def gpu_memory():
+    raw=subprocess.check_output(['nvidia-smi','--query-gpu=index,memory.free','--format=csv,noheader,nounits'],text=True,timeout=10)
+    return {a.strip():float(b.strip())/1024 for a,b in (line.split(',') for line in raw.splitlines())}
+
+
+def find_result(task,protocol_id,started=0.):
+    root=Path(task['output'])
+    paths=list(root.glob(f"{protocol_id}*/{task['pool']}/{task['method']}/seed_42/config.json"))
+    eligible=[p for p in paths if p.stat().st_mtime>=started-2]
+    return str(max(eligible,key=lambda p:p.stat().st_mtime).parent) if eligible else task.get('result_directory')
+
+
+def validate_result(task):
+    if not task.get('result_directory'):raise ValueError('Child exited without a result directory')
+    directory=Path(task['result_directory']);evaluation=directory/'eval'
+    marker=directory/('_state/state.json' if task['kind']=='run' else '_state/completion.json')
+    state=json.loads(marker.read_text());state=state.get('completion',state)
+    if state.get('status')!='complete':raise ValueError('Missing completed workflow state')
+    metrics=json.loads((evaluation/'global_metrics_denorm.json').read_text())
+    if metrics['real_mutants']['count']!=126:raise ValueError('Incomplete real-mutant evaluation')
+    for name,count in [('per_mutant_metrics.csv',126),('per_synth_test_metrics.csv',metrics['synth_test']['count'])]:
+        with (evaluation/name).open() as handle:actual=sum(1 for _ in csv.DictReader(handle))
+        if actual!=count:raise ValueError(f'Incomplete sample metrics: {name}')
+    if len(list((evaluation/'real_mutants').glob('*.png')))!=126:raise ValueError('Incomplete real-mutant figures')
+    return dict(real_mutants=126,synth_test=metrics['synth_test']['count'],real_figures=126)
+
+
+def verified_spec_bundle(protocol,directory):
+    original=DATA/'offline_pools/lhs_matched_100000_seed42/lhs_specification.json'
+    source=TrajectoryStore(protocol['pools']['lhs']['path'])
+    config=json.loads(str(source.scalar('generation_config').item()))
+    from budding_yeast_v2.data.systems.budding.distributions.ranges import RANGE_FINGERPRINT
+    if (file_sha256(original)!=config['lhs_spec_sha256']
+            or str(source.scalar('sampling_range_fingerprint').item())!=RANGE_FINGERPRINT):
+        raise ValueError('Reviewed LHS specification/range does not match the source pool')
+    bundle=directory/'frozen_lhs';bundle.mkdir(exist_ok=True)
+    destination=bundle/'lhs_specification.json'
+    if not destination.exists():shutil.copyfile(original,destination)
+    if file_sha256(destination)!=file_sha256(original):raise ValueError('Frozen LHS spec copy changed')
+    # Original pool copy no longer has its inventory sidecar. Reconstruct only
+    # the provenance needed by the existing read-only domain validator, using
+    # the pool's verified fingerprint; no marginal or biological value changes.
+    atomic_json(bundle/'inventory.json',dict(range_fingerprint=RANGE_FINGERPRINT,
+        specification_sha256=file_sha256(destination),verified_against_pool=str(source.path),
+        verified_pool_sha256=source.digest,original_spec=str(original),provenance_only=True))
+    return destination
+
+
+def command(task,protocol,lhs_spec):
+    cmd=['bash',str(ROOT/'run_al_budding.sh'),task['kind'],'--protocol',str(protocol),
+         '--pool',task['pool'],'--method',task['method'],'--output',task['output'],
+         '--device','cuda:0','--plots','--wandb']
+    if task['kind']=='run':cmd+=['--seed','42']
+    elif task['kind']=='generate':
+        cmd+=['--workers','2','--bank-size','512']
+        if task['pool']=='lhs':cmd+=['--lhs-config',str(lhs_spec)]
+    return cmd
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--protocol',type=Path,default=PROTOCOL)
+    parser.add_argument('--directory',type=Path,required=True,help='Queue status/logs only; results retain public workflow roots')
+    parser.add_argument('--gpus',nargs='+',default=['0','1','2','3'])
+    parser.add_argument('--initial-jobs',type=int,default=4)
+    parser.add_argument('--max-jobs',type=int,default=8)
+    parser.add_argument('--jobs-per-gpu',type=int,default=2)
+    parser.add_argument('--ramp-after',type=float,default=900.)
+    parser.add_argument('--ramp-interval',type=float,default=90.)
+    parser.add_argument('--gpu-free-gib',type=float,default=12.)
+    parser.add_argument('--cache-chunks',type=int,default=1024)
+    parser.add_argument('--dry-run',action='store_true')
+    args=parser.parse_args(argv)
+    if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
+            or not 1<=args.initial_jobs<=args.max_jobs<=8 or not 1<=args.jobs_per_gpu<=2
+            or min(args.ramp_after,args.ramp_interval,args.gpu_free_gib)<=0
+            or not 1<=args.cache_chunks<=4096):raise ValueError('Invalid bounded shared-GPU queue settings')
+    protocol=json.loads((args.protocol/'protocol.json').read_text());cfg=BenchmarkConfig(**protocol['config']).validate()
+    if cfg.seed!=42 or cfg.model!='fno':raise ValueError('This queue is explicitly FNO / seed42 only')
+    rows=tasks()
+    outputs=dict(run=DATA/'experiments/budding_sampling',generate=DATA/'experiments/budding_generation',
+                 dynamic=DATA/'experiments/budding_dynamic')
+    for row in rows:row['output']=str(outputs[row['kind']])
+    if args.dry_run:
+        print(json.dumps(dict(seed=42,protocol=protocol['protocol_id'],tasks=rows,count=len(rows),
+            initial_jobs=args.initial_jobs,maximum_jobs=args.max_jobs,gpus=args.gpus),ensure_ascii=False,indent=2));return
+    args.directory.mkdir(parents=True,exist_ok=True)
+    with experiment_lock(args.directory):
+        manifest=args.directory/'manifest.json';sources=source_inventory()
+        settings=dict(protocol=str(args.protocol.resolve()),protocol_fingerprint=protocol['fingerprint'],seed=42,
+            training=asdict(cfg),sources=sources,gpus=args.gpus,initial_jobs=args.initial_jobs,
+            max_jobs=args.max_jobs,jobs_per_gpu=args.jobs_per_gpu,ramp_after=args.ramp_after,
+            ramp_interval=args.ramp_interval,minimum_gpu_free_gib=args.gpu_free_gib,oracle_cache_chunks=args.cache_chunks,
+            system_available_reserve_gib=100.,wandb_mode='offline',launcher_sha256=file_sha256(__file__),
+            tasks=[{k:v for k,v in t.items() if k!='status'} for t in rows])
+        if manifest.exists() and json.loads(manifest.read_text())!=settings:raise ValueError('Queue configuration/source changed; use a fresh queue directory')
+        atomic_json(manifest,settings)
+        status_path=args.directory/'tasks.json'
+        if status_path.exists():
+            old={t['task_id']:t for t in json.loads(status_path.read_text())}
+            for row in rows:
+                if row['task_id'] in old:
+                    saved=old[row['task_id']]
+                    if saved['status']=='complete':row.update(saved)
+                    elif saved['status']=='running':row['previous_pid']=saved.get('pid')
+        lhs_spec=verified_spec_bundle(protocol,args.directory)
+        for relative,digest in protocol['artifacts'].items():
+            if file_sha256(args.protocol/relative)!=digest:raise ValueError('Shared protocol changed')
+        env=dict(os.environ,OMP_NUM_THREADS='2',MKL_NUM_THREADS='2',OPENBLAS_NUM_THREADS='1',WANDB_MODE='offline',
+            PYTHONUNBUFFERED='1',SAMPLING_MAX_TOTAL_JOBS=str(args.max_jobs),SAMPLING_IO_CONCURRENCY='4',
+            SAMPLING_SCORING_CONCURRENCY='2',SAMPLING_MIN_AVAILABLE_GIB='100',SAMPLING_MEMORY_PRESSURE_POLICY='available',
+            SAMPLING_IO_GUARD_POLICY='disk_correlated',SAMPLING_IO_ADMISSION='warn',SAMPLING_PLOT_WORKERS='2',
+            SAMPLING_ORACLE_CACHE_CHUNKS=str(args.cache_chunks),PYTHONPATH=str(ROOT.parent))
+        # Parent guard uses the exact same remaining-memory and IO policies.
+        for key in ('SAMPLING_MIN_AVAILABLE_GIB','SAMPLING_MEMORY_PRESSURE_POLICY','SAMPLING_IO_GUARD_POLICY',
+                    'SAMPLING_IO_ADMISSION'):os.environ[key]=env[key]
+        (args.directory/'logs').mkdir(exist_ok=True)
+        active={};started=time.monotonic();capacity=args.initial_jobs;last_ramp=started;last_notice=0.
+        with BatchMemoryGuard(args.directory/'resources.jsonl') as guard:
+            while any(t['status'] in ('pending','running') for t in rows):
+                now=time.monotonic()
+                for pid,(child,task,handle,tracking) in list(active.items()):
+                    result=find_result(task,protocol['protocol_id'],task['started_wall_time'])
+                    if result:task['result_directory']=result
+                    code=child.poll()
+                    if code is not None:
+                        tracking.__exit__(None,None,None);handle.close();active.pop(pid)
+                        valid=code==0
+                        if valid:
+                            try:task['verified_outputs']=validate_result(task)
+                            except (OSError,ValueError,KeyError) as exc:valid=False;task['failure_reason']=str(exc)
+                        task.update(status='complete' if valid else 'failed',exit_code=code,
+                            seconds=time.time()-task['started_wall_time'],finished_at=datetime.now(ZoneInfo('Asia/Shanghai')).isoformat())
+                        print(f"END {task['task_id']} exit={code} result={task.get('result_directory')}",flush=True)
+                if guard.aborted:
+                    for t in rows:
+                        if t['status']=='running':t['status']='guard_stopped'
+                    atomic_json(status_path,rows);raise RuntimeError(guard.reason)
+                pending=next((t for t in rows if t['status']=='pending'),None)
+                blocked,health=resource_state()
+                free=gpu_memory() if pending is not None else {}
+                if now-started>=args.ramp_after and now-last_ramp>=args.ramp_interval and capacity<args.max_jobs:
+                    # Ramp only after real training has started in at least two
+                    # current jobs, with ample system headroom. No owned-PSS cap.
+                    ready=sum('[Epoch ' in Path(t['launcher_log']).read_text(errors='replace')[-20000:]
+                              for _,t,_,_ in active.values())
+                    if ready>=min(2,len(active)) and not blocked and health['available_gib']>=200:
+                        capacity+=1;last_ramp=now;print(f'RAMP capacity={capacity} available={health["available_gib"]:.1f}GiB',flush=True)
+                counts={g:sum(t['gpu']==g for _,t,_,_ in active.values()) for g in args.gpus}
+                usable=[g for g in args.gpus if counts[g]<args.jobs_per_gpu and free.get(g,0)>=args.gpu_free_gib]
+                if pending and len(active)<capacity and usable and not blocked and health['available_gib']>=124:
+                    if source_inventory()!=sources:raise RuntimeError('Source changed while queue is active; refuse mixed-version jobs')
+                    if shutil.disk_usage(DATA).free<50*2**30:raise RuntimeError('Less than 50GiB available on data volume')
+                    gpu=min(usable,key=lambda g:(counts[g],-free[g]))
+                    log=args.directory/'logs'/f"{pending['task_id']}.log";handle=log.open('a')
+                    cmd=command(pending,args.protocol,lhs_spec)
+                    if shutil.which('ionice'):cmd=['ionice','-c','2','-n','7',*cmd]
+                    if shutil.which('nice'):cmd=['nice','-n','10',*cmd]
+                    child=subprocess.Popen(cmd,cwd=ROOT,env=dict(env,CUDA_VISIBLE_DEVICES=gpu),stdout=handle,stderr=subprocess.STDOUT,start_new_session=True)
+                    tracking=guard.track(child);tracking.__enter__()
+                    pending.update(status='running',pid=child.pid,gpu=gpu,started_wall_time=time.time(),
+                        started_at=datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),launcher_log=str(log),command=cmd)
+                    active[child.pid]=(child,pending,handle,tracking)
+                    print(f"START {pending['task_id']} GPU={gpu} pid={child.pid}",flush=True)
+                atomic_json(status_path,rows)
+                atomic_json(args.directory/'status.json',dict(active=len(active),capacity=capacity,
+                    pending=sum(t['status']=='pending' for t in rows),completed=sum(t['status']=='complete' for t in rows),
+                    failed=sum(t['status']=='failed' for t in rows),available_gib=health['available_gib'],
+                    seconds=now-started,gpu_free_gib=free,queue_pid=os.getpid(),memory_guard_aborted=guard.aborted))
+                if now-last_notice>60:
+                    print(f"QUEUE active={len(active)} pending={sum(t['status']=='pending' for t in rows)} available={health['available_gib']:.1f}GiB",flush=True);last_notice=now
+                time.sleep(5)
+        failures=[t['task_id'] for t in rows if t['status']=='failed']
+        print(json.dumps(dict(status='complete' if not failures else 'completed_with_failures',failures=failures)),flush=True)
+        return int(bool(failures))
+
+
+if __name__=='__main__':raise SystemExit(main())

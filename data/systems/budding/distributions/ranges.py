@@ -15,12 +15,28 @@ NET1_BINDING_RESIDUAL = (.025, .1)
 AMPLITUDE_MODES = frozenset({'GAL-OE','GAL-MC','MC','ts','DAmP','pLOF','db'})
 GAL_MODES = frozenset({'GAL-OE','GAL-MC'})
 
+# Canonical channel closures approved 2026-11-12. CDC14-ts is deliberately
+# absent: both of its existing branches retain their previous distributions.
+# These are reaction-rate targets, not requests to erase protein initial states.
+EXACT_ZERO_TARGETS = {
+    ('CLB5','db'): ('kdb5pp',),
+    ('SIC1','db'): ('kd3c1',),
+    ('PDS1','db'): ('kd2pdspp','kd3pdspp'),
+    ('CDC20','ts'): ('ks20p','ks20pp'),
+    ('CDC15','ts'): ('kkpnetpp',),
+    ('APC_Core','ts'): ('ks20p','ks20pp','kscdh'),
+    ('CDC20','APC-A'): ('ka20pp',),
+    ('APC_Core','APC-A'): ('ka20pp',),
+}
+
 RANGE_FINGERPRINT = hashlib.sha256(json.dumps(dict(
     mc_min=MC_MIN, mc_max=MC_MAX, gal_clb2=GAL_CLB2,
     gal_mc=(GAL_MC_BASE,GAL_MC_MIN,GAL_MC_MAX),
     clb2_db=CLB2_DB_RESIDUAL, men_ts=MEN_TS_RESIDUAL,
     net1_binding=NET1_BINDING_RESIDUAL,
-    exact_zero_policy='unchanged', mass_mc='continuous_loguniform_dosage'),
+    exact_zero_policy='canonical_channels_except_CDC14_2026_11_12',
+    exact_zero_targets=sorted((g,m,keys) for (g,m),keys in EXACT_ZERO_TARGETS.items()),
+    mass_mc='continuous_loguniform_dosage'),
     sort_keys=True).encode()).hexdigest()
 
 

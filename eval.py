@@ -8,34 +8,29 @@ for _p in [_repo_root, _current_dir]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from pathlib import Path
+from budding_yeast_v2.utils.evaluation.checkpoints import load_model_from_checkpoint
+from budding_yeast_v2.utils.evaluation.metrics import summarize, per_sample_metrics, RELATIVE_L2_METRIC_VERSION
+from budding_yeast_v2.utils.evaluation.reporting import _render_and_save_plot, render_prediction_plots, save_real_evaluation
+from budding_yeast_v2.data.dataset_archive import atomic_json
+
 import argparse
 import json
 import csv
 import glob
 import re
-import inspect
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from concurrent.futures import ProcessPoolExecutor
 
-from budding_yeast_v2.models.yeast_lit_module import YeastLitModule
 from budding_yeast_v2.data.yeast_datamodule import YeastDataModule
 from budding_yeast_v2.data.systems.budding.api import get_default_params, mutant_rules
-from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
 from budding_yeast_v2.data.preprocessing_contract import resolve_checkpoint_norm, resolve_checkpoint_fit_scope
 
 CORE_9_INDICES = [0, 1, 2, 3, 4, 20, 22, 33, 35]
 
-VARIABLE_NAMES = [
-    "MASS", "CLN2", "CLB2", "CLB5", "SIC1", "CDC6", "C2", "C5", "F2", "F5",
-    "SIC1P", "C2P", "C5P", "CDC6P", "F2P", "F5P", "SWI5T", "SWI5", "IEP", "CDC20T",
-    "CDC20", "CDH1T", "CDH1", "CDC14T", "CDC14", "NET1T", "NET1", "RENT", "TEM1", "CDC15",
-    "PPX", "PDS1", "ESP1", "ORI", "BUD", "SPN", "Vi20", "lte1", "BUB2"
-]
+from budding_yeast_v2.data.systems.budding.states import VARIABLE_NAMES
 
 # ======== 突变参数信息提取 ========
 _DEFAULTS_DICT = get_default_params()
@@ -43,12 +38,7 @@ _DEFAULTS_DICT.update({'init_CDH1T': 1.0, 'init_CDH1': 0.9304992, 'init_BUB2': 0
 PARAM_KEYS = sorted([k for k in _DEFAULTS_DICT.keys() if k != 'is_mutant_104'])
 _DEFAULT_PARAM_VEC = np.array([_DEFAULTS_DICT[k] for k in PARAM_KEYS])
 
-def get_real_mutations_str(mutant_name,system_id='budding'):
-    from budding_yeast_v2.data.systems.registry import real_mutation_rules
-    rules = real_mutation_rules(system_id).get(mutant_name, {})
-    if not rules:
-        return "WT (Default)"
-    return ", ".join(f"{k}={v:.4g}" for k, v in rules.items())
+from budding_yeast_v2.utils.evaluation.labels import get_real_mutations_str
 
 def get_synth_perturbation_str(synth_name, synth_param_vec_real):
     mother_name = None
@@ -80,75 +70,9 @@ def get_synth_perturbation_str(synth_name, synth_param_vec_real):
     chunks = [" | ".join(mutated_info[i:i+5]) for i in range(0, len(mutated_info), 5)]
     return mother_name, "\n".join(chunks)
 
-def load_model_from_checkpoint(ckpt_path, device='cpu', *, graph_load_policy='current',
-                               graph_view=None, adj_matrix_path=None, norm_type=None):
-    if graph_load_policy == 'checkpoint' and (graph_view is not None or adj_matrix_path is not None):
-        raise ValueError('Historical graph reproduction cannot also request a graph override')
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    hp = dict(ckpt.get('hyper_parameters', {}))
-    hp['norm_type'] = resolve_checkpoint_norm(ckpt, norm_type)
-    hp['normalization_fit_scope'] = resolve_checkpoint_fit_scope(ckpt)
-    dhp = ckpt.get('datamodule_hyper_parameters', {})
-    saved_split = (ckpt.get('preprocessing_contract') or {}).get('split') or {}
-    hp['data_seed'] = saved_split.get('seed', dhp.get('seed', hp.get('data_seed', 42)))
-    accepted = inspect.signature(YeastLitModule.__init__).parameters
-    init_kwargs = {key: value for key, value in hp.items() if key in accepted and key != 'self'}
-    init_kwargs.update(
-        adj_matrix=hp.get('adj_matrix') if adj_matrix_path is None else None,
-        causal_matrix=hp.get('causal_matrix') if adj_matrix_path is None else None,
-        adj_matrix_path=adj_matrix_path,
-        graph_view=graph_view or hp.get('graph_view', 'hybrid'), graph_load_policy=graph_load_policy,
-    )
-    model = YeastLitModule(**init_kwargs)
-    model.on_load_checkpoint(ckpt)
-    incompatible = model.load_state_dict(ckpt.get('state_dict', ckpt), strict=False)
-    missing = [key for key in incompatible.missing_keys if key.startswith('model.')]
-    unexpected = [key for key in incompatible.unexpected_keys if key.startswith('model.')]
-    if missing or unexpected:
-        raise RuntimeError(f'Incomplete model checkpoint: missing={missing}, unexpected={unexpected}')
-    model.eval()
-    return model, hp
 
-def _render_and_save_plot(task):
-    """独立的多进程画图函数，充分利用多核 CPU"""
-    try:
-        pred, target, title, save_path, rows, cols, t_max = task[:7]
-        names=task[7] if len(task)>7 else VARIABLE_NAMES
-        fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3))
-        axes = axes.flatten()
-        t = np.linspace(0, t_max, pred.shape[-1])
-        for i in range(pred.shape[0]):
-            ax = axes[i]
-            ax.plot(t, target[i], 'b-', label='Truth', linewidth=1.5)
-            ax.plot(t, pred[i], 'r--', label='Pred', linewidth=1.5)
-            ax.set_xlabel('Time (min)', fontsize=8)
-            ax.set_ylabel('Concentration', fontsize=8)
-            var_name = names[i] if i < len(names) else f"Var {i}"
-            ax.set_title(f'{i}: {var_name}', fontweight='bold', fontsize=9)
-            ax.grid(True, alpha=0.3)
-            if i == 0:
-                ax.legend(fontsize=8)
-        for i in range(pred.shape[0], len(axes)):
-            axes[i].set_visible(False)
-        plt.suptitle(title, fontsize=12, fontweight='bold', y=0.98)
-        plt.tight_layout(rect=[0, 0, 1, 0.90])
-        plt.savefig(save_path, dpi=120, bbox_inches='tight')
-        plt.close(fig)
-    except Exception as e:
-        print(f"⚠️ 画图失败 ({save_path}): {e}")
-        try:
-            plt.close('all')
-        except Exception:
-            pass
 
-def _metric_summary(pred,target,system_id):
-    count=len(pred)
-    metrics=calculate_metrics(pred,target) if count else None
-    result={'all_variables':metrics,'count':count}
-    result['all_16_vars' if system_id=='fission' else 'all_39_vars']=metrics
-    if system_id=='budding':
-        result['core_9_vars']=calculate_metrics(pred[:,CORE_9_INDICES,:],target[:,CORE_9_INDICES,:]) if count else None
-    return result
+_metric_summary = summarize  # Historical analysis imports use this public name.
 
 
 def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, save_dir, 
@@ -168,10 +92,13 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
         empty=torch.empty(0,dm.num_vars,dm.T_STEPS)
         return _metric_summary(empty,empty,system_id),[],[empty],[empty],[]
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=getattr(dm,'num_workers',4), pin_memory=device.type=='cuda')
+    if len(indices) != len(dataset):
+        raise ValueError('Evaluation row IDs and dataset are not aligned')
     
     all_preds_denorm_list = []
     all_targets_denorm_list = []
     all_p_real_list = []
+    offset = 0
 
     # 1. GPU 大 Batch 高速推理
     with torch.no_grad():
@@ -180,12 +107,16 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
             pred = model.forward_ic_time(x, p)
             
             pred_denorm = dm.denormalize_y(pred, device)
-            target_denorm = dm.denormalize_y(y, device)
-            p_real = dm.denormalize_p(p, device)
+            source_rows=np.asarray(indices[offset:offset+len(x)],dtype=np.int64)
+            # Use exact saved physical truth, not an encode/decode round trip
+            # that loses finite negative values and introduces float32 rounding.
+            target_denorm = torch.as_tensor(dm._raw_data[source_rows])
+            p_real = torch.as_tensor(dm._param_conds[source_rows])
             
             all_preds_denorm_list.append(pred_denorm.cpu())
             all_targets_denorm_list.append(target_denorm.cpu())
             all_p_real_list.append(p_real.cpu())
+            offset += len(x)
 
     all_preds = torch.cat(all_preds_denorm_list, dim=0)    # (N, V, T)
     all_targets = torch.cat(all_targets_denorm_list, dim=0) # (N, V, T)
@@ -205,18 +136,19 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
         target_i = all_targets[i] # (V, T)
         p_real_i = all_p_real[i].numpy()
         
-        metrics = calculate_metrics(pred_i, target_i)
+        metrics = per_sample_metrics(pred_i, target_i)
         csv_rows.append({
             'Mutant': m_name,
             'Pattern': p_label,
+            'Relative_L2_Version': RELATIVE_L2_METRIC_VERSION,
             'MAE': metrics['MAE'],
             'MSE': metrics['MSE'],
-            'Relative_L2': metrics['Relative L2'],
-            'Correlation': metrics['Correlation']
+            'Relative_L2': metrics['rel_l2'],
+            'Correlation': metrics['correlation']
         })
 
         if max_plots is None or i < max_plots:
-            m_str = f"MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Rel L2: {metrics['Relative L2']:.4f} | Corr: {metrics['Correlation']:.4f}"
+            m_str = f"Rel L2 (sample/channel): {metrics['rel_l2']:.4f} | MAE: {metrics['MAE']:.4f} | MSE: {metrics['MSE']:.4e} | Corr: {metrics['correlation']:.4f}"
             title_base = f"[{p_label}] {m_name} (Seed: {seed})\n{m_str}"
             
             if system_id=='budding' and ('_LHS_' in m_name or '_SYNTH_' in m_name):
@@ -242,7 +174,7 @@ def evaluate_dataset(model, dm, dataset, indices, device, mean_y, std_y, seed, s
 def write_supplementary_label_metrics(rows, indices, dm, path):
     """Join observed labels to metrics; preserve the historical metric CSV contract."""
     from budding_yeast_v2.data.label_metadata import UNKNOWN_BIOLOGY_LABEL
-    fields = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation',
+    fields = ['Mutant', 'Pattern', 'Relative_L2_Version', 'MAE', 'MSE', 'Relative_L2', 'Correlation',
               'Biological_Label', 'Biological_Label_Available', 'Pattern_Group',
               'Pattern_Group_Label', 'Pattern_Group_Version', 'Observed_Divisions']
     if len(rows) != len(indices):
@@ -324,9 +256,9 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
     global_metrics = {
         'system_id':getattr(dm,'system_id','budding'),
         'variable_names':list(getattr(dm,'variable_names',VARIABLE_NAMES)),
-        "all_test": all_test_summary,
         "real_mutants": real_summary,
         "synth_test": synth_summary,
+        "all_test": all_test_summary,
     }
 
     if compact:
@@ -347,7 +279,7 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
     # ======== 4. 输出 CSV 记录 (立即落盘) ========
     def write_csv(rows, path):
         with open(path, 'w', newline='', encoding='utf-8') as f:
-            fieldnames = ['Mutant', 'Pattern', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
+            fieldnames = ['Mutant', 'Pattern', 'Relative_L2_Version', 'MAE', 'MSE', 'Relative_L2', 'Correlation']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for row in rows:
@@ -367,15 +299,17 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
     if all_plot_tasks:
         print(f"🎨 正在多进程并发绘制曲线图 (共 {len(all_plot_tasks)} 幅)...")
         workers = min(plot_workers, os.cpu_count() or 4)
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            list(executor.map(_render_and_save_plot, all_plot_tasks))
+        render_prediction_plots(all_plot_tasks,workers)
         print(f"✅ 曲线图已成功保存至: {save_dir}")
 
     return global_metrics
 
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt', type=str, default=None, help='Checkpoint 路径 (若提供 exp_dir 则可自动查找)')
+    parser.add_argument('--real_reference', help='Evaluate a frozen physical reference using checkpoint statistics, without refitting')
     parser.add_argument('--exp_dir', type=str, default=None, help='分层实验目录 (如 ./experiments/.../seed_42)')
     parser.add_argument('--data_dir', type=str, default='/home/users/zsy/mydata/budding_yeast')
     parser.add_argument('--dataset_name', type=str, default=None,help='AL rounds infer dataset.json or legacy dataset.npz next to the checkpoint')
@@ -402,10 +336,11 @@ def main():
         if args.save_dir is None:
             args.save_dir = os.path.join(args.exp_dir, f'eval_graph_{args.graph_load_policy}')
         if args.ckpt is None:
-            round_models=sorted(glob.glob(os.path.join(args.exp_dir,'rounds','round_*','model.ckpt')))
+            round_models=sorted(glob.glob(os.path.join(args.exp_dir,'rounds','round_*','model.ckpt'))+
+                                glob.glob(os.path.join(args.exp_dir,'rounds','round_*','primary','best.ckpt')))
             if round_models:args.ckpt=round_models[-1]
             # 自动在 exp_dir/checkpoints 或 exp_dir 寻找 ckpt
-            ckpt_search_dirs = [os.path.join(args.exp_dir, 'checkpoints'), args.exp_dir]
+            ckpt_search_dirs = [os.path.join(args.exp_dir,'primary'),os.path.join(args.exp_dir, 'checkpoints'), args.exp_dir]
             for d in ckpt_search_dirs:
                 if args.ckpt is not None:break
                 if os.path.isdir(d):
@@ -420,9 +355,10 @@ def main():
 
     if not args.ckpt or not os.path.exists(args.ckpt):
         raise FileNotFoundError(f"未找到有效的 Checkpoint 文件: {args.ckpt}")
-    if args.dataset_name is None:
+    if args.dataset_name is None and args.real_reference is None:
         directory=os.path.dirname(os.path.abspath(args.ckpt))
-        candidates=[os.path.join(directory,name) for name in ('dataset.json','dataset.npz')]
+        candidates=[os.path.join(root,name) for root in (directory,os.path.dirname(directory))
+                    for name in ('dataset.json','dataset.npz')]
         args.dataset_name=next((path for path in candidates if os.path.isfile(path)),None)
         if args.dataset_name is None:raise ValueError('Provide --dataset_name for a checkpoint without an adjacent AL dataset.json/dataset.npz')
 
@@ -436,6 +372,21 @@ def main():
     )
     print(f'Graph loading policy: {args.graph_load_policy}; provenance saved with metrics.')
     model = model.to(args.device)
+    if args.real_reference is not None:
+        from budding_yeast_v2.data.normalization import NormalizationStats
+        from budding_yeast_v2.utils.evaluation.checkpoints import Predictor
+        from budding_yeast_v2.utils.sampling.contracts import PoolInputs
+        if not model._stats_bound:
+            raise ValueError('Reference evaluation requires recorded checkpoint statistics')
+        with np.load(args.real_reference,allow_pickle=False) as archive:
+            truth=archive['data'];names=archive['mutant_names']
+            inputs=PoolInputs(np.arange(len(truth)),archive['params'],archive['y_init'])
+        predictor=Predictor([model],NormalizationStats.from_datamodule(model),truth.shape[-1],args.device,args.batch_size)
+        save_real_evaluation(predictor.physical(inputs),truth,names,args.save_dir,
+                             plots=args.real_mutant_plots!=0,plot_workers=args.plot_workers,
+                             context=dict(model=hp.get('model_name','unknown'),
+                                          seed=args.seed if args.seed is not None else hp.get('data_seed',42)))
+        return
 
     # 自动解析 seed: 优先级 args.seed -> checkpoint hyper_parameters -> 路径中的 seed_<N> -> 默认 42
     seed = args.seed
@@ -485,7 +436,7 @@ def main():
 
     # 自动检查并补充生成 5 合 1 loss 曲线图 (若训练日志存在)
     try:
-        from budding_yeast_v2.utils.curve_logger import extract_and_plot_from_log
+        from budding_yeast_v2.utils.experiments.curves import extract_and_plot_from_log
         exp_root = os.path.dirname(os.path.abspath(args.save_dir)) if os.path.basename(os.path.abspath(args.save_dir)) == 'eval' else args.save_dir
         candidate_logs = [
             os.path.join(exp_root, 'train.log'),

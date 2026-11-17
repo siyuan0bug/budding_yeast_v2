@@ -1,13 +1,14 @@
-"""Legal synthetic controls, including documented Chen-mechanism extensions.
+"""Active synthetic controls; inactive definitions remain available for review.
 
-PPX/Mcm1/SBF_MBF are functional modules, not experimentally calibrated alleles.
 Real-mutant definitions and the canonical ODE are independent of this catalog.
 """
 import numpy as np
 from .distributions.ranges import RANGE_FINGERPRINT
 
-CATALOG_VERSION = 'gene_ranges_gal_mc_2026_10_29_' + RANGE_FINGERPRINT[:12]
-RESTORED_FUNCTIONAL_MODULES = frozenset({'PPX', 'Mcm1', 'SBF_MBF'})
+CATALOG_VERSION = 'real_supported_composites_19_modules_2026_11_12_' + RANGE_FINGERPRINT[:12]
+DISABLED_FUNCTIONAL_MODULES = frozenset({'PPX', 'Mcm1', 'SBF_MBF'})
+# Compatibility for specialized samplers that used to add these graph nodes.
+RESTORED_FUNCTIONAL_MODULES = frozenset()
 
 BINDING_GROUPS = {'G1': {'name': 'CLN2',
         'params': ['ksn2p', 'ksn2pp'],
@@ -104,6 +105,14 @@ BINDING_GROUPS = {'G1': {'name': 'CLN2',
          'modes': {'APC-A': 0.9, 'ts': 0.1}},
  'G24': {'name': 'MDT', 'params': ['mdt'], 'P_bio_G': 0.032, 'modes': {'MDT': 1.0}}}
 
+# Temporarily disabled by user decision: none of the canonical 126 genotypes
+# targets these modules. Keep the definitions above for a future explicit opt-in;
+# every sampler and mutation gate below sees only the active mapping.
+DISABLED_BINDING_GROUPS = {k: g for k, g in BINDING_GROUPS.items()
+                           if g['name'] in DISABLED_FUNCTIONAL_MODULES}
+BINDING_GROUPS = {k: g for k, g in BINDING_GROUPS.items()
+                  if g['name'] not in DISABLED_FUNCTIONAL_MODULES}
+
 _total_g_weight = sum(g['P_bio_G'] for g in BINDING_GROUPS.values())
 
 for g in BINDING_GROUPS.values():
@@ -137,6 +146,7 @@ GENE_ROLE = {'CLN2': 'dose',
  'MAD2': 'event',
  'BUB2': 'event',
  'MDT': 'event'}
+GENE_ROLE = {g: role for g, role in GENE_ROLE.items() if g in GROUP_BY_NAME}
 
 MODE_CLASS = {'KO': 'loss',
  'GAL-OE': 'expression',
@@ -244,12 +254,56 @@ TOUCH = {('CLN2', 'KO'): {'ksn2pp'},
  ('APC_Core', 'ts'): {'init_CDH1T', 'init_CDH1', 'kscdh', 'ks20pp', 'ks20p'},
  ('MDT', 'MDT'): {'mdt'}}
 
+TOUCH = {pair: keys for pair, keys in TOUCH.items() if pair[0] in GROUP_BY_NAME}
+
 def touch_set(gene, mode):
     return TOUCH.get((gene, mode), set())
 
-COMPOSITE_ELIGIBLE = [n for n in GENE_NAMES
-                      if any(m in GROUP_BY_NAME[n]['modes'] for m in ('GAL-OE', 'MC'))
-                      and any(m in GROUP_BY_NAME[n]['modes'] for m in ('db', 'PM', 'CA'))]
+# Same-gene compounds explicitly present in canonical real genotypes. #50 is
+# represented separately by the CLB2 GAL-MC mode (GAL base times integer copies).
+# Cross-gene combinations remain exploratory; disjoint parameter footprints
+# alone do not authorize a new same-gene compound.
+COMPOSITE_REAL_EVIDENCE = {
+    ('CLB2', ('GAL-OE', 'db')): ('62',),
+    ('CLB5', ('GAL-OE', 'db')): ('72',),
+    ('SIC1', ('GAL-OE', 'db')): ('29',),
+    ('PDS1', ('GAL-OE', 'db')): ('83', '84'),
+}
+COMPOSITE_ELIGIBLE = sorted({g for g, _ in COMPOSITE_REAL_EVIDENCE})
+
+
+def composite_partners(gene, mode):
+    return sorted({other for (g, modes) in COMPOSITE_REAL_EVIDENCE
+                   if g == gene and mode in modes for other in modes if other != mode})
+
+
+def expand_composites(pairs, rng):
+    """Legacy 25% expansion branch, limited to the explicit real-supported list."""
+    expanded = []
+    for gene, mode in pairs:
+        expanded.append((gene, mode))
+        if gene in COMPOSITE_ELIGIBLE and rng.random() < .25:
+            partners = composite_partners(gene, mode)
+            if partners:
+                expanded.append((gene, str(rng.choice(partners))))
+    return expanded
+
+
+def mutation_pairs_compatible(first, second):
+    gene, mode = first
+    other_gene, other_mode = second
+    if gene == other_gene:
+        if (gene, tuple(sorted((mode, other_mode)))) not in COMPOSITE_REAL_EVIDENCE:
+            return False
+    return not (touch_set(gene, mode) & touch_set(other_gene, other_mode))
+
+
+def first_mutation_conflict(pairs):
+    for index, pair in enumerate(pairs):
+        for previous, other in enumerate(pairs[:index]):
+            if not mutation_pairs_compatible(pair, other):
+                return index, previous
+    return None
 
 
 def require_mutation(gene, mode):

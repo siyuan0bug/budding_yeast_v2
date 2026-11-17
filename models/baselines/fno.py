@@ -38,7 +38,7 @@ class FNO(nn.Module):
         self.local = nn.ModuleList([nn.Conv1d(width, width, 1) for _ in range(n_blocks)])
         self.project = nn.Sequential(nn.Conv1d(width, 128, 1), nn.GELU(), nn.Conv1d(128, num_vars, 1))
 
-    def forward(self, x, params):
+    def forward(self, x, params, return_features=False):
         h = self.lift(joint_condition_grid(x, params, self.num_vars, self.param_dim))
         if self.padding:
             h = F.pad(h, (0, self.padding))
@@ -48,4 +48,13 @@ class FNO(nn.Module):
                 h = F.gelu(h)
         if self.padding:
             h = h[..., :-self.padding]
+        if return_features:
+            # Last hidden representation, before the output linear projection.
+            # Preserve query time; an ODE has no spatial axis to average here.
+            latent = self.project[1](self.project[0](h))
+            return self.project[2](latent), latent
         return self.project(h)
+
+    def forward_ic_time(self, x, params):
+        """Same prediction interface as the training wrapper, without new layers."""
+        return self.forward(x, params)

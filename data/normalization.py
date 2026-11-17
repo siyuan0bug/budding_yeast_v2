@@ -1,13 +1,71 @@
-"""Shared tensor transforms; fitting/split policy remains owned by the DataModule.
+"""Shared statistics and tensor transforms; split policy stays in the DataModule.
 
 ``log1p`` describes the *state* transform, not the parameter transform:
 Y -> zscore(log1p(Y)), P -> zscore(P). Keep these four historical modes
 numerically compatible while using the same inverse everywhere.
 """
+from dataclasses import dataclass
+import numpy as np
 import torch
 
 
 NORM_TYPES = ('log1p', 'linear', 'asinh_z', 'asinh_scale')
+
+
+@dataclass
+class NormalizationStats:
+    """One train-fitted transform for DataModules, inference and acquisition."""
+    mean_y: torch.Tensor
+    std_y: torch.Tensor
+    p_mean: torch.Tensor
+    p_std: torch.Tensor
+    norm_type: str = 'log1p'
+    s_c: torch.Tensor | None = None
+
+    @classmethod
+    def fit(cls, params, trajectories, norm_type='log1p'):
+        check_norm_type(norm_type)
+        p = torch.as_tensor(np.asarray(params).copy(), dtype=torch.float32)
+        y = torch.as_tensor(trajectories, dtype=torch.float32)
+        if not len(p) or len(p) != len(y) or not torch.isfinite(p).all() or not torch.isfinite(y).all():
+            raise ValueError('Normalization needs aligned finite training rows')
+        scale = None
+        if norm_type == 'asinh_scale':
+            value = np.quantile(np.maximum(y[:20000].numpy(), 0.), .90, axis=(0, 2), keepdims=True)
+            scale = torch.tensor(np.maximum(value, .01), dtype=torch.float32)
+        z = transform_y(y, norm_type, scale)
+        q = torch.log10(p.clamp(min=1e-8)) if norm_type == 'asinh_scale' else p
+        p_std = q.std(0, keepdim=True)
+        if norm_type in ('log1p', 'linear'):
+            p_std = p_std + 1e-6
+        return cls(z.mean((0, 2), keepdim=True), z.std((0, 2), keepdim=True) + 1e-6,
+                   q.mean(0, keepdim=True), p_std, norm_type, scale)
+
+    @classmethod
+    def from_datamodule(cls, dm):
+        return cls(dm.mean_y, dm.std_y, dm.p_mean, dm.p_std, dm.norm_type, dm.s_c)
+
+    def bind(self, dm):
+        for key in ('mean_y', 'std_y', 'p_mean', 'p_std', 's_c'):
+            setattr(dm, key, getattr(self, key))
+
+    def encode(self, params, initial, steps):
+        p = torch.as_tensor(np.asarray(params).copy(), dtype=torch.float32)
+        y0 = torch.as_tensor(np.asarray(initial).copy(), dtype=torch.float32)
+        initial = normalize_y(y0, self.mean_y, self.std_y, self.norm_type, self.s_c)
+        grid = torch.linspace(0, 1, steps)[None, None].expand(len(p), y0.shape[1], -1)
+        x = torch.stack((initial[:, :, None].expand(-1, -1, steps), grid), dim=2)
+        return x, normalize_p(p, self.p_mean, self.p_std, self.norm_type)
+
+    def targets(self, values):
+        return normalize_y(torch.as_tensor(values, dtype=torch.float32), self.mean_y, self.std_y, self.norm_type, self.s_c)
+
+    def decode(self, values):
+        return denormalize_y(values, self.mean_y, self.std_y, self.norm_type, self.s_c)
+
+    def state(self):
+        return {key: None if getattr(self, key) is None else getattr(self, key).detach().cpu()
+                for key in ('mean_y', 'std_y', 'p_mean', 'p_std', 's_c')}
 
 
 def check_norm_type(norm_type):

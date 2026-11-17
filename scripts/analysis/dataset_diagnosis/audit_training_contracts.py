@@ -24,8 +24,8 @@ sys.path.insert(0, str(ROOT.parent))
 from budding_yeast_v2.scripts.analysis.dataset_diagnosis.audit_pure_random_evidence import (
     DEFAULT_DATASET, REFERENCE, VARIABLES, split_indices,
 )
-from budding_yeast_v2.utils.losses import RelativeL2Loss, TripleDynamicLoss
-from budding_yeast_v2.utils.metrics import relative_l2_loss
+from budding_yeast_v2.utils.training.losses import RelativeL2Loss, TripleDynamicLoss
+from budding_yeast_v2.utils.evaluation.metrics import relative_l2_loss
 
 
 def reference_soft_dtw(x, y, gamma):

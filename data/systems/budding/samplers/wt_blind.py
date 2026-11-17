@@ -1,11 +1,13 @@
 """WT-Blind QSS/ledger policy with shared legal controls and restored topology."""
 import numpy as np
+from ..catalog import expand_composites, COMPOSITE_ELIGIBLE, first_mutation_conflict
 import math
 from ..parameters import get_default_params
 from ..ode import GK
 from ..catalog import BINDING_GROUPS, TOUCH as CATALOG_TOUCH, RESTORED_FUNCTIONAL_MODULES
 from ..topology import MODULE_EDGES as CANONICAL_MODULE_EDGES
 from ..distributions.ranges import GAL_CLB2
+from ..distributions.ranges import EXACT_ZERO_TARGETS
 
 EPS = 1e-12
 M_BIRTH = 1.2060194
@@ -155,7 +157,6 @@ FOLD_MODES = {('BCK2', 'MC'),
  ('SIC1', 'MC'),
  ('TEM1', 'MC')}
 RESIDUAL_MODES = {'ts', 'DAmP', 'pLOF', 'db'}
-COMPOSITE_ELIGIBLE = ['CLB2', 'CLB5', 'PDS1', 'SIC1', 'CDH1']
 ALLELE_RESIDUAL = {('CDC15', 'ts'): ['kkpnetpp'],
  ('PPX', 'ts'): ['kppnetpp'],
  ('PPX', 'db'): ['kdppxpp'],
@@ -697,23 +698,14 @@ def _resolve_conflicts(pairs):
     Resample conflicting modes; drop pairs that cannot resolve."""
     pairs = list(pairs)
     for _ in range(30):
-        touched = {}
-        conflict = None
-        for i, (g, m) in enumerate(pairs):
-            ts = touch_set(g, m)
-            for pk in ts:
-                if pk in touched:
-                    conflict = i
-                    break
-                touched[pk] = i
-            if conflict is not None:
-                break
+        collision = first_mutation_conflict(pairs)
+        conflict = None if collision is None else collision[0]
         if conflict is None:
             return pairs
         g, m = pairs[conflict]
         pairs[conflict] = (g, _sample_mode(g))
-    if len(pairs) > 1:
-        pairs.pop(conflict)
+    while (collision := first_mutation_conflict(pairs)) is not None:
+        pairs.pop(collision[0])
     return pairs
 
 def build_candidate(level, samplers, boost=None, fold_bias_fn=None, *, ma):
@@ -727,17 +719,7 @@ def build_candidate(level, samplers, boost=None, fold_bias_fn=None, *, ma):
         genes, pairs = ([g0], [(g0, m0)])
     else:
         pairs = [(g, _sample_mode(g)) for g in genes]
-        expanded = []
-        for g, m in pairs:
-            expanded.append((g, m))
-            if g in COMPOSITE_ELIGIBLE and np.random.rand() < 0.25:
-                gmode = GROUP_BY_NAME[g]['modes']
-                synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-                struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-                if m in synth and struc:
-                    expanded.append((g, str(np.random.choice(struc))))
-                elif m in struc and synth:
-                    expanded.append((g, str(np.random.choice(synth))))
+        expanded = expand_composites(pairs, np.random)
         pairs = expanded
     pairs = _resolve_conflicts(pairs)
     if not pairs:
@@ -751,6 +733,10 @@ def build_candidate(level, samplers, boost=None, fold_bias_fn=None, *, ma):
     edits = []
     for g, m in pairs:
         desc_parts.append(f'{g}[{m}]')
+        if ma.mutation_profile == 'mutant_aware' and (g,m) in EXACT_ZERO_TARGETS:
+            ma.apply_gene_mutation(g,m,0.,p_wt,p_mut,ovr)
+            edits.append((g,m,0.))
+            continue  # Do not overwrite canonical zeros with the legacy ledger.
         if m=='GAL-MC':
             has_gal=True
             copies=ma.sample_scaling_factor(m,g)
@@ -953,3 +939,15 @@ def _rollback(accepted, name, ledger, seen_sigs=None):
             if seen_sigs is not None and cand.get('sig') is not None:
                 seen_sigs.discard(cand['sig'])
             return
+
+# Sampling-only tables exclude inactive modules; QSS/ODE biology stays intact.
+ALLELE_RESIDUAL = {key: value for key, value in ALLELE_RESIDUAL.items()
+               if (key[0] if isinstance(key, tuple) else key) in GROUP_BY_NAME}
+_NATIVE_SCALE_PARAMS = {key: value for key, value in _NATIVE_SCALE_PARAMS.items()
+               if (key[0] if isinstance(key, tuple) else key) in GROUP_BY_NAME}
+GAL_ALPHA_BIO = {key: value for key, value in GAL_ALPHA_BIO.items()
+               if (key[0] if isinstance(key, tuple) else key) in GROUP_BY_NAME}
+PRIMARY_COORDS = {key: value for key, value in PRIMARY_COORDS.items()
+               if (key[0] if isinstance(key, tuple) else key) in GROUP_BY_NAME}
+SIGN = {key: value for key, value in SIGN.items()
+               if (key[0] if isinstance(key, tuple) else key) in GROUP_BY_NAME}

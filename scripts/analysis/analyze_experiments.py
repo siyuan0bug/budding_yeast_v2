@@ -183,6 +183,13 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
             m["synth_test"] = m["lhs_test"]
         normalized_metrics.append(m)
 
+    metric_versions={block.get('metric_version','legacy_unversioned')
+        for m in normalized_metrics for split in splits
+        if isinstance((block:=m.get(split)),dict) and _all_vars_key(block) is not None}
+    if len(metric_versions)>1:
+        raise ValueError('Cannot average seeds with different Relative L2 definitions: '
+                         +str(sorted(metric_versions)))
+
     # Canonicalise every seed before collecting values. Dropping aliases only
     # from the union of keys would silently drop alias-only historical seeds.
     explicit = {key for m in normalized_metrics for sp in splits
@@ -264,6 +271,7 @@ def aggregate_group_metrics(group_entry: Dict[str, Any]) -> Dict[str, Any]:
         return block.get(metric, {}).get(field, default)
 
     summary = {
+        "metric_version": next(iter(metric_versions),'legacy_unversioned'),
         "dataset": group_entry["dataset_tag"],
         "model": group_entry["model_name"],
         "loss_strategy": group_entry["loss_strategy"],
@@ -350,6 +358,12 @@ def main():
     if not summaries:
         print("⚠️ 过滤后无匹配的实验结果。")
         return
+
+    versions={s['metric_version'] for s in summaries}
+    if len(versions)>1 and args.sort_by=='real_l2':
+        raise ValueError('Cannot rank different Relative L2 definitions together; '
+                         'filter the source directories or reevaluate with one definition')
+    print('Relative L2 metric definitions: '+', '.join(sorted(versions)))
 
     # 排序
     reverse_sort = True if args.sort_by == "real_corr" else False

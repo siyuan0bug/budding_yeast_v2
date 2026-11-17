@@ -1,5 +1,6 @@
 """Original paired skeleton/shared-dose construction; two profiles share canonical biology."""
 import numpy as np
+from ..catalog import expand_composites
 from ..distributions.mass import sample_scaling_factor as sample_scaling_factor_A
 from ..mutations.mass import apply_gene_mutation as _apply_mass_mutation
 
@@ -30,17 +31,7 @@ def sample_twin_mutant_pair(level, defaults, *, ma):
         modes = sorted(ma.GROUP_BY_NAME[g]['modes'].keys())
         m = str(np.random.choice(modes))
         pairs.append((g, m))
-    expanded = []
-    for g, m in pairs:
-        expanded.append((g, m))
-        gmode = ma.GROUP_BY_NAME.get(g, {}).get('modes', [])
-        if g in ma.COMPOSITE_ELIGIBLE and np.random.rand() < 0.25:
-            synth = [x for x in ('GAL-OE', 'MC') if x in gmode]
-            struc = [x for x in ('db', 'PM', 'CA') if x in gmode]
-            if m in synth and struc:
-                expanded.append((g, str(np.random.choice(struc))))
-            elif m in struc and synth:
-                expanded.append((g, str(np.random.choice(synth))))
+    expanded = expand_composites(pairs, np.random)
     pairs = expanded
     pairs = ma._resolve_conflicts(pairs)
     if not pairs:

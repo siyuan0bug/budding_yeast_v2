@@ -8,7 +8,7 @@ import tempfile
 import numpy as np
 
 
-def write_dataset(path, spec, results, config, report, *, parameter_only=False, dtype='float64'):
+def write_dataset(path, spec, results, config, report, *, parameter_only=False, dtype='float64', extra_fields=None):
     from .registry import resolve_config
     config=resolve_config(config)
     path=Path(path).expanduser().resolve()
@@ -103,6 +103,10 @@ def write_dataset(path, spec, results, config, report, *, parameter_only=False, 
                        simulation_status=np.array([r.status for r in results]))
         from ..label_metadata import trajectory_label_metadata
         archive.update(trajectory_label_metadata(data,archive['labels'],spec.system_id))
+    if extra_fields:
+        if set(extra_fields)&set(archive):
+            raise ValueError('Extra dataset fields must not replace validated schema fields')
+        archive.update(extra_fields)
     path.parent.mkdir(parents=True,exist_ok=True)
     temporary=None
     try:

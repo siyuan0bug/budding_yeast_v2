@@ -1,7 +1,7 @@
 """mutant_aware synthetic mutation assignment, independent of the canonical biological engine."""
 import numpy as np
 from ..catalog import require_mutation
-from ..distributions.ranges import GAL_MC_BASE,GAL_MC_MIN,GAL_MC_MAX,NET1_BINDING_RESIDUAL,log_uniform
+from ..distributions.ranges import EXACT_ZERO_TARGETS,GAL_MC_BASE,GAL_MC_MIN,GAL_MC_MAX,NET1_BINDING_RESIDUAL,log_uniform
 
 def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
     """
@@ -10,6 +10,14 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
     Stochastic allele branches use the supplied rng (legacy global if omitted).
     """
     require_mutation(g_name, m_chosen)
+    if (g_name,m_chosen) in EXACT_ZERO_TARGETS:
+        # Enforce at assignment too: specialized callers may supply an alpha
+        # directly rather than using the selected distribution interface.
+        for key in EXACT_ZERO_TARGETS[g_name,m_chosen]:
+            ovr[key] = 0.0
+        if (g_name,m_chosen) == ('APC_Core','ts'):
+            ovr.update(init_CDH1T=0.0, init_CDH1=0.0)
+        return
     rng = np.random if rng is None else rng
     if m_chosen == 'GAL-MC':
         if not float(alpha).is_integer() or not GAL_MC_MIN<=alpha<=GAL_MC_MAX:
@@ -115,9 +123,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
         elif g_name == 'CLB2':
             ovr['ksb2p'] = p_wt['ksb2p'] * alpha
             ovr['ksb2pp'] = p_wt['ksb2pp'] * alpha
-        elif g_name == 'CDC20':
-            ovr['ks20p'] = p_wt['ks20p'] * alpha
-            ovr['ks20pp'] = p_wt['ks20pp'] * alpha
         elif g_name == 'CDC14':
             if rng.random() < 0.5:
                 ovr['ks14'] = p_wt['ks14'] * rng.uniform(0.0, 0.01)
@@ -134,8 +139,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
             ovr['kppnetpp'] = p_wt['kppnetpp'] * alpha
         elif g_name == 'Mcm1':
             ovr['kamcm'] = p_wt['kamcm'] * alpha
-        elif g_name == 'CDC15':
-            ovr['kkpnetpp'] = p_wt['kkpnetpp'] * alpha
         elif g_name == 'TEM1':
             ovr['Tem1T'] = 0.0
             ovr['ka15pp'] = p_wt['ka15pp'] * alpha
@@ -143,23 +146,10 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
         elif g_name == 'ESP1':
             ovr['kasesp'] = p_wt['kasesp'] * alpha
             ovr['kdiesp'] = p_wt['kdiesp'] * alpha
-        elif g_name == 'APC_Core':
-            ovr['ks20p'] = p_wt['ks20p'] * alpha
-            ovr['ks20pp'] = p_wt['ks20pp'] * alpha
-            ovr['kscdh'] = p_wt['kscdh'] * alpha
-            ovr['init_CDH1T'] = 0.0
-            ovr['init_CDH1'] = 0.0
     elif m_chosen == 'db':
         if g_name == 'CLB2':
             ovr['kdb2P'] = 0.0
             ovr['kdb2pp'] = p_wt['kdb2pp'] * alpha
-        elif g_name == 'CLB5':
-            ovr['kdb5pp'] = p_wt['kdb5pp'] * alpha
-        elif g_name == 'PDS1':
-            ovr['kd2pdspp'] = p_wt['kd2pdspp'] * alpha
-            ovr['kd3pdspp'] = p_wt['kd3pdspp'] * alpha
-        elif g_name == 'SIC1':
-            ovr['kd3c1'] = p_wt['kd3c1'] * alpha
         elif g_name == 'PPX':
             ovr['kdppxpp'] = p_wt['kdppxpp'] * alpha
     elif m_chosen == 'KO':
@@ -220,8 +210,6 @@ def apply_gene_mutation(g_name, m_chosen, alpha, p_wt, p_mut, ovr, *, rng=None):
         ovr['kbub2'] = 0.0
         ovr['BUB2_active'] = 0.0
         ovr['init_BUB2'] = 0.0
-    elif m_chosen == 'APC-A' or (g_name in ['CDC20', 'APC_Core'] and m_chosen == 'APC-A'):
-        ovr['ka20pp'] = p_wt['ka20pp'] * rng.uniform(0.0, 0.01)
     elif m_chosen == 'TAB6-1':
         f = log_uniform(rng,NET1_BINDING_RESIDUAL)
         ovr['kasrent'] = p_wt['kasrent'] * f

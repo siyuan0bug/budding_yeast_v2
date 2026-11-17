@@ -18,7 +18,7 @@ from budding_yeast_v2.data.dataset_archive import open_dataset, round_dataset_pa
 from budding_yeast_v2.data.normalization import normalize_y,normalize_p,denormalize_y
 from budding_yeast_v2.data.systems.budding.pattern_groups import pattern_group_metadata
 from budding_yeast_v2.eval import load_model_from_checkpoint
-from budding_yeast_v2.utils.metrics import calculate_metrics
+from budding_yeast_v2.utils.evaluation.metrics import calculate_metrics
 
 
 def moments(block):
