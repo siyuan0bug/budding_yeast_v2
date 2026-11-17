@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+.ipynb_checkpoints/
 
 # 2. Datasets, weights, and binary artifacts
 *.npz
@@ -22,36 +23,41 @@ htmlcov/
 *.pth
 *.pkl
 *.h5
+*.parquet
+*.feather
 
-# 3. Logs and runtime output directories
+# 3. Logs and runtime output directories (anchored to root)
 *.log
-logs/
-logs_v3/
-lightning_logs/
-train_result/
-eval_result/
-eval_results*/
-tune_results/
-swanlog/
-wandb/
-model_visualizations/
+/logs/
+/logs_v3/
+/lightning_logs/
+/train_result/
+/eval_result/
+/eval_results*/
+/tune_results/
+/swanlog/
+/wandb/
+/model_visualizations/
 
-# 4. Experimental checkpoints & big directories
-experiments/
-experiments
-archive/
-!/utils/archive/
-/utils/archive/*
-!/utils/archive/*.py
-!/utils/archive/README.md
-!/scripts/analysis/archive/
-/scripts/analysis/archive/*
-!/scripts/analysis/archive/*.py
-!/scripts/analysis/archive/README.md
-scratch/
+# 4. Experimental checkpoints, archives & scratch
+/experiments
+/experiments/
+/archive/
+/scratch/
+
+
+# 5. Toolchains & test suites policy
 tests/
+/scripts/analysis/
+# Note: scripts/launch/ and scripts/eval/ are retained and tracked
 
-# 5. OS & IDE artifacts
+# 6. Transient docs & root drafts
+/docs/*_2026-*.md
+/参考实施方案
+/tmp*
+/*.tmp
+
+# 7. OS & IDE artifacts
 .DS_Store
 .vscode/
 .idea/
