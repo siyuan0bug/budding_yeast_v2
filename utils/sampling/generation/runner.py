@@ -4,7 +4,7 @@ OGAS here is explicitly a round-based, legal-projection adaptation. It does not
 claim Melissa's continuously coupled online surrogate-training schedule.
 """
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict,replace
 import json
 import multiprocessing as mp
 import os
@@ -87,6 +87,11 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
             candidates,signatures,bank=domain.bank(max(bank_size,count))
             ids,diagnostics=policy.select(bank,count)
         chosen=[candidates[i] for i in ids]
+        if policy.name=='ogas_round_projected':
+            flags=diagnostics['reference_flags']
+            if len(flags)!=len(chosen):raise ValueError('OGAS proposal/reference flags are unaligned')
+            chosen=[replace(candidate,metadata=dict(candidate.metadata,ogas_is_reference=bool(reference)))
+                    for candidate,reference in zip(chosen,flags)]
         for i in ids:domain.consume(signatures[i])
         with (directory/'_state/ode_attempts.jsonl').open('a') as log:
             for candidate in chosen:
@@ -108,7 +113,9 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
             view=PoolInputs(np.arange(len(successful)),np.asarray([r.params for r in successful]),
                             np.asarray([r.y_init for r in successful]))
             # Feedback uses the model from BEFORE these labels were revealed.
-            policy.observe(view,np.asarray([r.trajectory for r in successful]),predictor)
+            flags=(np.asarray([r.candidate.metadata['ogas_is_reference'] for r in successful])
+                   if policy.name=='ogas_round_projected' else None)
+            policy.observe(view,np.asarray([r.trajectory for r in successful]),predictor,is_reference=flags)
             pending.extend(successful)
         if len(pending)>=128 or store.count+len(pending)==target or attempts-last_commit>=128:
             store.append(pending);pending=[]
@@ -224,7 +231,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
                                        for name,v in metrics.items()}|dict(round=i,training_rows=budget))
                     if i==len(cfg.budgets)-1:continue
                     if state is None and policy.feedback_rows==0 and method=='ogas_round_projected':
-                        policy.observe(initial,store.initial['data'],predictor)
+                        policy.observe(initial,store.initial['data'],predictor,
+                                       is_reference=np.ones(len(initial.ids),dtype=bool))
                     if store.count<cfg.budgets[i+1]:
                         _acquire(cfg.budgets[i+1],domain,store,policy,predictor,executor,directory,
                             bank_size=bank_size,query_batch_size=query_batch_size,max_attempts_mult=max_attempts_mult)

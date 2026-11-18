@@ -46,7 +46,14 @@ def vessal_penultimate(features,budget,seed,device='cpu'):
 
 @torch.no_grad()
 def leverage(features,budget,seed,device='cpu',block_size=1024,step_size=2):
-    features=np.asarray(features,dtype=np.float32)
+    # Early Gram matrices are rank deficient. Float32 can lose the 1e-5
+    # ridge when feature magnitudes are large; factor/solve in float64.
+    features=np.asarray(features,dtype=np.float64)
+    if (features.ndim!=2 or not features.shape[1] or not np.isfinite(features).all()
+            or not isinstance(budget,(int,np.integer)) or not 0<budget<=len(features)
+            or not isinstance(block_size,(int,np.integer)) or block_size<1
+            or not isinstance(step_size,(int,np.integer)) or step_size<1):
+        raise ValueError('Lev requires finite feature rows and a valid integer budget/block/step')
     blocks=[np.arange(i,min(i+block_size,len(features))) for i in range(0,len(features),block_size)]
     raw=np.asarray([len(b) for b in blocks])*budget/len(features)
     quotas=np.floor(raw).astype(int)
@@ -61,16 +68,27 @@ def leverage(features,budget,seed,device='cpu',block_size=1024,step_size=2):
         rng=np.random.default_rng(local_seed)
         local=rng.choice(len(block),size=step,replace=False).tolist()
         gram=x[local].T@x[local]
-        regularizer=1e-5*torch.eye(x.shape[1],device=device)
+        regularizer=1e-5*torch.eye(x.shape[1],device=device,dtype=x.dtype)
         for _ in range(1,math.ceil(quota/step)):
             covariance=gram/len(local)+regularizer
             lower=torch.linalg.cholesky(covariance)
             whitened=torch.linalg.solve_triangular(lower,x.T,upper=False)
             scores=whitened.square().sum(0)
-            scores[local]=-torch.inf
-            next_ids=torch.argsort(-scores)[:step].tolist()
+            if not torch.isfinite(scores).all():
+                raise FloatingPointError(f'Nonfinite Lev scores in block {block_index}')
+            # Exclude selected IDs from the domain, rather than assigning -Inf:
+            # invalid scores must never put an already selected ID back on top.
+            remaining=torch.ones(len(block),dtype=torch.bool,device=x.device)
+            remaining[local]=False
+            available=torch.nonzero(remaining).flatten()
+            count=min(step,int(quota)-len(local))
+            next_ids=available[torch.argsort(scores[available],descending=True,stable=True)[:count]].tolist()
             local.extend(next_ids)
             gram.add_(x[next_ids].T@x[next_ids])
         selected.extend(block[np.asarray(local[:quota],dtype=int)])
-    return np.asarray(selected,dtype=np.int64),dict(source=source_record('LevDataDiversity'),
-        block_size=block_size,step_size=step_size,regularization=1e-5,exact_block_quotas=quotas.tolist())
+    selected=np.asarray(selected,dtype=np.int64)
+    if len(selected)!=budget or len(np.unique(selected))!=budget:
+        raise RuntimeError('Lev failed its exact unique selection budget')
+    return selected,dict(source=source_record('LevDataDiversity'),
+        block_size=block_size,step_size=step_size,regularization=1e-5,
+        linear_algebra_dtype='float64',exact_block_quotas=quotas.tolist())

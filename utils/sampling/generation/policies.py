@@ -1,5 +1,6 @@
 """Generation decisions/feedback, isolated from simulation and model training."""
 from dataclasses import asdict
+import warnings
 import numpy as np
 import torch
 
@@ -30,15 +31,19 @@ class GenerationPolicy:
 
     def refresh(self,inputs,truth,predictor,target=None):
         if self.name!='hggs_projected':return
+        if target is not None:
+            if not isinstance(target,(int,np.integer)) or target<=0:
+                raise ValueError('HGGS refresh target must be a positive sample count')
+            target=int(target)
         if target is not None and self.refreshed_target==target:return
         residual=np.empty(len(inputs.ids))
         for start,prediction in predictor.batches(inputs):
-            target=predictor.normalization.targets(truth[start:start+len(prediction)])
-            residual[start:start+len(prediction)]=torch.linalg.vector_norm((prediction-target).flatten(1),dim=1).numpy()
+            normalized_truth=predictor.normalization.targets(truth[start:start+len(prediction)])
+            residual[start:start+len(prediction)]=torch.linalg.vector_norm((prediction-normalized_truth).flatten(1),dim=1).numpy()
         self.controller.refresh(feature_inputs(inputs),residual)
         self.refreshed_target=target
 
-    def observe(self,inputs,truth,predictor=None):
+    def observe(self,inputs,truth,predictor=None,*,is_reference=None):
         x=feature_inputs(inputs)
         if self.name=='oed_temporal':
             self.controller.observe(x,temporal_informativeness(truth,channel_scale=self.channel_scale,config=self.oed_config))
@@ -51,7 +56,7 @@ class GenerationPolicy:
             difficulty=(torch.linalg.vector_norm(prediction-observed,dim=-1)
                         /torch.hypot(torch.linalg.vector_norm(observed,dim=-1),
                                      observed.new_tensor(.01))).mean(1).numpy()
-            self.controller.observe(x,difficulty)
+            self.controller.observe(x,difficulty,is_reference=is_reference)
         self.feedback_rows+=len(x)
 
     def select(self,bank,count):
@@ -88,6 +93,15 @@ class GenerationPolicy:
         if state['name']!=self.name:raise ValueError('Generation method changed')
         self.rng.bit_generator.state=state['rng'];self.feedback_rows=int(state['feedback_rows'])
         self.channel_scale=np.asarray(state['channel_scale'])
-        self.refreshed_target=state.get('refreshed_target')
+        cached_target=state.get('refreshed_target')
+        if cached_target is not None and not isinstance(cached_target,(int,np.integer)):
+            # Older checkpoints accidentally saved a truth tensor here. This
+            # field is only a refresh cache: invalidate it, never infer a count
+            # from its shape or skip refreshing with a new model.
+            warnings.warn('Invalid legacy HGGS refresh cache discarded; revealed residuals will be refreshed',
+                          RuntimeWarning,stacklevel=2)
+            cached_target=None
+        if cached_target is not None and cached_target<=0:raise ValueError('Invalid HGGS refresh cache')
+        self.refreshed_target=None if cached_target is None else int(cached_target)
         if self.name=='hggs_projected':self.mean=np.asarray(state['mean']);self.scale=np.asarray(state['scale'])
         if self.controller is not None:self.controller.load_state_dict(state['controller'])

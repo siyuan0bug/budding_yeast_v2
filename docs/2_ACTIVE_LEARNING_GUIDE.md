@@ -1,3 +1,11 @@
+> **2026-11-18 OGAS修复后两池已启动**：tmux `budding_ogas_seed42_20261118`，仅FNO/seed42/`ogas_async_projected`×mutation与LHS，GPU限定0–3、实际1与0，最多2项每卡1项；原协议/初始/划分/超参复用。新结果根`/home/users/zsy/mydata/budding_yeast/experiments/budding_ogas_alignment/seed42_20261118/generation/`；队列`experiments/budding_sampling_extensions/seed42_ogas_alignment_20261118/`的tasks.json给出精确目录。保留100GiB系统可用底线与I/O保护，W&B offline；启动不等于完成。原46项验收与结果对比见[汇总](../analysis/baseline_status_20261118_ogas_alignment/report.md)。
+
+> **2026-11-18 OGAS修复**：CFG改为作者`unconditional+w*(conditional-unconditional)`约定；v2密度上限改用反馈小批实际reference比例，与判别器平衡类别先验分开。来源标记覆盖探索／引导／随机补位、仿真成功、replay、后台FIFO与恢复；旧无来源状态拒绝混用。生物规则及已有池不改。[修复与验证说明](OGAS_ALIGNMENT_FIX_2026-11-18.md)。
+
+> **2026-11-18 源码一致性审计**：[完整审计](../../papers/baselines/sampling/BASELINE_SOURCE_FIDELITY_AUDIT_2026-11-18.md)。Power/LCMD同输入内核90/45组一致；HGGS采用论文平方比，与作者非平方比实现不同；OGAS当时发现的两处差异已在上方后续修复。PEAKS/Low-Rank等任务适配边界继续适用，已有结果不能直接认定为原样作者复现。
+
+> **2026-11-18 最终baseline规划**：10篇PDF及作者代码核查已整理到[论文目录下的最终报告](../../papers/baselines/sampling/BASELINE_REVIEW_AND_FINAL_SELECTION_2026-11-18.md)。主清单为Random/Power/LCMD-LL/PEAKS-Regression-Reference/Low-Rank-GradientEnergy/Physics-PRE-Power/HGGS-Projected/OGAS-Loss-Projected八项；BAIT留补充，PICore保留后续实现计划。PEAKS为回归参考梯度适配，Low-Rank为梯度能量实例化，不能称原样作者复现。逐篇证据见[完整盘点](SAMPLING_PAPERS_FULL_AUDIT_2026-11-18.md)。本次仅整理规划，未改生产配置或启动实验。
+
 > **2026-11-14 流程与算法分离**：旧在线流程在`utils/archive/online/`，当前完整池流程在`sampling/benchmark/`，共同使用训练/评测服务。`registry.Method.implementation`支持独立`module:function`入口；新增规则只需文件和注册，不必改训练或workflow。`SamplingContext/SamplingResult`负责交互，`query.LabelOracle`负责真值权限与计费。轮次、预算、epochs等由流程配置决定。当前共享协议为`seed42_c0d0d9a0169c`，split/初始ID与整理前完全一致。[扩展示例](../utils/README.md)。下方更早状态保留为历史记录。
 
 > **2026-11-14 当前实现**：`run_al_budding.sh`默认完整池离线Benchmark、独立项目内baseline。最新协议`seed42_18bf9a3289fa`，每池90k候选、5k验证、5k测试，随机初始2k、五轮2k/4k/6k/8k/10k，epochs100/100/100/100/200、warmup5/5/5/5/10；归一化逐轮按累计训练集重拟合。用户已确认仅来源池验证用于checkpoint，两个来源测试均报告。结果不分A/B目录，标签访问条件仍计费。首批默认Random/TopK/LCMD-LL/BAIT-LL共8项，已建立后台队列和监控，按主机负载准入；全局4实验/2重加载，4–7号卡每卡单GPU进程。完整资源探针已完成但不是正式精度结果，训练预算尚未证明收敛。[最新实测与配置](BUDDING_SAMPLING_BENCHMARK_PLAN_2026-11-13.md#19-单项完整规模资源实测与首批配置2026-11-14当前)。下方较早状态保留为历史记录。
@@ -450,3 +458,11 @@ bash run_al_pure_random_1m.sh
 ## 2026-11-17：PEAKS/HGGS/ERACS/Low-Rank回归扩展
 
 已接入`peaks_regression`流式IDS（实际Relative梯度×selected-reference kernel、cache分位数/refresh、新+旧batch）、`eracs_regression`动态SNR/带权Batch-OMP重选、`low_rank`梯度能量上的Algorithm2带权有放回敏感度，以及`hggs_projected`的GF/pilot/global保留＋GMM/MGS/合法投影生成。算法独立保存在baseline，动态/生成流程复用公共训练与评测。不得把这些任务适配写成作者原分类/频率/PDE全实验的逐项复现。数学公式、入口、对照与成本见[详细说明](REGRESSION_SAMPLING_BASELINES_2026-11-17.md)。
+
+## 2026-11-18 baseline 故障修复补充
+
+HGGS跨轮刷新、Lev重复ID和Physics-PRE无残差区间的修复及验证见[BASELINE_REPAIRS_2026-11-18.md](BASELINE_REPAIRS_2026-11-18.md)。ERACS新增触发统计、结束警告和两分支机制测试；当前正式历史实验零重选，不把它作为OMP机制验证。损失/归一化/生物规则不改，未启动正式补跑。
+
+## 2026-11-18：论文主对照精简清单
+
+本地论文/作者参考/生产接口及一手在线出处重新核查后，建议主对照Random、QBC、LCMD、Physics-PRE、HGGS、OGAS；3项近期方法中PRE明确为2026 Workshop。HGGS的GF初始集、ERACS起始resident及一次性coreset不等同共同2000；生成方法保留Projected适配。尚未实现的PICore（TMLR2025，作者代码可用）比LLM语料筛选更值得补充，但需事件物理梯度与预热适配。详见[SAMPLING_BASELINE_SHORTLIST_2026-11-18.md](SAMPLING_BASELINE_SHORTLIST_2026-11-18.md)。本轮未改运行中的实验。

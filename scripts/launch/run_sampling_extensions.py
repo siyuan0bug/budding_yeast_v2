@@ -45,6 +45,22 @@ def tasks():
     return [dict(row,task_id=f"{row['pool']}_{row['method']}",status='pending') for row in rows]
 
 
+def failed_tasks(rows,previous):
+    """Select failed task identities only; never inherit old output/state files."""
+    if not isinstance(previous,list) or len({t['task_id'] for t in previous})!=len(previous):
+        raise ValueError('Invalid previous task ledger')
+    known={t['task_id']:t for t in rows};selected=[]
+    for old in previous:
+        if old['status']!='failed':continue
+        current=known.get(old['task_id'])
+        if current is None or any(old[k]!=current[k] for k in ('kind','pool','method')):
+            raise ValueError(f'Unknown/changed failed task: {old["task_id"]}')
+        selected.append(dict(current,rerun_from_result_directory=old.get('result_directory'),
+                             previous_exit_code=old.get('exit_code')))
+    if not selected:raise ValueError('Previous queue has no failed tasks to rerun')
+    return selected
+
+
 def gpu_memory():
     raw=subprocess.check_output(['nvidia-smi','--query-gpu=index,memory.free','--format=csv,noheader,nounits'],text=True,timeout=10)
     return {a.strip():float(b.strip())/1024 for a,b in (line.split(',') for line in raw.splitlines())}
@@ -116,6 +132,10 @@ def main(argv=None):
     parser.add_argument('--ramp-interval',type=float,default=90.)
     parser.add_argument('--gpu-free-gib',type=float,default=12.)
     parser.add_argument('--cache-chunks',type=int,default=1024)
+    parser.add_argument('--retry-failed-from',type=Path,help='Previous tasks.json; rerun failed identities in fresh results')
+    parser.add_argument('--results-root',type=Path,help='Fresh parent for fixed_pool/generation/dynamic result roots')
+    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for t in tasks()}),
+                        help='Run only these methods, on both pools; completed runs may be rerun in a fresh root')
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args(argv)
     if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
@@ -125,8 +145,24 @@ def main(argv=None):
     protocol=json.loads((args.protocol/'protocol.json').read_text());cfg=BenchmarkConfig(**protocol['config']).validate()
     if cfg.seed!=42 or cfg.model!='fno':raise ValueError('This queue is explicitly FNO / seed42 only')
     rows=tasks()
+    retry_source=None
+    if args.retry_failed_from is not None:
+        if args.results_root is None:raise ValueError('Failed-task reruns require a fresh --results-root')
+        retry_source=dict(path=str(args.retry_failed_from.resolve()),sha256=file_sha256(args.retry_failed_from))
+        previous_manifest=args.retry_failed_from.parent/'manifest.json'
+        if previous_manifest.exists():
+            previous=json.loads(previous_manifest.read_text())
+            if previous['protocol_fingerprint']!=protocol['fingerprint']:
+                raise ValueError('Retry protocol differs from the original queue')
+        rows=failed_tasks(rows,json.loads(args.retry_failed_from.read_text()))
+    if args.methods is not None:
+        rows=[row for row in rows if row['method'] in args.methods]
+        if not rows:raise ValueError('No tasks match the requested methods')
     outputs=dict(run=DATA/'experiments/budding_sampling',generate=DATA/'experiments/budding_generation',
                  dynamic=DATA/'experiments/budding_dynamic')
+    if args.results_root is not None:
+        outputs={kind:args.results_root/subdir for kind,subdir in
+                 [('run','fixed_pool'),('generate','generation'),('dynamic','dynamic')]}
     for row in rows:row['output']=str(outputs[row['kind']])
     if args.dry_run:
         print(json.dumps(dict(seed=42,protocol=protocol['protocol_id'],tasks=rows,count=len(rows),
@@ -140,6 +176,7 @@ def main(argv=None):
             ramp_interval=args.ramp_interval,minimum_gpu_free_gib=args.gpu_free_gib,oracle_cache_chunks=args.cache_chunks,
             system_available_reserve_gib=100.,wandb_mode='offline',launcher_sha256=file_sha256(__file__),
             tasks=[{k:v for k,v in t.items() if k!='status'} for t in rows])
+        if retry_source is not None:settings['rerun_task_ledger']=retry_source
         if manifest.exists() and json.loads(manifest.read_text())!=settings:raise ValueError('Queue configuration/source changed; use a fresh queue directory')
         atomic_json(manifest,settings)
         status_path=args.directory/'tasks.json'

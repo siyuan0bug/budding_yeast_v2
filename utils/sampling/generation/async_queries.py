@@ -27,7 +27,8 @@ class AsyncQueries:
         if len(candidates)+len(self.pending)>self.limit:raise ValueError('Asynchronous queue is full')
         for candidate in candidates:
             self._log([dict(event='start',proposal_id=candidate.metadata['generation_proposal_index'],
-                            model_step=int(model_step),overrides=candidate.overrides)])
+                            model_step=int(model_step),overrides=candidate.overrides,
+                            is_reference=candidate.metadata.get('ogas_is_reference'))])
             future=self.executor.submit(self.function,candidate)
             self.pending[future]=(candidate,time.monotonic());self.submitted+=1
 
@@ -47,7 +48,8 @@ class AsyncQueries:
             candidate,_=self.pending.pop(future);result=future.result();self.finished+=1
             self.failed+=int(result.status!='success')
             self._log([dict(event='finish',proposal_id=candidate.metadata['generation_proposal_index'],
-                status=result.status,overrides=candidate.overrides,diagnostics=result.diagnostics)])
+                status=result.status,overrides=candidate.overrides,diagnostics=result.diagnostics,
+                is_reference=candidate.metadata.get('ogas_is_reference'))])
             results.append(result)
         return results
 

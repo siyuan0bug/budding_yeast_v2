@@ -90,6 +90,7 @@ def run_dynamic(protocol,pool,method,output,*,device='cpu',dynamic_config=None,l
                 unique_labels_accessed=len(oracle.revealed),logical_label_reads=oracle.accesses,new_ode_calls=0,
                 optimizer_steps=callback.steps,best_checkpoint_exposure=callback.best_exposure,
                 training_exposure='dynamic',normalization='initial_train_frozen',events=callback.events,
+                selection_mechanism=callback.selection_summary(),
                 seconds=time.monotonic()-started,source_trajectories_copied=False,
                 native_classification_reproduction=False)
             artifacts=[*stream.rglob('*'),*state_dir.glob('selection_epoch_*.json'),state_dir/'dynamic_final.pt',

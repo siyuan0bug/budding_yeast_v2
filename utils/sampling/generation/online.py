@@ -4,7 +4,7 @@ The generator has one bounded CPU thread. Solver workers are separate CPU
 processes. This is an independently implemented, legal-domain adaptation of
 OGAS Algorithm 1, not a claim to reproduce Melissa/PDE experiments unchanged.
 """
-from dataclasses import dataclass,asdict
+from dataclasses import dataclass,asdict,replace
 import json
 import math
 import os
@@ -97,8 +97,10 @@ class OnlineGeneration(Callback):
     def _accept(self,results):
         valid=[r for r in results if r.status=='success']
         if valid:
+            flags=(np.asarray([r.candidate.metadata['ogas_is_reference'] for r in valid])
+                   if self.controller is not None else np.ones(len(valid),dtype=bool))
             self.replay.add(np.asarray([r.params for r in valid]),np.asarray([r.y_init for r in valid]),
-                            np.asarray([r.trajectory for r in valid]))
+                            np.asarray([r.trajectory for r in valid]),is_reference=flags)
             self.pending.extend(valid)
             if self.accepted>self.target:raise RuntimeError('Online label budget overshot')
             if len(self.pending)>=self.config.flush_rows:self.flush()
@@ -116,6 +118,7 @@ class OnlineGeneration(Callback):
         with resource_slot('scoring','online canonical proposal and generation'):
             candidates,signatures,view=self.domain.bank(max(self.bank_size,count));x=feature_inputs(view)
             if self.controller is None:
+                guided=0
                 ids=self.rng.choice(len(x),count,replace=False);diagnostics=dict(rule='random canonical reference')
             else:
                 targets=self.background.take(count)
@@ -132,8 +135,11 @@ class OnlineGeneration(Callback):
                 diagnostics.update(rule='OGAS Algorithm1, asynchronous conditional DDPM, legal projection',
                     guided_queries=guided,exploration_queries=int(explore.sum()),sampler_not_ready_queries=unavailable,
                     requested_generator_fraction=fraction)
+            diagnostics.update(reference_queries=count-guided,generator_queries=guided)
             for i in ids:self.domain.consume(signatures[i])
-        self.queue.submit([candidates[i] for i in ids],model_step=self.steps)
+        chosen=[replace(candidates[i],metadata=dict(candidates[i].metadata,ogas_is_reference=position>=guided))
+                for position,i in enumerate(ids)]
+        self.queue.submit(chosen,model_step=self.steps)
         with (self.directory/'_state/acquisition.jsonl').open('a') as log:
             log.write(json.dumps(_json_safe(dict(diagnostics,model_step=self.steps,queries=count)))+'\n')
 
@@ -186,7 +192,7 @@ class OnlineGeneration(Callback):
             values=batch_difficulty(self.captured,batch['y'],self.config.signal,epsilon)
             x=np.column_stack((batch['online_params'].detach().cpu().numpy(),
                                batch['online_initial'].detach().cpu().numpy()))
-            self.background.observe(x,values)
+            self.background.observe(x,values,is_reference=batch['online_is_reference'].detach().cpu().numpy())
         self.captured=None
         if self.generation_closed:return
         self._accept(self.queue.poll())

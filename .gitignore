@@ -51,6 +51,8 @@ tests/
 /scripts/analysis/
 # Note: scripts/launch/ and scripts/eval/ are retained and tracked
 
+/analysis/
+
 # 6. Transient docs & root drafts
 /docs/*_2026-*.md
 /参考实施方案

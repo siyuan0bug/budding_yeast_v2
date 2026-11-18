@@ -113,9 +113,11 @@ class DynamicSelection(Callback):
         with resource_slot('scoring','ERACS SNR / OMP reselection'):
             current=self.gradients(pl_module,self.dataset.rows)
             snr=gradient_snr(current,self.dataset.weights[:len(current)])
-            event=dict(event='snr_check',epoch=epoch,snr=snr,trigger=snr<self.config.snr_threshold)
+            event=dict(event='snr_check',epoch=epoch,snr=snr,trigger=snr<self.config.snr_threshold,
+                       threshold=self.config.snr_threshold,trigger_rule='snr < threshold')
             if self.method=='random_dynamic':
                 rows=self.rng.choice(self.inputs.ids,self.target,replace=False);weights=None;event['trigger']=True
+                event['trigger_rule']='scheduled random replacement'
             elif event['trigger']:
                 full=self.gradients(pl_module,self.inputs.ids)
                 indices,weights,details=weighted_omp(full,self.target,group_size=self.config.omp_group_size,
@@ -126,7 +128,19 @@ class DynamicSelection(Callback):
                 self.dataset.set_rows(rows,weights);event['resident_rows']=list(map(int,rows))
                 self.oracle.store.snapshot(self.directory/f'_state/selection_epoch_{epoch:04d}.json',rows,
                     weights=weights,provenance=dict(role='dynamic_resident',epoch=epoch))
-            self.events.append(event);log_event('SELECT','dynamic coreset check',epoch=epoch,snr=snr,reselected=rows is not None)
+            self.events.append(event);log_event('SELECT','dynamic coreset check',epoch=epoch,snr=snr,
+                threshold=self.config.snr_threshold,reselected=rows is not None)
+
+    def selection_summary(self):
+        checks=[event for event in self.events if event['event']=='snr_check']
+        triggered=sum(bool(event['trigger']) for event in checks)
+        return dict(snr_checks=len(checks),triggered_checks=triggered,
+            actual_reselections=sum('resident_rows' in event for event in checks),
+            threshold=self.config.snr_threshold,
+            trigger_rule='scheduled random replacement' if self.method=='random_dynamic' else 'snr < threshold',
+            snr_min=min((event['snr'] for event in checks),default=None),
+            snr_max=max((event['snr'] for event in checks),default=None),
+            omp_mechanism_exercised=self.method=='eracs_regression' and triggered>0)
 
     def on_train_batch_start(self,trainer,pl_module,batch,batch_idx):
         if (self.method not in ('peaks_regression','random_stream')
@@ -167,6 +181,12 @@ class DynamicSelection(Callback):
 
     def on_train_end(self,trainer,pl_module):
         if len(self.dataset.rows)!=self.target:raise RuntimeError('Incomplete dynamic resident budget')
+        if self.method in ('eracs_regression','random_dynamic'):
+            summary=self.selection_summary()
+            log_event('SUMMARY','dynamic selection mechanism',**summary)
+            if self.method=='eracs_regression' and not summary['omp_mechanism_exercised']:
+                log_event('WARN','ERACS completed without OMP reselection; do not interpret as a tested dynamic mechanism',
+                    snr_checks=summary['snr_checks'],threshold=self.config.snr_threshold)
         self.oracle.store.snapshot(self.directory/'stream/dataset.json',self.dataset.rows,
             weights=self.dataset.weights[:len(self.dataset.rows)],provenance=dict(training_exposure='dynamic'))
         path=self.directory/'_state/dynamic_final.pt';temporary=path.with_suffix('.tmp')

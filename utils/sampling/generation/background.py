@@ -22,17 +22,18 @@ class BackgroundOGAS:
         self.dropped_feedback_rows=0;self.completed_cycles=0;self.latest={}
         self.thread=threading.Thread(target=self._run,name='ogas-generator',daemon=True);self.thread.start()
 
-    def observe(self,x,signal):
+    def observe(self,x,signal,*,is_reference=None):
         with self.condition:
             self._check()
-            self.feedback.append((np.asarray(x).copy(),np.asarray(signal).copy()));self.feedback_rows+=len(x)
+            flags=None if is_reference is None else np.asarray(is_reference).copy()
+            self.feedback.append((np.asarray(x).copy(),np.asarray(signal).copy(),flags));self.feedback_rows+=len(x)
             # Same recent-feedback principle as B; bounded even if generation
             # cannot keep up. Evictions are explicitly counted in the report.
             while self.feedback_rows>self.controller.config.capacity and len(self.feedback)>1:
-                old,_=self.feedback.popleft();self.feedback_rows-=len(old);self.dropped_feedback_rows+=len(old)
+                old,_,_=self.feedback.popleft();self.feedback_rows-=len(old);self.dropped_feedback_rows+=len(old)
             if self.feedback_rows>self.controller.config.capacity:
-                old,signals=self.feedback.pop();extra=len(old)-self.controller.config.capacity
-                self.feedback.append((old[extra:],signals[extra:]))
+                old,signals,flags=self.feedback.pop();extra=len(old)-self.controller.config.capacity
+                self.feedback.append((old[extra:],signals[extra:],None if flags is None else flags[extra:]))
                 self.feedback_rows-=extra;self.dropped_feedback_rows+=extra
 
     def request(self,reference):
@@ -64,7 +65,7 @@ class BackgroundOGAS:
                     if self.stopping:return
                     feedback=list(self.feedback);self.feedback.clear();self.feedback_rows=0
                     reference=self.reference.copy();self.requested=False;self.busy=True
-                for x,signal in feedback:self.controller.observe(x,signal)
+                for x,signal,flags in feedback:self.controller.observe(x,signal,is_reference=flags)
                 if feedback:
                     diagnostics=self.controller.train_cycle(reference)
                 elif self.controller.cycles:diagnostics=dict(rule='sample existing conditional generator, no stale-buffer retraining')
