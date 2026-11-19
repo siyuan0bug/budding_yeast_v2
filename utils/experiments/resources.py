@@ -214,8 +214,9 @@ def exclusive_gpu_slot(device):
 def resource_slot(kind, phase):
     """Separate experiment/loading/scoring limits, gated by available host resources."""
     variable = {'experiment': 'SAMPLING_MAX_TOTAL_JOBS',
-                'scoring': 'SAMPLING_SCORING_CONCURRENCY'}.get(kind, 'SAMPLING_IO_CONCURRENCY')
-    default_limit = {'experiment': '16', 'scoring': '4'}.get(kind, '8')
+                'scoring': 'SAMPLING_SCORING_CONCURRENCY',
+                'cpu_scoring': 'SAMPLING_MECHANISM_CONCURRENCY'}.get(kind, 'SAMPLING_IO_CONCURRENCY')
+    default_limit = {'experiment': '16', 'scoring': '4', 'cpu_scoring': '2'}.get(kind, '8')
     limit = int(os.environ.get(variable, default_limit))
     if limit < 1:
         raise ValueError(f'{variable} must be positive')

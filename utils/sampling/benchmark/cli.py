@@ -217,7 +217,7 @@ def main(argv=None):
             print(json.dumps(asdict(spec), ensure_ascii=False))
         from ..generation.policies import METHODS as GENERATION_METHODS
         for name in GENERATION_METHODS:
-            print(json.dumps(dict(name=name,family='baseline',mode='generation',command='generate',
+            print(json.dumps(dict(name=name,family='ours' if name.startswith('ours_') else 'baseline',mode='generation',command='generate',
                 status='implemented_task_adaptation',native_online_ogas=False)))
         from ..generation.online import ONLINE_METHODS
         for name in ONLINE_METHODS:

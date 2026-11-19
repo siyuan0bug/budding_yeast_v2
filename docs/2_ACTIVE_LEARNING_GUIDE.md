@@ -1,3 +1,9 @@
+> **2026-11-19 ours已在tmux运行**：GPU0/1、总4并发、17项FNO/seed42任务；结果根`/home/users/zsy/mydata/budding_yeast/experiments/budding_ours/seed42_20261119/`，队列[任务与日志说明](/home/users/zsy/mydata/budding_yeast/experiments/budding_ours_queue/seed42_20261119/README.md)。原池与协议复用，W&B离线；仅启动与初期训练核查，尚无新正式结果。
+
+> **2026-11-19 Pattern-free ours 原型**：新增 `ours_mechanism_witness`、`ours_dynamics_transport`、`ours_intervention_closure`，可走当前 `run` 或 `generate`；候选真值/Pattern 不参与计分，旧方法保留。机制证据与一阶近似必须区分；通用内核接入 Budding/Fission，但当前完整池/生成实验服务仍是 Budding。详细状态、旧结果及运行命令见[实现盘点](OURS_IMPLEMENTATION_AND_PORTABILITY_2026-11-19.md)。本轮未启动正式长实验。
+
+> **2026-11-18全指标与路径索引**：最新冻结数据/协议`seed42_a866aef5d988`，46项完成＋2项修复后OGAS进行中，统一入口[all_metrics.md](/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling_summary/seed42_a866aef5d988/all_metrics.md)。含数据与配置路径、原实验目录、138组终评的全部字段／混淆矩阵、438组逐轮评测及逐epoch历史导出；没有复制轨迹或改变实验代码。
+
 > **2026-11-18 OGAS修复后两池已启动**：tmux `budding_ogas_seed42_20261118`，仅FNO/seed42/`ogas_async_projected`×mutation与LHS，GPU限定0–3、实际1与0，最多2项每卡1项；原协议/初始/划分/超参复用。新结果根`/home/users/zsy/mydata/budding_yeast/experiments/budding_ogas_alignment/seed42_20261118/generation/`；队列`experiments/budding_sampling_extensions/seed42_ogas_alignment_20261118/`的tasks.json给出精确目录。保留100GiB系统可用底线与I/O保护，W&B offline；启动不等于完成。原46项验收与结果对比见[汇总](../analysis/baseline_status_20261118_ogas_alignment/report.md)。
 
 > **2026-11-18 OGAS修复**：CFG改为作者`unconditional+w*(conditional-unconditional)`约定；v2密度上限改用反馈小批实际reference比例，与判别器平衡类别先验分开。来源标记覆盖探索／引导／随机补位、仿真成功、replay、后台FIFO与恢复；旧无来源状态拒绝混用。生物规则及已有池不改。[修复与验证说明](OGAS_ALIGNMENT_FIX_2026-11-18.md)。

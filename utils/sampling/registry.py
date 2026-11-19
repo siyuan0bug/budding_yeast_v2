@@ -114,6 +114,13 @@ METHODS = {m.name: m for m in [
     *[Method(name, family='ours', ensemble=True) for name in
       ('ours_pattern_balance', 'ours_pattern_context', 'ours_pattern_support')],
     Method('ours_sensitivity', family='ours', mutation_only=True),
+    Method('ours_mechanism_witness', family='ours', implementation='mechanistic.selectors:select_witness',
+           note='Pattern-free queried-anchor response estimator; exact certificates only where explicitly validated'),
+    Method('ours_dynamics_transport', family='ours', implementation='mechanistic.selectors:select_transport',
+           note='First-order implicit physical defect transport with declared event linearization limits'),
+    Method('ours_intervention_closure', family='ours', mutation_only=True,
+           implementation='mechanistic.selectors:select_closure',
+           note='Exact legal control rectangles; query-costed estimated interaction errors, explicit point fill'),
     Method('physics_pre_topk'), Method('physics_pre_power'),
     Method('clustering_sensitivity', track='B', mode='weighted_one_shot',
            note='Native draw-slot budget, possible duplicate draws aggregated with weights; not unique-10k AL'),

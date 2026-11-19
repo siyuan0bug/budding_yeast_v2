@@ -24,12 +24,31 @@ from budding_yeast_v2.utils.sampling.benchmark.runner import source_inventory,ex
 from budding_yeast_v2.utils.sampling.benchmark.protocol import BenchmarkConfig
 from budding_yeast_v2.utils.experiments.resources import resource_state,memory_status
 from budding_yeast_v2.utils.experiments.memory_guard import BatchMemoryGuard
+from budding_yeast_v2.scripts.launch import queue_handover as handovers
 
 DATA=Path('/home/users/zsy/mydata/budding_yeast')
 PROTOCOL=DATA/'benchmarks/budding_sampling/seed42_a866aef5d988'
 
 
-def tasks():
+def tasks(suite='extensions'):
+    if suite=='ours':
+        from budding_yeast_v2.utils.sampling.registry import METHODS
+        from budding_yeast_v2.utils.sampling.ours.mechanistic import METHOD_NAMES
+        # Start new kernels alongside two established methods, then continue
+        # through every supported complete-pool comparison and open generation.
+        order=('ours_mechanism_witness','ours_dynamics_transport',
+               'ours_pattern_context','ours_pattern_support',
+               'ours_intervention_closure','ours_sensitivity','ours_pattern_balance')
+        rows=[dict(kind='run',method=name,pool=pool)
+              for pool in ('mutation','lhs') for name in order
+              if not METHODS[name].mutation_only or pool=='mutation']
+        rows += [dict(kind='generate',method=name,pool=pool,bank_size=64,
+                      query_batch_size=8,workers=2)
+                 for pool in ('mutation','lhs') for name in METHOD_NAMES
+                 if not METHODS[name].mutation_only or pool=='mutation']
+        return [dict(row,task_id=f"{row['kind']}_{row['pool']}_{row['method']}",status='pending')
+                for row in rows]
+    if suite!='extensions':raise ValueError('Unknown completion queue suite')
     # First four exercise the newly implemented kernels on the real workload.
     primary=[('run','low_rank'),('dynamic','peaks_regression'),('dynamic','eracs_regression'),
              ('generate','hggs_projected'),('run','lev_input'),('run','clustering_sensitivity'),
@@ -59,6 +78,14 @@ def failed_tasks(rows,previous):
                              previous_exit_code=old.get('exit_code')))
     if not selected:raise ValueError('Previous queue has no failed tasks to rerun')
     return selected
+
+
+def next_pending(rows, active_tasks, mechanism_limit):
+    """Keep long CPU acquisitions from occupying every GPU job position."""
+    from budding_yeast_v2.utils.sampling.ours.mechanistic import METHOD_NAMES
+    occupied=sum(t['method'] in METHOD_NAMES for t in active_tasks)
+    return next((t for t in rows if t['status']=='pending' and
+                 (t['method'] not in METHOD_NAMES or occupied < mechanism_limit)),None)
 
 
 def gpu_memory():
@@ -115,7 +142,8 @@ def command(task,protocol,lhs_spec):
          '--device','cuda:0','--plots','--wandb']
     if task['kind']=='run':cmd+=['--seed','42']
     elif task['kind']=='generate':
-        cmd+=['--workers','2','--bank-size','512']
+        cmd+=['--workers',str(task.get('workers',2)),'--bank-size',str(task.get('bank_size',512))]
+        if 'query_batch_size' in task:cmd+=['--query-batch-size',str(task['query_batch_size'])]
         if task['pool']=='lhs':cmd+=['--lhs-config',str(lhs_spec)]
     return cmd
 
@@ -134,17 +162,29 @@ def main(argv=None):
     parser.add_argument('--cache-chunks',type=int,default=1024)
     parser.add_argument('--retry-failed-from',type=Path,help='Previous tasks.json; rerun failed identities in fresh results')
     parser.add_argument('--results-root',type=Path,help='Fresh parent for fixed_pool/generation/dynamic result roots')
-    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for t in tasks()}),
+    parser.add_argument('--suite',choices=('extensions','ours'),default='extensions')
+    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours') for t in tasks(suite)}),
                         help='Run only these methods, on both pools; completed runs may be rerun in a fresh root')
+    parser.add_argument('--mechanism-workers',type=int,default=8)
+    parser.add_argument('--mechanism-concurrency',type=int,default=2)
+    parser.add_argument('--io-concurrency',type=int,default=4)
+    parser.add_argument('--ramp-step',type=int,default=1)
+    parser.add_argument('--adopt-from',type=Path,help='Explicit detached supervisor receipt; keep live jobs running')
+    parser.add_argument('--admit-all-pending',action='store_true',
+                        help='Admit all experiment types; retain per-phase CPU/IO semaphores')
+    parser.add_argument('--added-resource-dir',type=Path,help='Reuse the verified previous added-job resource domain')
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args(argv)
     if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
-            or not 1<=args.initial_jobs<=args.max_jobs<=8 or not 1<=args.jobs_per_gpu<=2
+            or not 1<=args.initial_jobs<=args.max_jobs<=16 or not 1<=args.jobs_per_gpu<=8
             or min(args.ramp_after,args.ramp_interval,args.gpu_free_gib)<=0
-            or not 1<=args.cache_chunks<=4096):raise ValueError('Invalid bounded shared-GPU queue settings')
+            or not 1<=args.cache_chunks<=4096
+            or not 1<=args.mechanism_workers<=min(16,len(os.sched_getaffinity(0)))
+            or not 1<=args.mechanism_concurrency<=16
+            or not 1<=args.io_concurrency<=8 or not 1<=args.ramp_step<=4):raise ValueError('Invalid bounded shared-GPU queue settings')
     protocol=json.loads((args.protocol/'protocol.json').read_text());cfg=BenchmarkConfig(**protocol['config']).validate()
     if cfg.seed!=42 or cfg.model!='fno':raise ValueError('This queue is explicitly FNO / seed42 only')
-    rows=tasks()
+    rows=tasks(args.suite)
     retry_source=None
     if args.retry_failed_from is not None:
         if args.results_root is None:raise ValueError('Failed-task reruns require a fresh --results-root')
@@ -167,20 +207,60 @@ def main(argv=None):
     if args.dry_run:
         print(json.dumps(dict(seed=42,protocol=protocol['protocol_id'],tasks=rows,count=len(rows),
             initial_jobs=args.initial_jobs,maximum_jobs=args.max_jobs,gpus=args.gpus),ensure_ascii=False,indent=2));return
+    if args.adopt_from is not None and args.directory.resolve()==args.adopt_from.resolve():
+        raise ValueError('Live adoption requires a fresh supervisor directory')
     args.directory.mkdir(parents=True,exist_ok=True)
     with experiment_lock(args.directory):
         manifest=args.directory/'manifest.json';sources=source_inventory()
+        handover=None if args.adopt_from is None else handovers.load_handover(args.adopt_from,sources)
+        if handover is not None:
+            if manifest.exists():raise ValueError('Adoption is one-time; use a new receipt for another transfer')
+            if handover['protocol_fingerprint']!=protocol['fingerprint']:
+                raise ValueError('Live adoption protocol changed')
+            expected={t['task_id']:t for t in rows}
+            if set(expected)!={t['task_id'] for t in handover['tasks']}:
+                raise ValueError('Live adoption task set changed')
+            for old in handover['tasks']:
+                if any(old[k]!=expected[old['task_id']][k] for k in ('kind','method','pool','output')):
+                    raise ValueError('Live adoption task definition/output changed')
+                if old['status']=='running' and old['gpu'] not in args.gpus:
+                    raise ValueError('Adopted GPU is not authorized for this supervisor')
+        added_resource_root=(args.directory/'.resource_locks').resolve()
+        if args.added_resource_dir is not None:
+            if handover is None:raise ValueError('Explicit resource-domain reuse requires live adoption')
+            previous_manifest=json.loads((args.adopt_from/'manifest.json').read_text())
+            previous_root=previous_manifest.get('live_adoption',{}).get('added_job_resource_root')
+            if previous_root is None or args.added_resource_dir.resolve()!=Path(previous_root).resolve():
+                raise ValueError('Resource domain must match the verified previous supervisor')
+            added_resource_root=args.added_resource_dir.resolve()
         settings=dict(protocol=str(args.protocol.resolve()),protocol_fingerprint=protocol['fingerprint'],seed=42,
+            suite=args.suite,
             training=asdict(cfg),sources=sources,gpus=args.gpus,initial_jobs=args.initial_jobs,
             max_jobs=args.max_jobs,jobs_per_gpu=args.jobs_per_gpu,ramp_after=args.ramp_after,
             ramp_interval=args.ramp_interval,minimum_gpu_free_gib=args.gpu_free_gib,oracle_cache_chunks=args.cache_chunks,
             system_available_reserve_gib=100.,wandb_mode='offline',launcher_sha256=file_sha256(__file__),
-            tasks=[{k:v for k,v in t.items() if k!='status'} for t in rows])
+            tasks=[{k:v for k,v in t.items() if k!='status'} for t in rows],
+            execution_limits=dict(mechanism_workers=args.mechanism_workers,
+                mechanism_concurrency=args.mechanism_concurrency,ordinary_scoring_concurrency=2,
+                io_concurrency=args.io_concurrency,worker_threads=1),ramp_step=args.ramp_step,
+            handover_helper_sha256=file_sha256(handovers.__file__),admit_all_pending=args.admit_all_pending)
+        if handover is not None:
+            settings['live_adoption']=dict(directory=str(args.adopt_from.resolve()),
+                receipt_sha256=file_sha256(args.adopt_from/'handover.json'),
+                added_job_resource_root=str(added_resource_root),
+                inherited_jobs_keep_original_limits=True)
         if retry_source is not None:settings['rerun_task_ledger']=retry_source
         if manifest.exists() and json.loads(manifest.read_text())!=settings:raise ValueError('Queue configuration/source changed; use a fresh queue directory')
         atomic_json(manifest,settings)
         status_path=args.directory/'tasks.json'
-        if status_path.exists():
+        if handover is not None:
+            saved_rows={t['task_id']:t for t in handover['tasks']}
+            for row in rows:
+                old=saved_rows[row['task_id']]
+                if old['status'] in ('complete','running','failed'):
+                    row.update(old)
+                    if old['status']=='running':row.update(adopted=True,exit_code_source='verified_completion_after_adoption')
+        elif status_path.exists():
             old={t['task_id']:t for t in json.loads(status_path.read_text())}
             for row in rows:
                 if row['task_id'] in old:
@@ -191,16 +271,30 @@ def main(argv=None):
         for relative,digest in protocol['artifacts'].items():
             if file_sha256(args.protocol/relative)!=digest:raise ValueError('Shared protocol changed')
         env=dict(os.environ,OMP_NUM_THREADS='2',MKL_NUM_THREADS='2',OPENBLAS_NUM_THREADS='1',WANDB_MODE='offline',
-            PYTHONUNBUFFERED='1',SAMPLING_MAX_TOTAL_JOBS=str(args.max_jobs),SAMPLING_IO_CONCURRENCY='4',
-            SAMPLING_SCORING_CONCURRENCY='2',SAMPLING_MIN_AVAILABLE_GIB='100',SAMPLING_MEMORY_PRESSURE_POLICY='available',
+            PYTHONUNBUFFERED='1',SAMPLING_MAX_TOTAL_JOBS=str(args.max_jobs),SAMPLING_IO_CONCURRENCY=str(args.io_concurrency),
+            SAMPLING_SCORING_CONCURRENCY='2',SAMPLING_MECHANISM_CONCURRENCY=str(args.mechanism_concurrency),
+            SAMPLING_MECHANISM_WORKERS=str(args.mechanism_workers),SAMPLING_MIN_AVAILABLE_GIB='100',SAMPLING_MEMORY_PRESSURE_POLICY='available',
             SAMPLING_IO_GUARD_POLICY='disk_correlated',SAMPLING_IO_ADMISSION='warn',SAMPLING_PLOT_WORKERS='2',
             SAMPLING_ORACLE_CACHE_CHUNKS=str(args.cache_chunks),PYTHONPATH=str(ROOT.parent))
+        if handover is not None:
+            # Inherited jobs retain their old CPU/IO domain. Added jobs have a
+            # separate domain so old 2-slot scorers cannot starve behind new
+            # 5-slot scorers. Parent admission/guard still covers ALL jobs.
+            env['SAMPLING_RESOURCE_DIR']=str(added_resource_root)
         # Parent guard uses the exact same remaining-memory and IO policies.
         for key in ('SAMPLING_MIN_AVAILABLE_GIB','SAMPLING_MEMORY_PRESSURE_POLICY','SAMPLING_IO_GUARD_POLICY',
                     'SAMPLING_IO_ADMISSION'):os.environ[key]=env[key]
         (args.directory/'logs').mkdir(exist_ok=True)
         active={};started=time.monotonic();capacity=args.initial_jobs;last_ramp=started;last_notice=0.
         with BatchMemoryGuard(args.directory/'resources.jsonl') as guard:
+            if handover is not None:
+                for task in rows:
+                    if task['status']!='running':continue
+                    child=handovers.AdoptedProcess(task,handover['processes'][task['task_id']],validate_result)
+                    handle=Path(task['launcher_log']).open('a')
+                    tracking=guard.track(child);tracking.__enter__()
+                    active[child.pid]=(child,task,handle,tracking)
+                    print(f"ADOPT {task['task_id']} GPU={task['gpu']} pid={child.pid} (no worker restart)",flush=True)
             while any(t['status'] in ('pending','running') for t in rows):
                 now=time.monotonic()
                 for pid,(child,task,handle,tracking) in list(active.items()):
@@ -220,7 +314,8 @@ def main(argv=None):
                     for t in rows:
                         if t['status']=='running':t['status']='guard_stopped'
                     atomic_json(status_path,rows);raise RuntimeError(guard.reason)
-                pending=next((t for t in rows if t['status']=='pending'),None)
+                pending=next_pending(rows,[t for _,t,_,_ in active.values()],
+                    args.max_jobs if args.admit_all_pending else args.mechanism_concurrency)
                 blocked,health=resource_state()
                 free=gpu_memory() if pending is not None else {}
                 if now-started>=args.ramp_after and now-last_ramp>=args.ramp_interval and capacity<args.max_jobs:
@@ -229,7 +324,7 @@ def main(argv=None):
                     ready=sum('[Epoch ' in Path(t['launcher_log']).read_text(errors='replace')[-20000:]
                               for _,t,_,_ in active.values())
                     if ready>=min(2,len(active)) and not blocked and health['available_gib']>=200:
-                        capacity+=1;last_ramp=now;print(f'RAMP capacity={capacity} available={health["available_gib"]:.1f}GiB',flush=True)
+                        capacity=min(args.max_jobs,capacity+args.ramp_step);last_ramp=now;print(f'RAMP capacity={capacity} available={health["available_gib"]:.1f}GiB',flush=True)
                 counts={g:sum(t['gpu']==g for _,t,_,_ in active.values()) for g in args.gpus}
                 usable=[g for g in args.gpus if counts[g]<args.jobs_per_gpu and free.get(g,0)>=args.gpu_free_gib]
                 if pending and len(active)<capacity and usable and not blocked and health['available_gib']>=124:

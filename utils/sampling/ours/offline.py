@@ -21,6 +21,8 @@ def _inputs(value):
 
 
 def select(context, budget, name):
+    if getattr(context, 'system_id', 'budding') != 'budding':
+        raise ValueError('Historical Pattern/sensitivity methods are Budding-only; use an explicit portable mechanism adapter')
     norm = context.predictor.normalization
     view = AcquisitionData(_inputs(context.pool),
         Training(_inputs(context.train.inputs), tuple(context.train.trajectories)),

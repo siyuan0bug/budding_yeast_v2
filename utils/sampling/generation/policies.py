@@ -8,9 +8,10 @@ from ..baseline.oed import BayesianOED,OEDConfig,temporal_informativeness
 from ..baseline.ogas import ConditionalOGAS,OGASConfig
 from ..baseline.hggs import MultigridGenetic,HGGSConfig
 from .domain import feature_inputs,project_legal_targets
+from ..ours.mechanistic import METHOD_NAMES as OUR_METHODS
 
 
-METHODS=('random_generate','oed_temporal','ogas_round_projected','hggs_projected')
+METHODS=('random_generate','oed_temporal','ogas_round_projected','hggs_projected') + OUR_METHODS
 
 
 class GenerationPolicy:
@@ -19,7 +20,8 @@ class GenerationPolicy:
         self.name=name;self.seed=int(seed);self.rng=np.random.default_rng(seed)
         self.oed_config=oed.validate();self.ogas_config=ogas.validate();self.controller=None
         x=feature_inputs(initial)
-        self.channel_scale=np.maximum(np.asarray(trajectories,dtype=np.float64).std((0,2)),1e-3)
+        self.channel_scale=(np.ones(trajectories.shape[1]) if name in OUR_METHODS else
+                            np.maximum(np.asarray(trajectories,dtype=np.float64).std((0,2)),1e-3))
         if name=='oed_temporal':
             self.controller=BayesianOED(x,seed,oed)
             self.controller.observe(x,temporal_informativeness(trajectories,channel_scale=self.channel_scale,config=oed))
@@ -27,9 +29,15 @@ class GenerationPolicy:
         elif name=='hggs_projected':
             self.controller=MultigridGenetic(seed,hggs)
             self.mean=x.mean(0);self.scale=x.std(0);self.scale[self.scale<1e-8]=1.
+        elif name in OUR_METHODS:
+            from ..ours.mechanistic.generation import MechanisticGeneration
+            self.controller=MechanisticGeneration(name,initial,trajectories,seed)
         self.feedback_rows=0;self.refreshed_target=None
 
     def refresh(self,inputs,truth,predictor,target=None):
+        if self.name in OUR_METHODS:
+            self.controller.refresh(inputs,truth,predictor)
+            return
         if self.name!='hggs_projected':return
         if target is not None:
             if not isinstance(target,(int,np.integer)) or target<=0:
@@ -62,6 +70,8 @@ class GenerationPolicy:
     def select(self,bank,count):
         if not 0<count<=len(bank.ids):raise ValueError('Invalid generation query size')
         x=feature_inputs(bank)
+        if self.name in OUR_METHODS:
+            return self.controller.select(bank,count)
         if self.name=='random_generate':
             ids=self.rng.choice(len(x),count,replace=False);diagnostics=dict(rule='canonical proposal random reference')
         elif self.name=='oed_temporal':

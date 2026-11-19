@@ -30,7 +30,7 @@ from budding_yeast_v2.utils.experiments.logging import log_stage,log_event,tee_e
 from budding_yeast_v2.utils.experiments.resources import resource_slot,exclusive_gpu_slot
 from .cohorts import FrozenCohorts
 from .domain import FrozenBuddingDomain
-from .policies import GenerationPolicy,METHODS
+from .policies import GenerationPolicy,METHODS,OUR_METHODS
 from .storage import GeneratedTrainingStore
 
 
@@ -43,9 +43,14 @@ def worker_lifecycle(parent):
     if os.getppid()!=parent:raise RuntimeError('Solver supervisor already exited')
 
 
-def _view(store,count=None):
+def _view(store,count=None,*,metadata=False):
     n=store.count if count is None else count
-    return PoolInputs(np.arange(n),store.array('params')[:n],store.array('y_init')[:n])
+    rows=()
+    if metadata:
+        rows=[json.loads(str(value)) for value in store.array('candidate_metadata_json')[:n]]
+        for row,value in zip(rows,store.array('overrides_json')[:n]):
+            row['_effective_overrides']=json.loads(str(value))
+    return PoolInputs(np.arange(n),store.array('params')[:n],store.array('y_init')[:n],tuple(rows))
 
 
 def _artifacts(directory):
@@ -75,7 +80,7 @@ def _commit(directory,domain,store,policy):
 
 
 def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size,query_batch_size,max_attempts_mult):
-    policy.refresh(_view(store),store.array('data'),predictor,target)
+    policy.refresh(_view(store,metadata=policy.name in OUR_METHODS),store.array('data'),predictor,target)
     attempts=0;needed=target-store.count;pending=[];last_commit=0
     while store.count+len(pending)<target:
         if attempts>=needed*max_attempts_mult:
@@ -83,8 +88,16 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
                 store.append(pending);_commit(directory,domain,store,policy)
             raise RuntimeError('Generation query cap reached; no partial completion')
         count=min(query_batch_size,target-store.count-len(pending),needed*max_attempts_mult-attempts)
-        with resource_slot('scoring','legal proposal generation and scoring'):
-            candidates,signatures,bank=domain.bank(max(bank_size,count))
+        scoring_resource='cpu_scoring' if policy.name in OUR_METHODS else 'scoring'
+        with resource_slot(scoring_resource,'legal proposal generation and scoring'):
+            if policy.name=='ours_intervention_closure':
+                from .controlled import controlled_bank
+                candidates,signatures,bank=controlled_bank(domain,max(bank_size,count))
+            else:
+                candidates,signatures,bank=domain.bank(max(bank_size,count))
+            if policy.name in OUR_METHODS:
+                bank=PoolInputs(bank.ids,bank.params,bank.initial,tuple(dict(c.metadata,
+                    _effective_overrides=dict(c.overrides)) for c in candidates))
             ids,diagnostics=policy.select(bank,count)
         chosen=[candidates[i] for i in ids]
         if policy.name=='ogas_round_projected':
@@ -138,6 +151,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
     definition=json.loads((root/'protocol.json').read_text());cfg=BenchmarkConfig(**definition['config']).validate()
     if pool not in definition['pools']:raise ValueError('Unknown source pool')
     if pool=='lhs' and lhs_config is None:raise ValueError('Provide the frozen LHS specification')
+    if pool=='lhs' and method=='ours_intervention_closure':
+        raise ValueError('Intervention closure requires legal mutation controls, not an unlabelled LHS design')
     oed=OEDConfig(**(oed_config or {})).validate();ogas=OGASConfig(**(ogas_config or {})).validate()
     hggs=HGGSConfig(**(hggs_config or {})).validate()
     # A versioned namespace prevents source changes from overwriting old results.

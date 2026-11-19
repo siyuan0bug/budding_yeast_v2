@@ -39,6 +39,8 @@ class SamplingContext:
     sketch_dim: int = 512
     label_reader: Callable | None = None  # exclusively authorized B methods
     prediction_batch_size: int = 128
+    system_id: str = 'budding'
+    time_grid: np.ndarray | None = None
 
 
 @dataclass

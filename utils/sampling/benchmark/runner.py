@@ -331,7 +331,9 @@ def _run(root, protocol, config, pool_name, spec, directory, device, real_refere
                         child_seed(config.seed, 'selection', round_index), device, config.sketch_dim,
                         oracle.scoring_reader if spec.track == 'B' else None, config.prediction_batch_size)
                     scoring_queued_at=time.monotonic()
-                    with resource_slot('scoring', 'candidate scoring'), log_stage(
+                    from ..ours.mechanistic import METHOD_NAMES as mechanism_methods
+                    scoring_resource = 'cpu_scoring' if spec.name in mechanism_methods else 'scoring'
+                    with resource_slot(scoring_resource, 'candidate scoring'), log_stage(
                                    'selection without unqueried truth' if spec.track == 'A' else 'labelled data selection',
                                    method=spec.name, pool=len(remaining), addition=addition):
                         selected_at = time.monotonic()
