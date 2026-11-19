@@ -11,15 +11,16 @@ from sklearn.neighbors import NearestNeighbors
 
 @dataclass(frozen=True)
 class HGGSConfig:
-    coarse_multiplier: int = 5
-    boundary_fraction: float = .5
-    neighbors: int = 8
+    coarse_multiplier: int = 2
+    boundary_fraction: float = .4  # 20% of coarse bank; retained GF total is 50%.
+    neighbors: int = 5
     output_sketch: int = 64
-    crossover_fraction: float = .5
+    crossover_fraction: float = .6
     mixture: bool = True
+    global_steps: int = 5
 
     def validate(self):
-        if min(self.coarse_multiplier,self.neighbors,self.output_sketch)<1:raise ValueError('Invalid HGGS dimensions')
+        if min(self.coarse_multiplier,self.neighbors,self.output_sketch,self.global_steps)<1:raise ValueError('Invalid HGGS dimensions')
         if not 0<self.boundary_fraction<1 or not 0<self.crossover_fraction<1:raise ValueError('Invalid HGGS proportions')
         return self
 

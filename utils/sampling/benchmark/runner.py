@@ -78,7 +78,7 @@ def training_costs(directory):
               for role in ('primary', 'auxiliary', 'pilot')}
     for path in directory.rglob('training.json'):
         row = json.loads(path.read_text())
-        role = 'pilot' if 'pilot' in path.relative_to(directory).parts else (
+        role = 'pilot' if any(part=='pilot' or part.endswith('_pilot') for part in path.relative_to(directory).parts) else (
             'auxiliary' if int(row.get('member', 0)) else 'primary')
         totals[role]['models'] += 1
         totals[role]['optimizer_steps'] += int(row['optimizer_steps'])

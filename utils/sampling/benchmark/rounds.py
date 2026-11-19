@@ -18,7 +18,7 @@ from budding_yeast_v2.utils.experiments.resources import resource_slot
 
 def fit_round(config,round_index,training,validation,output,model_seed,*,device='cpu',
               member=0,weights=None,identity=None,wandb_run=None,dataset_path=None,state_dir=None,plot_context=None,monitoring=None,
-              extra_callbacks=(),data_adapter=None):
+              extra_callbacks=(),data_adapter=None,after_epoch_callbacks=(),reload_dataloaders_every_n_epochs=0):
     if dataset_path is None:raise ValueError('Complete-pool rounds require an ordered training snapshot')
     dataset_path=Path(dataset_path).resolve()
     with resource_slot('data', 'training preprocessing'):
@@ -60,5 +60,6 @@ def fit_round(config,round_index,training,validation,output,model_seed,*,device=
              'macro_trajectory_rel_l2':'val_macro_rel_l2'}[config.validation_metric]
     model,history=fit_model_round(model_factory,dm,output,model_seed,epochs=epochs,
         identity=identity,device=device,monitor=monitor,round_index=round_index,member=member,wandb_run=wandb_run,
-        state_dir=state_dir,plot_context=plot_context,monitoring=monitoring,extra_callbacks=extra_callbacks)
+        state_dir=state_dir,plot_context=plot_context,monitoring=monitoring,extra_callbacks=extra_callbacks,
+        after_epoch_callbacks=after_epoch_callbacks,reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs)
     return model,normalization,history

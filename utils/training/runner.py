@@ -149,7 +149,7 @@ class FinalEpochWeights(Callback):
 def fit_model_round(model_factory, datamodule, output, model_seed, *, epochs,
                     identity, device='cpu', monitor='val_loss_synth', round_index=0, member=0,
                     wandb_run=None, state_dir=None, plot_context=None, monitoring=None,
-                    extra_callbacks=()):
+                    extra_callbacks=(),after_epoch_callbacks=(),reload_dataloaders_every_n_epochs=0):
     """Train one prepared cohort; data acquisition and split policy stay outside.
 
     The factory returns a registered LightningModule. Its optimizer/scheduler and
@@ -162,6 +162,8 @@ def fit_model_round(model_factory, datamodule, output, model_seed, *, epochs,
     identity=dict(identity,validation_metric=monitor,final_weights_policy='retain_last_epoch_weights_only_v1',
         epoch_monitoring={name:dict(rows_sha256=fingerprint(inputs.ids.tolist()),
         count=len(truth),shape=list(truth.shape[1:])) for name,(inputs,truth) in (monitoring or {}).items()})
+    if reload_dataloaders_every_n_epochs:
+        identity['dataloader_reload_epochs']=int(reload_dataloaders_every_n_epochs)
     artifacts=TrainingArtifacts.create(output,state_dir)
     output=artifacts.output
     pl.seed_everything(model_seed,workers=True)
@@ -196,9 +198,10 @@ def fit_model_round(model_factory, datamodule, output, model_seed, *, epochs,
                                  enable_version_counter=False)
         accelerator='gpu' if str(device).startswith('cuda') else 'cpu'
         index=int(str(device).split(':')[1]) if ':' in str(device) else 0
-        trainer=make_trainer(max_epochs=epochs,logger=False,callbacks=([test_monitor] if test_monitor is not None else [])+list(extra_callbacks)+[recorder,FinalEpochWeights(artifacts.last_weights),best,periodic],
+        trainer=make_trainer(max_epochs=epochs,logger=False,callbacks=([test_monitor] if test_monitor is not None else [])+list(extra_callbacks)+[recorder]+list(after_epoch_callbacks)+[FinalEpochWeights(artifacts.last_weights),best,periodic],
             accelerator=accelerator,devices=[index] if accelerator=='gpu' else 1,
-            enable_progress_bar=False,enable_model_summary=False)
+            enable_progress_bar=False,enable_model_summary=False,
+            reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs)
         trainer.fit(model,datamodule=datamodule,ckpt_path=str(last) if saved is not None else None,
                     weights_only=False)
         trainer.save_checkpoint(last)

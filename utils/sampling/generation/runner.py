@@ -147,6 +147,11 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
     if method not in METHODS or min(workers,bank_size,query_batch_size,max_attempts_mult)<1:
         raise ValueError('Invalid generation method or positive resource limits')
     if query_batch_size>bank_size:raise ValueError('Query batch cannot exceed legal proposal bank')
+    if method=='hggs_projected':
+        from .hggs_runner import run_hggs
+        return run_hggs(protocol,pool,output,device=device,workers=workers,bank_size=bank_size,
+            query_batch_size=query_batch_size,lhs_config=lhs_config,hggs_config=hggs_config,
+            max_attempts_mult=max_attempts_mult,plots=plots,wandb_enabled=wandb_enabled,diagnostic_only=diagnostic_only)
     root=Path(protocol).resolve();root=root if root.is_dir() else root.parent
     definition=json.loads((root/'protocol.json').read_text());cfg=BenchmarkConfig(**definition['config']).validate()
     if pool not in definition['pools']:raise ValueError('Unknown source pool')
@@ -182,9 +187,6 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
             return directory
         with resource_slot('data','generation frozen cohorts'):
             cohorts=FrozenCohorts(root,pool,cfg,diagnostic_only=diagnostic_only,lhs_config=lhs_config)
-        if method=='hggs_projected':
-            from .hggs_initial import prepare_hggs_initial
-            prepare_hggs_initial(cohorts,root,cfg,directory,hggs,device=device)
         with resource_slot('data','generated source initialization'):
             committed=directory/'_state/generation.json'
             state=json.loads(committed.read_text()) if committed.exists() else None

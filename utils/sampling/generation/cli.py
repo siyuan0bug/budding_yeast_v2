@@ -43,11 +43,15 @@ def execute(args):
     if args.dry_run:
         if online:
             OnlineConfig(**({} if args.online_config is None else json.loads(args.online_config.read_text()))).validate()
+        if args.method=='hggs_projected':
+            from ..baseline.hggs import HGGSConfig
+            HGGSConfig(**({} if args.hggs_config is None else json.loads(args.hggs_config.read_text()))).validate()
         print(json.dumps(dict(method=args.method,pool=args.pool,protocol=str(args.protocol),workers=args.workers,
             legal_bank_size=args.bank_size,query_batch_size=batch,
             source_rules='unchanged canonical proposal/initialization/ODE',
             native_online_ogas=False,asynchronous_solver_training=online,
-            training_schedule='continuous surrogate, frozen initial normalization' if online else 'shared cold-start rounds'),ensure_ascii=False))
+            training_schedule='continuous surrogate, frozen initial normalization' if online else
+                'GF continuous; one main reset; MGS continuous' if args.method=='hggs_projected' else 'shared cold-start rounds'),ensure_ascii=False))
         return
     if online:
         from .online_runner import run_online_generation

@@ -1,3 +1,5 @@
+> **2026-11-19 后续HGGS修正已合入生产**：旧ours 17项已全部完成，确认没有运行中源码冻结冲突后，接入GF五批补选与持续辅助训练、GF后主模型只重置一次、MGS持续优化器/调度器训练；参考尺度固定为已揭示共同初始训练统计。新目录使用独立`_hggs<hash>`，旧结果不动，尚未正式GPU重跑。Closure固定池实际只有8/8000个新增端点来自完整四角，其余单点补位，不能将#15收益归因于四角机制；无候选/测试真值用于其评分的证据。详见[修正与信息审计](HGGS_CONTINUOUS_FIX_2026-11-19.md)。下方运行中/未合入状态为历史记录。
+
 > **2026-11-19 ours已在tmux运行**：GPU0/1、总4并发、17项FNO/seed42任务；结果根`/home/users/zsy/mydata/budding_yeast/experiments/budding_ours/seed42_20261119/`，队列[任务与日志说明](/home/users/zsy/mydata/budding_yeast/experiments/budding_ours_queue/seed42_20261119/README.md)。原池与协议复用，W&B离线；仅启动与初期训练核查，尚无新正式结果。
 
 > **2026-11-19 Pattern-free ours 原型**：新增 `ours_mechanism_witness`、`ours_dynamics_transport`、`ours_intervention_closure`，可走当前 `run` 或 `generate`；候选真值/Pattern 不参与计分，旧方法保留。机制证据与一阶近似必须区分；通用内核接入 Budding/Fission，但当前完整池/生成实验服务仍是 Budding。详细状态、旧结果及运行命令见[实现盘点](OURS_IMPLEMENTATION_AND_PORTABILITY_2026-11-19.md)。本轮未启动正式长实验。

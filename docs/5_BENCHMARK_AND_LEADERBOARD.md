@@ -568,3 +568,64 @@ mutation真实评测：Power MAE0.15030/MSE2.25805/Relative1.05698/Corr0.90974�
 ## 2026-11-17：新增回归方法的排名边界
 
 PEAKS-Regression-Reference、ERACS-Regression-BatchOMP、Low-Rank-GradientEnergy与HGGS-Projected已接入可执行工作流，目前只有CPU小规模功能/恢复验证，无正式成绩。PEAKS/ERACS与random_stream/random_dynamic同流程对比；Low-Rank报告有放回draw slots、唯一行、pilot及历史训练输入，不能冒充唯一查询10000；HGGS报告coarse bank访问/pilot训练与所有新增ODE尝试。原有seed42成绩和五轮协议不改写，不直接混排不同训练日程/访问条件。详见[实现、核查和费用](REGRESSION_SAMPLING_BASELINES_2026-11-17.md)。
+
+## 2026-11-19：初始化与收敛再次核查
+
+只读核查当前协议`seed42_a866aef5d988`相关LCMD、Low-Rank、HGGS修复版、PEAKS、OGAS对齐版共10项已完成结果，未更改后台实验或启动训练。完整统计与精确目录见[核查报告](/home/users/zsy/mydata/budding_yeast/analysis/baseline_initialization_convergence_20261119/report.md)，同目录`audit.json`与`convergence.csv`保留原始统计。
+
+HGGS先由共同随机2000加训练侧另8000形成10000粗池，再按GF选1000边界、辅助试训、另1000高残差形成初始2000；mutation/LHS与共同初始仅重叠380/407，粗池与验证/测试重叠均0。GF后另生成8000，因此训练侧标签访问至少18000，不能称所有方法共用相同初始或查询总成本10000。LCMD与HGGS主训练是五轮100/100/100/100/200，合计31600步；HGGS另有100epoch/800步GF辅助试训。Low-Rank实际是共同2000试训100epoch/1600步后一次性有放回带权选样、最终200epoch；唯一样本mutation8794、LHS8394，主训练13800/13200步。PEAKS和异步OGAS为连续200epoch/15800步，初始统计冻结，不能套用五轮refit口径。
+
+以191–200相对181–190均值变化率衡量最终阶段：mutation LCMD/HGGS/Low-Rank/PEAKS/OGAS训练loss分别−0.676/−0.706/−1.075/−1.299/−0.744%，验证loss分别−0.085/−0.089/−0.164/−0.150/−0.042%；LHS对应训练−0.803/−0.820/−0.751/−0.889/−1.276%，验证+0.005/+0.005/−0.013/−0.017/−0.002%。验证接近平台不等于优化充分收敛，尤其余弦尾部LR接近1e-5；不能只凭200epoch保证收敛，也不据real结果决定训练时长。
+
+新增待复核问题：mutation HGGS的GF辅助试训恢复到第1epoch的validation-best，该epoch实际LR=0，train loss后续由1.0243降至0.2663，但公共合成验证由70.315升至1398.296；因此第二阶段残差补选不能描述为使用充分训练的辅助模型。原作者GF代码使用训练中的当前模型，没有公共fit_round的自动best恢复；这是辅助checkpoint协议与边界分布/归一化需要进一步审计的点，不能把最终主模型best=193epoch与该辅助异常混淆。本轮仅记录问题，未热改源代码或重跑HGGS。
+
+## 2026-11-19：HGGS作者训练控制复核及隔离修正
+
+详细报告：[HGGS及三方法训练流程复核](../../papers/baselines/sampling/HGGS_TRAINING_FIDELITY_REVIEW_2026-11-19.md)。作者源码明确GF结束后重新初始化一次MGS主模型，然后各MGS迭代持续使用同一模型/优化器/调度器；不能误写为GF权重一路继承，也不能把项目每轮冷启动称为作者原流程。GF内部使用当前试训模型，不恢复公共validation-best；作者GF全局补选默认还分五次穿插训练，项目一次性补选也是简化。当前旧HGGS结果仍为适配版，不能宣称完整源码训练流程一致。
+
+实测mutation GF checkpoint的边界拟合尺度使kaswi/kppc1/kppf6验证输入绝对Z达到1896123.875/3792247.75/3792247.75，三列训练标准差均约1e-6；以共同初始训练2000为参考，整个验证输入最大绝对Z为14.8246。未读取holdout真值拟合参考统计。该尺度失配是直接观察到的异常因素，尚未用完整受控重训证明唯一因果。
+
+GF定点修正在`scratch/probes/hggs_fidelity_20261119/staged/`：内部反馈加载末epoch并核对SHA/epoch/统计，固定已揭示初始训练参考统计、重新编码训练及验证、记录参考行指纹和GF版本，拒绝旧缓存。6项CPU回归通过，包含实际小FNO试训与checkpoint重载/holdout隔离/恢复；补丁`hggs_gf.patch`通过git apply --check。后台仍有ours运行，遵从源码冻结要求，**未合入生产、未改正在运行的源码身份、未实现MGS持续训练、未启动正式重跑**。三个相关生产文件SHA复核不变。
+
+注释涉及的具体轮数也已更正：Low-Rank100+200为项目预算；PEAKS作者默认100初始更新/2000总更新，项目持续200epoch=15800更新，实际约epoch18已补齐10000；OGAS论文主2D实验实际18000更新，项目15800更新，原仓库scheduler的200000不能当作已运行步数。持续或一次性结构有来源，不等于这些数值是作者原设定。
+
+## 2026-11-19：ours17项完成，基线及全部评测指标重新汇总
+
+本批ours17项已全部完成，队列0运行/0排队/17完成/0失败，最后LHS Pattern Support于北京时间17:44:50结束，内存守护未中止。对应用户此前询问的剩余12项/生成项均已结束；队列以`experiments/budding_ours_queue/seed42_20261119_all15/tasks.json`为准。
+
+新工具`scripts/analysis/summarize_sampling_results.py`只读当前冻结协议`seed42_a866aef5d988`，纳入65项完整实验（48份基线/对照含OGAS两版本＋17份ours），另将5项历史未完成目录单列。报告[全部结果汇总](/home/users/zsy/mydata/budding_yeast/analysis/sampling_baselines_ours_20261119/report.md)；同目录`all_final_metrics.csv`为195组real/同池test/跨池test终评、全部71列（含来源字段）；`all_metrics.json`保留全部源嵌套评测字段，`all_round_metrics.csv`有735组逐轮/持续终评。130份逐样本CSV均值与JSON核对、8190张final real图、50份训练侧标签账本域检查、65项best/history一致性检查通过。不加载大轨迹或checkpoint，不重训，不改旧结果。
+
+主要real结果（39变量物理空间；主Relative为逐样本逐变量、eps0.01、无上限）：
+
+|池|方法/流程|MAE↓|MSE↓|Relative↓|Corr↑|
+|---|---|---:|---:|---:|---:|
+|mutation|Power/固定池|0.15030|2.25805|1.05698|0.90974|
+|mutation|LCMD/固定池|0.16444|2.65932|12.88390|0.89108|
+|mutation|ours Closure/固定池|0.16641|2.73847|1.37550|0.87655|
+|mutation|ours Sensitivity/固定池|0.16173|3.09815|1.57301|0.89021|
+|mutation|ours Context/固定池|0.18173|7.55667|1.46042|0.91469|
+|mutation|Low-Rank/带权一次性|0.32224|14.20894|13.79462|0.77337|
+|mutation|PEAKS/持续|0.19209|5.20494|12.75508|0.89922|
+|mutation|OGAS公式修正后/持续生成|0.21762|7.86289|13.44570|0.87741|
+|lhs|Power/固定池|0.41464|24.90815|1.96470|0.79346|
+|lhs|ours Pattern Balance/固定池|0.40791|28.84106|2.61005|0.78881|
+|lhs|ours Witness/固定池|0.46813|25.24701|1.56309|0.78586|
+|lhs|ours Transport/生成|0.42858|32.69011|2.11357|0.78020|
+|lhs|Low-Rank/带权一次性|0.52917|36.04224|2.09261|0.70018|
+|lhs|PEAKS/持续|0.41310|27.50178|1.52318|0.79199|
+|lhs|OGAS公式修正后/持续生成|0.44463|31.33072|2.28106|0.79140|
+
+结论：当前ours没有全面胜过Power。mutation Context的Corr0.91469及完整轨迹均值0.28381有优势；逐株79/126的MAE、72/126的MSE优于Power，但#62/#124/#50的MSE增量合计解释93.59%的整体净MSE差额。Closure将#15的MAE从Power0.1377降至0.06317、Relative从7.420降至0.8513，并改善#124；但#78/#75/#59等退步，整体相对Power的MAE/MSE仍高10.72%/21.28%。不能仅凭几个badcase收益宣布整体创新有效。
+
+同池mutation synthetic test上Pattern Support的Relative1.27052、Corr0.84984均是当前固定池方法最优，Context Relative1.31220也优于Power1.38114，但real未同步获胜。LHS Pattern Balance的real MAE比Power低1.62%，MSE/Relative却高15.79%/32.85%。生成Transport在LHS相对同流程Random-Generate的MAE/MSE低10.18%/14.78%，Relative高20.69%；mutation MSE高138.77%。因此有局部/部分指标收益，尚无跨池、跨指标稳定优势。所有对照仅seed42，不作统计显著性声明。
+
+旧HGGS仍有上述GF及持续训练差异，GF隔离补丁未合入；Low-Rank为GradientEnergy适配、PEAKS为Regression-Reference，不能冒充作者原实验。OGAS修正前后均提取但分名，主对照采用公式修正后；不因修正后成绩未提高恢复错误公式。不同流程标签访问/历史曝光/训练步数不同，配对随机对照和精确目录在报告CSV。上述real诊断不进入采样代码，未来分数校准应使用合成train/validation。
+
+
+## 2026-11-19后续：HGGS生产修正与Closure收益归因更正
+
+前述“GF隔离补丁未合入”已被本次生产修正取代：GF分批持续训练、主模型只重置一次、MGS持续训练，冻结已揭示共同初始参考尺度。默认GF粗池4000→保留2000；GF六阶段合计600epoch，主阶段600epoch，分别报告成本。原生物规则、ODE及既有结果不改，新增实验将采用独立`_hggs<hash>`目录；本次没有新的正式精度成绩。
+
+固定池Closure实际新增8000条中，仅8条来自完整四角，7992条为单点误差补位。此前#15指标改善的数值仍成立，但不能归因为四角局部响应已得到验证。生成Closure的8007次端点尝试中8004来自四角、3为补位，成功8000，整体指标更差，不能混用两者机制归因。候选真值接口明确拒绝、训练标签账本holdout重叠0；人工反复用real badcase改进方法不等于完全盲测，须在研究报告中说明。
+
+实现、作者流程差异与测试见[HGGS持续训练修正与Closure信息审计](HGGS_CONTINUOUS_FIX_2026-11-19.md)。
