@@ -68,7 +68,8 @@ def run_online_generation(protocol,pool,method,output,*,device='cpu',workers=4,b
         checkpoint_selection='same_source_normalized_validation_best',training_exposure='dynamic',
         native_melissa_pde_reproduction=False,generator_execution='bounded asynchronous CPU thread')
     run_id=f"{definition['protocol_id']}_online{fingerprint(settings)[:8]}"
-    directory=Path(output)/run_id/pool/method/f'seed_{cfg.seed}'
+    from ..layout import experiment_directory
+    directory=experiment_directory(output,cfg,pool,method,'generate')
     with experiment_lock(directory),resource_slot('experiment','online generation experiment'), \
             exclusive_gpu_slot(device),tee_experiment_log(directory/'train.log'):
         (directory/'_state').mkdir(exist_ok=True)

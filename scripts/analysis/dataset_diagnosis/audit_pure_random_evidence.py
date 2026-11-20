@@ -520,7 +520,7 @@ def main():
     parser.add_argument("--plot", action="store_true", help="Plot the replayed triple-dynamic diagnostic trajectories")
     parser.add_argument("--input-duplicates", action="store_true", help="Stream the entire NPZ to check (P, IC, full trajectory) duplicates")
     parser.add_argument("--summary-only", action="store_true", help="Join existing frozen prediction, geometry, stage and event outputs without model replay")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "scripts/analysis/outputs/pure_random_current_audit")
+    parser.add_argument("--output-dir", type=Path, default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs/pure_random_current_audit'))
     args = parser.parse_args()
     if args.plot and not any("triple_dynamic" in str(p) for p in args.replay_ckpt):
         parser.error("--plot needs the frozen triple_dynamic checkpoint")

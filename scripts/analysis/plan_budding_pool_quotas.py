@@ -38,7 +38,7 @@ def fixed_module_capacity(group,backend):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/analysis/al_pool_redesign_2026-10-28'))
+    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/al_pool_redesign_2026-10-28'))
     parser.add_argument('--pool-size',type=int,default=1000000);args=parser.parse_args();args.output.mkdir(exist_ok=True,parents=True)
     rows,counts=enumerate_combinations(True);frame=pd.DataFrame(rows);frame.to_csv(args.output/'legal_allele_combinations.csv',index=False)
     count=pd.DataFrame(counts)

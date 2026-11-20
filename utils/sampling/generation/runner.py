@@ -167,7 +167,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
         oed=asdict(oed),ogas=asdict(ogas),hggs=asdict(hggs),lhs_config_sha256=None if lhs_config is None else file_sha256(lhs_config),
         diagnostic_only=diagnostic_only,sources=source_inventory())
     run_id=f"{definition['protocol_id']}_gen{fingerprint(settings)[:8]}"
-    directory=Path(output)/run_id/pool/method/f'seed_{cfg.seed}'
+    from ..layout import experiment_directory
+    directory=experiment_directory(output,cfg,pool,method,'generate')
     with experiment_lock(directory),resource_slot('experiment','generation experiment'),exclusive_gpu_slot(device), \
             tee_experiment_log(directory/'train.log'):
         started=time.monotonic()

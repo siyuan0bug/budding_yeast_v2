@@ -28,7 +28,7 @@ def _shared(parser):
     parser.add_argument('--model', help='Registered model name; defaults to the shared config (fno)')
     parser.add_argument('--mutation-pool', type=Path, default=DATA / 'offline_pools/mutation_100000_seed42_numerical_qc/dataset.json')
     parser.add_argument('--lhs-pool', type=Path, default=DATA / 'offline_pools/lhs_matched_100000_seed42_numerical_qc/dataset.json')
-    parser.add_argument('--protocol-root', type=Path, default=DATA / 'benchmarks/budding_sampling')
+    parser.add_argument('--protocol-root', type=Path, default=DATA / 'experiments/budding_sampling/shared/pool100k')
     parser.add_argument('--protocol', type=Path)
     parser.add_argument('--config', type=Path, help='JSON overrides for BenchmarkConfig; not per-method tuning')
     parser.add_argument('--real-reference', type=Path)
@@ -41,8 +41,13 @@ def _prepare(args, with_real=True):
         value = json.loads((root / 'protocol.json').read_text())
         if value['config']['seed'] != args.seed:
             raise ValueError('Requested experiment seed disagrees with stored protocol')
-        if args.model is not None and value['config'].get('model','fno') != args.model:
-            raise ValueError('Requested model disagrees with stored protocol')
+        if args.config is not None or (args.model is not None and value['config'].get('model','fno') != args.model):
+            from .protocol import derive_training_protocol
+            configuration=dict(value['config'])
+            if args.config is not None:configuration.update(json.loads(args.config.read_text()))
+            if args.model is not None:configuration['model']=args.model
+            configuration['seed']=args.seed
+            root=derive_training_protocol(root,args.protocol_root,BenchmarkConfig(**configuration).validate())
     else:
         overrides = {} if args.config is None else json.loads(args.config.read_text())
         overrides['seed'] = args.seed
@@ -104,7 +109,7 @@ def _batch(args):
         root, reference = _prepare(args)
     protocol = json.loads((root / 'protocol.json').read_text())
     from .runner import experiment_lock
-    batch_dir = args.output / protocol['protocol_id'] / 'batch'
+    batch_dir = args.output / 'batches' / f'seed_{args.seed}'
     with experiment_lock(batch_dir):
         # Free GPU slots pull the next task instead of waiting behind a slow
         # experiment in a permanently assigned queue. Admission limits remain.
@@ -122,7 +127,8 @@ def _batch(args):
                     pool, name = pending.get_nowait()
                 except Empty:
                     break
-                destination = args.output / protocol['protocol_id'] / pool / name / f'seed_{args.seed}'
+                from ..layout import experiment_directory
+                destination = experiment_directory(args.output,protocol['config'],pool,name)
                 destination.mkdir(parents=True, exist_ok=True)
                 cmd = [sys.executable, '-m', 'budding_yeast_v2.utils.sampling.benchmark.cli', 'run',
                        '--protocol', str(root), '--seed', str(args.seed), '--pool', pool, '--method', name,

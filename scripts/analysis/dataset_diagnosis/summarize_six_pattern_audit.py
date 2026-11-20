@@ -17,7 +17,7 @@ from budding_yeast_v2.scripts.analysis.dataset_diagnosis.audit_six_patterns impo
 from budding_yeast_v2.data.systems.budding.states import VARIABLE_NAMES
 
 PURE = 'mutant_aware_pure_random_100000_210m_500s'
-FROZEN = ROOT / 'scripts/analysis/outputs/pure_random_current_audit/hybrid_mse_rel_predictions.npz'
+FROZEN = Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs/pure_random_current_audit/hybrid_mse_rel_predictions.npz')
 
 
 def select_badcases(metrics, top_k=20):

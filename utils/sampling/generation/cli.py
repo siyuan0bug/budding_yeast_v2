@@ -11,7 +11,7 @@ def add_parser(subparsers):
     p.add_argument('--protocol',type=Path,required=True,help='Frozen shared splits, initial set and real reference')
     p.add_argument('--pool',choices=('mutation','lhs'),required=True)
     p.add_argument('--method',choices=METHODS+ONLINE_METHODS,required=True)
-    p.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_generation'))
+    p.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling'))
     p.add_argument('--device',default='cpu')
     p.add_argument('--workers',type=int,default=4)
     p.add_argument('--bank-size',type=int,default=512)

@@ -42,7 +42,7 @@ for p in [PROJECT_ROOT, V2_ROOT, DATA_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'deep_dataset_diagnosis')
+OUTPUT_DIR = os.path.join('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs', 'deep_dataset_diagnosis')
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 
@@ -100,7 +100,7 @@ def main():
 
     # 2. Load Model Evaluation Results (to correlate data metrics with actual model errors)
     badcases_candidates = [
-        '/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/eval_result/real_mutants_badcases.csv',
+        '/home/users/zsy/mydata/budding_yeast/experiments/archive/repository_outputs_20261121/eval_result/real_mutants_badcases.csv',
         os.path.join(CURRENT_DIR, '../../eval_result/real_mutants_badcases.csv'),
         os.path.join(PROJECT_ROOT, 'eval_result/real_mutants_badcases.csv'),
         os.path.join(PROJECT_ROOT, 'budding_yeast_v2/eval_result/real_mutants_badcases.csv')

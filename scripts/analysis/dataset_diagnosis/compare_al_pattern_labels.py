@@ -262,7 +262,7 @@ def assess_stage(frame,real,round_id,schemes,args,out):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--experiment-root',type=Path,default=ROOT/'experiments/al_pure_random_1m/biom_refiner_plus')
-    p.add_argument('--labels',type=Path,default=ROOT/'scripts/analysis/outputs/six_pattern_audit_2026-10-20/mutant_aware_pure_random_100000_210m_500s/real_mutants.csv')
+    p.add_argument('--labels',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs/six_pattern_audit_2026-10-20/mutant_aware_pure_random_100000_210m_500s/real_mutants.csv'))
     p.add_argument('--output-dir',type=Path,required=True)
     p.add_argument('--primary-round',type=int,default=2)
     p.add_argument('--repeats',type=int,default=10)

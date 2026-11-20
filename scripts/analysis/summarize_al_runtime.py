@@ -68,7 +68,7 @@ def summarize(root):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--experiments',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/al_budding'))
-    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/analysis/al_pool_and_runtime_2026-10-28'))
+    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/al_pool_and_runtime_2026-10-28'))
     args=parser.parse_args();rows=summarize(args.experiments);args.output.mkdir(parents=True,exist_ok=True)
     import pandas as pd
     pd.DataFrame(rows).to_csv(args.output/'experiment_runtimes.csv',index=False)

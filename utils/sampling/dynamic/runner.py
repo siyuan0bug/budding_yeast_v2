@@ -35,7 +35,8 @@ def run_dynamic(protocol,pool,method,output,*,device='cpu',dynamic_config=None,l
         training_exposure='dynamic',task_adaptation=True,
         sources=source_inventory(),diagnostic_only=diagnostic_only,
         lhs_config_sha256=None if lhs_config is None else file_sha256(lhs_config))
-    directory=Path(output)/f"{definition['protocol_id']}_dynamic{fingerprint(settings)[:8]}"/pool/method/f'seed_{cfg.seed}'
+    from ..layout import experiment_directory
+    directory=experiment_directory(output,cfg,pool,method,'dynamic')
     with experiment_lock(directory),resource_slot('experiment','dynamic labelled-pool experiment'),exclusive_gpu_slot(device),tee_experiment_log(directory/'train.log'):
         state_dir=directory/'_state';state_dir.mkdir(exist_ok=True)
         old=directory/'config.json'

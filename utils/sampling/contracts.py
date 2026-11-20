@@ -72,6 +72,6 @@ def __getattr__(name):
         from .query import LabelOracle
         return LabelOracle
     if name in ('ALConfig','SelectionPlan','SelectionContext','Acquisition','QueryBatch','Candidate','SimulationResult'):
-        from ..archive.online import contracts
+        from .online import contracts
         return getattr(contracts,name)
     raise AttributeError(name)

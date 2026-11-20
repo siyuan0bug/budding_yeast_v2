@@ -1,8 +1,8 @@
 """strategies biology services extracted from the pre-package implementation."""
 from budding_yeast_v2.data.systems.budding.api import BINDING_GROUPS as MASS_BINDING_GROUPS
-from budding_yeast_v2.utils.archive.online.pool import _mass_desc_of
-from budding_yeast_v2.utils.archive.online.pool import _mass_sample_genes
-from budding_yeast_v2.utils.archive.online.pool import _parse_mass_gene_modes
+from budding_yeast_v2.utils.sampling.online.pool import _mass_desc_of
+from budding_yeast_v2.utils.sampling.online.pool import _mass_sample_genes
+from budding_yeast_v2.utils.sampling.online.pool import _parse_mass_gene_modes
 import numpy as np
 
 

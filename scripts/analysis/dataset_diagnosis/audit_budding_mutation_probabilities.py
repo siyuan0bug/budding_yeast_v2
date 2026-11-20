@@ -119,7 +119,7 @@ def unique_pool(out,n,workers):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/analysis/mutation_probability_audit_2026-10-28'))
+    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/mutation_probability_audit_2026-10-28'))
     parser.add_argument('--samples',type=int,default=3000);parser.add_argument('--random-samples',type=int,default=12000)
     parser.add_argument('--strength-samples',type=int,default=2048);parser.add_argument('--pool-size',type=int,default=20000);parser.add_argument('--workers',type=int,default=8)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)

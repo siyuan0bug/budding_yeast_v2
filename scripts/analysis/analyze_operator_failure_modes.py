@@ -258,8 +258,8 @@ def probe_hidden_intervention(output):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--experiments',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments'))
-    parser.add_argument('--audit',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/analysis/badcase_audit_2026-10-27'))
-    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/analysis/operator_design_2026-10-30'))
+    parser.add_argument('--audit',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/badcase_audit_2026-10-27'))
+    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/operator_design_2026-10-30'))
     parser.add_argument('--skip-plots',action='store_true')
     parser.add_argument('--probe-hidden-intervention',action='store_true')
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)

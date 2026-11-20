@@ -1,0 +1,607 @@
+# **酵母细胞周期数据采样 Benchmark：第一批完整实施方案**
+
+我建议把你选定的13种方法全部纳入第一批，但按照**原始算法、统一实验协议、必要的生物系统适配**三个层次实施，而不是直接照搬HGGS仓库的所有Baseline代码。
+
+先回答你对OGAS的疑问。
+
+## **一、OGAS到底能不能作为Baseline？**
+
+**可以，但它不能在“只能从固定Pool选样”的条件下原样运行。**
+
+此前我说OGAS不能直接用，准确意思是：它不能直接作为一个固定Pool选样算法。现在你明确允许HGGS这样的池外新参数生成方法，因此OGAS可以进入你的Benchmark。
+
+原论文 Learning Where to Simulate: Generative Active Sampling for Online PDE Surrogate Training 的关键机制是：
+
+\\[ \text{已有轨迹的训练Loss} \rightarrow \text{条件扩散生成器} \rightarrow \text{新参数} \rightarrow \text{数值仿真} \rightarrow \text{继续训练} \\]
+
+它不是先生成一个固定100k候选池，再在其中挑选样本。
+
+[image](https://www.google.com/s2/favicons?domain=https://arxiv.org\&sz=32)
+
+arxiv.org
+
+
+
+因此，建议保留两种明确不同的设置：
+
+| 设置             | HGGS / OGAS的处理方式            | 能否叫原版      |
+| -------------- | --------------------------- | ---------- |
+| **固定Pool选择实验** | 所有方法只能从已有100k选样；生成式方法不参与主排名 | 不适用于原版OGAS |
+| **开放参数生成实验**   | 允许方法生成合法的新输入、调用ODE得到真实轨迹    | 可以复现原版核心机制 |
+
+这里最重要的现实约束是：你已经预生成了20万条轨迹。如果20万只是离线预生成数量上限，后续仍可运行新的ODE，那么开放生成实验可以执行；如果20万是整个项目不可突破的仿真总量，那么HGGS和OGAS生成的池外参数就不能再获得真实轨迹，原版生成式实验也就无法完成。
+
+**我的方案是：第一批实现全部方法，但固定Pool方法作为主要对照，HGGS完整方法和OGAS作为并列的开放生成对照。两者都保证最终训练集为10k，但额外仿真成本单独统计。**
+
+## **二、实验总体架构：一套数据底座，两条采样路线**
+
+### **1. 数据划分**
+
+两份数据池独立进行实验，不能把LHS和Mutant-aware样本混合作为同一个候选池。
+
+如果现有20万条轨迹还没有划分验证集和合成测试集，我建议暂定：
+
+| 数据用途      | LHS来源    | Mutant-aware来源 |
+| --------- | -------- | -------------- |
+| 原始完整数据    | 100,000  | 100,000        |
+| 验证集       | 5,000    | 5,000          |
+| 合成测试集     | 5,000    | 5,000          |
+| 可供选择的训练候选 | 90,000   | 90,000         |
+| 最终训练集     | 从90k选10k | 从90k选10k       |
+
+这样两个Pool分别进行数据选择，但**所有训练完成的模型都要在同一套固定评测基准上测试**，包括LHS Test、Mutant-aware Test及完全独立的Real Mutants Test。
+
+如果已经有额外的独立验证集和测试集，则不必从两个100k池中扣除样本，可以保留完整100k供选样。
+
+还要检查相同ODE输入是否跨Pool重复。验证集、测试集与可选训练数据必须在输入级别去重；对于Mutation-OOD评测，还需要按mutation pattern分组隔离。
+
+### **2. 三种初始数据集**
+
+建议对每个Pool和随机种子预先生成一个随机排列：
+
+\\[ \pi_s=\operatorname{Permutation}(U,\mathrm{seed}=s) \\]
+
+然后固定：
+
+\\[ D_0^{2k}=\pi_s[:2000] \\]
+
+\\[ D_0^{5k}=\pi_s[:5000] \\]
+
+\\[ D_0^{10k}=\pi_s[:10000] \\]
+
+得到嵌套初始集：
+
+\\[ D_0^{2k}\subset D_0^{5k}\subset D_0^{10k} \\]
+
+可以使用三个采样种子，例如42、123、2026，同时为FNO保存对应的初始化权重。
+
+但要注意：**只对原算法没有特殊初始化要求的方法，才强制采用共同随机初始集。** 完整HGGS的GF、Lev原版的批内初始化等，应保留其特殊步骤。
+
+### **3. 不同算法按自身机制构建10k**
+
+**路线A：固定Pool**
+
+# **90k → 10k**
+
+静态选择、增量选择、动态替换、加权抽样
+
+**路线B：开放生成**
+
+# **2k / 10k → 10k**
+
+HGGS遗传生成、OGAS生成新参数并标注
+
+**所有方法保存最终训练数据及权重**
+
+`sample_ids` / `generated_inputs` / `sample_weights`
+
+**统一FNO训练及独立测试**
+
+同一架构、同一训练预算、同一评测规则
+
+我建议主要报告两类结果：一是各算法原始训练流程得到的模型性能；二是最终10k子集经同一个FNO从头训练后的性能。对于IS等仅改变训练权重或抽样频率的方法，不能在第二类结果中随意删除权重。
+
+**特别重要：最终10k是训练集规模，不等于所有算法在选样或训练过程中只接触过10k条标签。** HGGS-US-P可能查看90k候选的真实残差；动态重选算法可能在不同阶段训练过超过10k条不同样本；OGAS可能生成无效参数并消耗额外仿真。这些必须分别记录。
+
+## **三、13种Baseline的原始算法与具体实施方式**
+
+这张表是整套方案的核心。原始机制依据你上传的论文及相关代码；预算和初始集栏则是我为你的实验提出的实现设置。
+
+| 方法                     | 原始核心选样机制                           | 初始集及10k构建方案            | 与原版的差异            |
+| ---------------------- | ---------------------------------- | ---------------------- | ----------------- |
+| **Random**             | 从候选池均匀无放回随机抽取                      | 一次选10k；另做2k起步的增量Random | 无                 |
+| **MaxDist / Core-Set** | 逐步选择与已选样本最大最小距离的候选                 | 2k起步，按批扩充到10k          | 需适配FNO特征          |
+| **LCMD**               | 选择距离覆盖代价最大的簇，再选簇中远点                | 同上                     | 需适配FNO特征          |
+| **Top-K**              | 选模型不确定性最高的候选                       | 同上                     | 需适配回归轨迹不确定性       |
+| **SBAL / Power**       | 按不确定性幂次构造概率分布，无放回采样                | 同上                     | 需适配回归轨迹不确定性       |
+| **BAIT**               | 信息矩阵驱动的批次选择，保留后验变换                 | 同上                     | 使用FNO最后层特征        |
+| **Axiotis 2024**       | 聚类中心Loss + 距离敏感度 + 概率采样与权重         | 随机2k训练模型，再选择8k         | 核心可保留             |
+| **Low-Rank 2026**      | 低秩子空间、投影残差、敏感度概率采样                 | 构建表示后一次性选择10k          | 核心可保留             |
+| **Lev 2026**           | 分批初始化Gram矩阵，再迭代选择高Leverage Score样本 | 按原版批处理选择10k            | 核心可保留             |
+| **Polanska 2026**      | 物理残差评分，Top-K或SBAL采样                | 2k起步，逐批扩充到10k          | 需要事件感知残差          |
+| **HGGS-US-P**          | 使用候选真实预测残差排序                       | 原版5k起步，每轮250，20轮到10k   | 保留HGGS改写版，同时另做对齐版 |
+| **HGGS完整方法**           | GF筛选 + 残差反馈 + 遗传生成新参数              | 10k参考集→筛出5k→生成5k       | 需要合法mutation生成约束  |
+| **OGAS 2026**          | 根据训练难度学习条件生成分布，产生新参数               | 初始2k + 在线生成8k          | 需要混合离散—连续生成器      |
+
+### **必须核实清楚的四个实现差异**
+
+**1. AL4PDE 的 Top-K、SBAL 不应该直接拿真实轨迹计算误差。**
+
+仓库 [uncertainty_based.py](https://github.com/dmusekamp/al4pde/blob/main/al4pde/acquisition/uncertainty_based.py?utm_source=chatgpt.com) 的核心实现是：
+
+```
+# Top-Ktorch.argsort(unc, descending=True)[:k]# SBAL / Powerweights = torch.pow(unc, beta)prob = weights / weights.sum()torch.multinomial(prob, k, replacement=False)
+```
+
+其中 `unc` 是模型预测不确定性，不是 `abs(prediction - truth)`。
+
+因此，**即使你有全部90k真实标签，也不应该把它们提供给这两个算法的采样评分函数**，否则就改变了原版算法。
+
+**2. AL4PDE的Core-Set、LCMD、BAIT不是简单对原始ODE参数做距离计算。**
+
+我核查了 [distance_pool_based.py](https://github.com/dmusekamp/al4pde/blob/main/al4pde/acquisition/distance_pool_based.py?utm_source=chatgpt.com) 和对应配置：
+
+- 候选样本先经过神经算子预测。
+- 使用模型预测轨迹或隐藏层特征构造表示。
+- LCMD和MaxDist根据这些表示选择样本。
+- BAIT在所配置的特征上执行信息矩阵选择，并使用后验特征变换。
+
+例如BAIT配置实际使用：
+
+```
+selection:
+  _target_: bmdal_reg.bmdal.selection.BaitFeatureSpaceSelectionMethod
+  sel_with_train: true
+  noise_sigma: 1e-2
+
+posterior_tfm: true
+```
+
+实验配置中还指定最后一层特征。
+
+因此，直接用141维ODE原始参数做K-Center，可以作为额外的 `Input-MaxDist`，但不能完全替代论文中的 `Feature-MaxDist`。
+
+**3. HGGS-US-P与原始Uncertainty Sampling不是同一个评分算法。**
+
+HGGS代码使用：
+
+\\[ s_i=\\|f\_\theta(x_i)-y_i\\|\_2 \\]
+
+这是候选样本的真实残差。
+
+原始不确定性采样通常根据模型预测不确定性选样，不要求候选真实标签。
+
+所以正式实验应使用两个名称：
+
+- `TopK-Uncertainty`：AL4PDE实现，预测不确定性。
+- `HGGS-US-P-Oracle`：HGGS实现，真实预测残差。
+
+不能把这两个方法合并，也不要把HGGS版本叫作原始Uncertainty Sampling的严格复现。
+
+**4. AL4PDE原版有两个非常重要的训练细节。**
+
+首先，它默认支持指数增长数据预算。
+
+源码 [data_schedule.py](https://github.com/dmusekamp/al4pde/blob/main/al4pde/acquisition/data_schedule.py?utm_source=chatgpt.com)：
+
+```
+return first_batch_num * 2 ** al_iter
+```
+
+原论文的实验也是每轮新增与当前训练集规模相同数量的样本，候选池大小为100k。
+
+[image](https://www.google.com/s2/favicons?domain=https://openreview.net\&sz=32)
+
+openreview\.net
+
+
+
+其次，[wrapper.py](https://github.com/dmusekamp/al4pde/blob/main/al4pde/models/wrapper.py?utm_source=chatgpt.com) 的 `init_training()` 会重新创建模型、优化器和调度器：
+
+```
+self.model = self.model_factory().to(device)self.optimizer = self.optimizer_factory(    self.model.parameters())self.scheduler = self.scheduler_factory(    self.optimizer)
+```
+
+而外层每轮都会调用训练初始化。
+
+**这说明AL4PDE发布的训练循环默认是每轮重新初始化模型，不是简单地沿用上一轮FNO权重继续训练。**
+
+这一点我建议忠实保留，尤其不要把HGGS和AL4PDE的训练机制想当然地写成完全相同。
+
+## **四、针对不同方法，推荐怎样完成10k预算？**
+
+### **A组：AL4PDE及Polanska类增量方法**
+
+建议先采用更接近AL4PDE原始指数预算的方案：
+
+### **主对照的AL预算**
+
+# **2k**
+
+初始
+
+# **4k**
+
+第1轮
+
+# **8k**
+
+第2轮
+
+# **10k**
+
+第3轮
+
+新增批次为2k、4k、2k。最后一轮因总预算10k而截断。
+
+它适用于 Random-Incremental、MaxDist、LCMD、Top-K、SBAL、BAIT、Polanska，以及你自己的增量式采样方法。
+
+这样可以在每个共同检查点比较RelL2：
+
+\\[ N\in\\{2000,4000,8000,10000\\} \\]
+
+但最后一轮截断属于你的10k预算约束，不应声称与原论文每轮严格翻倍的设置完全一致。
+
+### **B组：Axiotis、Low-Rank、Lev**
+
+这三种方法没有必要强制每轮训练FNO。
+
+**Axiotis：** 使用随机初始2k训练FNO，在剩余候选中聚类，查询代表点真实Loss，按照敏感度概率选择剩余8k。其原论文的分类实验确实采用初始集占目标预算20%的设置。
+
+Axiotis 等 - 2024 - Data-Efficient Learning via Clustering-Based Sensitivity Sampling Foundation Models and Beyond(2).pdf
+
+
+
+**Low-Rank：** 对候选输入表示进行低秩近似，计算投影与残差敏感度，按概率选择10k。建议优先实现论文Algorithm 1的真实样本行选择版本，因为任意SVD基向量不一定对应合法mutation输入。原论文的Alg. 1和Alg. 2均包含带权重的概率抽样。
+
+Cohen-Addad 等 - 2026 - Active Learning with Low-Rank Structure for Data Selection(1).pdf
+
+
+
+**Lev：** 严格保留论文Algorithm 1的批次处理、批内随机初始化、Cholesky计算Leverage Score及Gram矩阵增量更新。它的初始化是算法内部的批次初始化，而不是先训练一个随机2k FNO。
+
+Ma 等 - 2026 - Towards Scalable Data Diversification for Language Model Pretraining via Leverage Score Sampling(1).pdf
+
+
+
+这里有一个共同的特殊问题：Axiotis与Low-Rank等原始概率采样算法可能有放回抽样，并给样本设置重要性权重。
+
+你的“10k”需要制定严格定义。
+
+我建议主结果要求：
+
+\\[ |\operatorname{unique}(S)|=10000 \\]
+
+也就是10k条不同的ODE输入。
+
+对于原版本可能产生重复样本的概率采样方法，应另外保留一个忠实原版对照（10k抽样位置、允许重复），同时提供无放回的统一预算适配版。调整抽样方式后，其原始无偏性或理论权重不能直接假定仍然成立。
+
+### **C组：HGGS-US-P**
+
+原版HGGS仓库的US-P流程应单独保留：
+
+\\[ 5000+20\times250=10000 \\]
+
+它原本使用5k初始数据和一个固定的10k候选池，每轮从该池中选250条真实残差较大的样本。
+
+在你的实验中，我建议运行两个版本。
+
+| 版本                  | 初始训练 | 候选池            | 每轮新增      | 用途       |
+| ------------------- | ---- | -------------- | --------- | -------- |
+| `HGGS-US-P-Native`  | 5k   | 随机固定10k子池      | 250 × 20轮 | 还原源码预算机制 |
+| `HGGS-US-P-Aligned` | 2k   | 与其他方法共享的剩余Pool | 2k、4k、2k  | 公平比较选择机制 |
+
+两者都使用真实残差评分，但实验协议不同。
+
+你最终主要的统一10k结果可以使用Aligned版本，Native版本作为论文复现与消融。
+
+### **D组：HGGS完整方法**
+
+按HGGS论文与发布源码的结构，建议保留：
+
+\\[ \underbrace{10000}\_{\text{已标注参考数据}} \rightarrow \underbrace{2000}\_{\text{GF}} \rightarrow \underbrace{5000}\_{\text{残差增补后}} \rightarrow \underbrace{10000}\_{\text{池外遗传生成后}} \\]
+
+具体来说，先使用10k参考样本计算局部真实响应敏感性，GF筛选出2k，再从其余参考数据中筛选约3k，最后遗传生成5k新的参数输入并获取ODE轨迹。
+
+要特别注意：原HGGS预测的是振荡频率，而你预测的是39变量完整时间序列。因此将其局部响应差异与真实残差改成轨迹向量指标，属于必要的输出任务适配。
+
+另一个必要改动是合法mutation约束：不能直接把两个不同KO/OE组合的参数逐维插值后，就认为结果仍是合法突变体。
+
+我建议保留GF和MGS的层次与数量机制，提供 `HGGS-Mutation-Constrained`，记录所有生成失败和无效参数重试情况。
+
+### **E组：OGAS**
+
+OGAS原版不仅仅是一个“高Loss点生成器”。它实际上同时维护：
+
+- 用于预测轨迹的神经算子；
+- 保存参数与难度信号的历史缓冲区；
+- 以难度信号为条件的DDPM生成器；
+- 校正历史采样偏差的密度比估计器；
+- 均匀采样与生成器采样的混合策略。
+
+原论文Algorithm 1还明确规定了难度标准化、生成器迭代更新、偏差校正和下一批参数生成。
+
+Cesar 等 - 2026 - Learning Where to Simulate Generative Active Sampling for Online PDE Surrogate Training(1).pdf
+
+
+
+如果简单地从已知90k Pool中选Loss最高的8k，它就不再是OGAS。
+
+因此，你应该实现的是 `OGAS-Mixed`：保留原来的**难度条件生成、历史缓冲、混合生成和偏差修正**，但让生成器产生合法的mutation pattern与连续突变强度。
+
+初始可以使用随机2k，之后在线生成并仿真8k，使最终训练规模为10k。
+
+需要明确标注：它是OGAS对混合离散—连续生物参数空间的适配，并非无需修改的原版连续DDPM。
+
+## **五、统一FNO训练：既保留原版，又控制变量**
+
+这一部分我建议分为两个训练协议。
+
+### **协议1：Native Training——忠实执行各Baseline**
+
+根据论文原本的机制训练：
+
+| 方法                                   | 选样阶段的模型训练方式                  |
+| ------------------------------------ | ---------------------------- |
+| MaxDist、LCMD、Top-K、SBAL、BAIT（AL4PDE） | 每个采样轮次重新初始化FNO，从当前完整已选集训练    |
+| Axiotis                              | 使用初始2k训练一个评分模型，选出剩余样本        |
+| Low-Rank                             | 使用原算法需要的基准Loss或特征，不强制多轮FNO训练 |
+| Lev                                  | 不需要预先训练FNO，只执行几何选择           |
+| Polanska                             | 按AL4PDE主动学习训练流程              |
+| HGGS-US-P                            | 保留模型增量训练和真实残差选样              |
+| HGGS完整方法                             | 保留GF、残差筛选及后续模型训练             |
+| OGAS                                 | 在线训练代理模型，同时更新条件生成器           |
+
+每种方法运行完成后，保存原始训练模型，以及实际使用过的全部样本ID。
+
+### **协议2：Final Retraining——统一验证10k数据质量**
+
+每种方法最终得到10k条训练轨迹后，再重新初始化一个FNO：
+
+```
+for pool_name in ["lhs", "mutant_aware"]:    for seed in [42, 123, 2026]:        for method in baseline_methods:            result = run_selection(                pool=pool_name,                method=method,                seed=seed            )            save_selection_result(result)            final_model = build_fno(                initialization_seed=seed            )            train_final(                model=final_model,                selected_data=result.samples,                sample_weights=result.weights,                config=final_train_config            )            evaluate_on_fixed_tests(final_model)
+```
+
+这样你得到两组结果：
+
+- Native：原版算法直接得到的代理模型效果。
+- Retrain：相同10k训练预算下，所选数据自身的质量。
+
+注意：对带权重的Coreset方法，第二组依然应保留论文的训练权重，并同时提供统一权重消融。否则删除权重可能导致原方法失效。
+
+### **推荐的统一训练配置**
+
+先以你的现有FNO训练配置为基础。如果目前还没有稳定的配置，可使用下面的预实验设置。
+
+| 配置             | 推荐起点                 |
+| -------------- | -------------------- |
+| 主模型            | 现有FNO                |
+| Batch Size     | 64                   |
+| Optimizer      | AdamW                |
+| Initial LR     | \\(3\times10^{-4}\\) |
+| Weight Decay   | \\(10^{-4}\\)        |
+| LR Scheduler   | Cosine Annealing     |
+| Final Training | 300 epochs           |
+| Loss           | 统一归一化轨迹MSE           |
+| 模型选择           | 固定验证集最优checkpoint    |
+| 随机种子           | 42、123、2026          |
+| 测试指标           | RelL2、MAE、Tail RelL2 |
+
+这里的300 epochs只是起始实验配置，应该先用Random-10k跑学习曲线，确认是否收敛。如果没有收敛，就在正式实验开始前统一调整训练上限，而不是针对某个Baseline单独调高。
+
+正式实验建议固定总训练epoch数，保存其中验证集最优checkpoint。这样至少可以保证相同10k数据量下，各方法的最终训练更新预算一致。
+
+## **六、输入、输出及特征归一化怎么统一？**
+
+你的数据不是普通的连续向量，而是包含Mutation结构、ODE参数、初始状态和完整轨迹。
+
+我建议为所有方法提供三种统一的表示。
+
+| 表示             | 包含内容                      | 主要用途                   |
+| -------------- | ------------------------- | ---------------------- |
+| `X_physical`   | 原始ODE参数、初值、mutation信息     | ODE求解和合法性检查            |
+| `X_normalized` | 根据固定物理取值范围归一化的输入          | FNO输入、输入空间选择           |
+| `Z_feature`    | FNO预测轨迹、隐藏层特征或固定Embedding | LCMD、MaxDist、BAIT、Lev等 |
+
+输入建议使用已知合法范围和WT参考参数确定缩放系数。不要根据每个Baseline最终选择的10k重新计算输入尺度。
+
+输出则对每个状态变量使用固定尺度，统一训练Loss：
+
+\\[ \mathcal L\_{\mathrm{MSE}} = \frac1{VT}\sum\_{v,t} (\hat Y'\_{t,v}-Y'\_{t,v})^2 \\]
+
+归一化尺度最好通过预先冻结的WT参考数据、物理变量尺度或独立校准数据确定。不能让某个方法在训练前通过整个候选池的输出标签重新估计统计量，而另一个方法只能使用初始2k，否则会引入额外差异。
+
+但我不建议强制所有选样方法使用完全相同的 `Z_feature`。
+
+例如：
+
+- AL4PDE的LCMD使用当前模型产生的轨迹或最后层特征。
+- Lev可以使用固定的输入Embedding。
+- Axiotis可以使用其指定的聚类Embedding。
+- Low-Rank使用适合低秩分解的矩阵表示。
+
+这些特征定义属于算法的一部分。你应该固定每种方法内部的特征提取规则，并记录它们使用的信息来源。
+
+物理残差方法则应在物理尺度下计算ODE残差，并屏蔽事件跳变附近不适用普通导数公式的时间点。
+
+## **七、工程实现结构**
+
+建议在你的仓库中建立独立的Benchmark模块，不直接把各论文训练脚本拼在一起。
+
+```
+benchmark/
+├── configs/
+│   ├── datasets.yaml
+│   ├── normalization.yaml
+│   ├── final_training.yaml
+│   └── baselines/
+│       ├── al4pde.yaml
+│       ├── axiotis.yaml
+│       ├── low_rank.yaml
+│       ├── lev.yaml
+│       ├── polanska.yaml
+│       ├── hggs.yaml
+│       └── ogas.yaml
+│
+├── data/
+│   ├── pool_adapter.py
+│   ├── seed_split.py
+│   ├── trajectory_store.py
+│   └── mutation_validator.py
+│
+├── algorithms/
+│   ├── random.py
+│   ├── al4pde/
+│   │   ├── topk.py
+│   │   ├── sbal.py
+│   │   ├── maxdist.py
+│   │   ├── lcmd.py
+│   │   └── bait.py
+│   ├── axiotis.py
+│   ├── low_rank.py
+│   ├── lev.py
+│   ├── physics_acquisition.py
+│   ├── hggs/
+│   │   ├── us_pool.py
+│   │   ├── gradient_filtering.py
+│   │   └── genetic_sampling.py
+│   └── ogas/
+│       ├── generator.py
+│       ├── difficulty_buffer.py
+│       └── acquisition.py
+│
+├── runners/
+│   ├── run_one_shot.py
+│   ├── run_incremental.py
+│   ├── run_replacement.py
+│   ├── run_generative.py
+│   └── run_final_retrain.py
+│
+├── evaluation/
+│   ├── metrics.py
+│   ├── grouped_metrics.py
+│   └── results_table.py
+│
+└── results/
+```
+
+最重要的是建立统一算法接口，但不要强迫不同算法都调用相同的训练循环。
+
+例如：
+
+```
+class SelectionResult:    samples: list    weights: list | None    label_access_count: int    new_ode_calls: int    training_steps: int    selection_seconds: float    metadata: dict
+```
+
+每个Baseline至少输出这些信息。
+
+### **必须设置的自动检查**
+
+为了确保结果可靠，我建议每次实验执行后自动检查：
+
+- 最终训练集是否达到规定规模。
+- 所有样本是否符合mutation规则。
+- 是否存在训练与测试输入重复。
+- 标签读取是否符合原算法要求。
+- 是否有重复选样、抽样权重丢失或无效轨迹。
+- 采样模型是否误用Real Mutants测试集。
+- Native版本与Aligned版本是否明确区分。
+
+特别是HGGS和OGAS，要保存每一条新生成参数的来源、父代或生成器状态、mutation合法性及ODE求解状态。
+
+## **八、最终实验需要输出哪些结果？**
+
+我建议至少形成三张主表及一张预算表。
+
+### **表1：同一Pool内比较不同算法**
+
+| Method        | LHS RelL2 ↓ | Mutant-aware RelL2 ↓ | MAE ↓ |
+| ------------- | ----------- | -------------------- | ----- |
+| Random        | 待实验         | 待实验                  | 待实验   |
+| MaxDist       | 待实验         | 待实验                  | 待实验   |
+| LCMD          | 待实验         | 待实验                  | 待实验   |
+| Top-K         | 待实验         | 待实验                  | 待实验   |
+| SBAL          | 待实验         | 待实验                  | 待实验   |
+| BAIT          | 待实验         | 待实验                  | 待实验   |
+| Axiotis       | 待实验         | 待实验                  | 待实验   |
+| Low-Rank 2026 | 待实验         | 待实验                  | 待实验   |
+| Lev 2026      | 待实验         | 待实验                  | 待实验   |
+| Polanska 2026 | 待实验         | 待实验                  | 待实验   |
+| HGGS-US-P     | 待实验         | 待实验                  | 待实验   |
+| HGGS          | 待实验         | 待实验                  | 待实验   |
+| OGAS          | 待实验         | 待实验                  | 待实验   |
+| Ours          | 待实验         | 待实验                  | 待实验   |
+
+这张表要明确标记数据是从固定Pool选择还是额外生成，否则会把两种不同的数据来源混在一起解释。
+
+### **表2：10k以内的数据效率曲线**
+
+针对增量式方法，报告：
+
+\\[ 2k,\ 4k,\ 8k,\ 10k \\]
+
+处的RelL2与MAE。
+
+这样可以判断某种方法是从早期就优于Random，还是只在最终10k时出现优势。
+
+### **表3：Real Mutants独立测试**
+
+这张表是你论文最重要的结果之一。
+
+除了总体RelL2、MAE，我建议加入复杂KO、KO+OE、多基因突变及最差10%轨迹的指标。
+
+但Real Mutants只能作为最终独立评价，不能用于决定哪个Baseline超参数或Ours版本更好。
+
+### **表4：计算及信息成本**
+
+| 方法        | 最终训练样本 | 选样读取的标签量 | 额外ODE次数 | 选样GPU耗时 |
+| --------- | ------ | -------- | ------- | ------- |
+| Random    | 10k    | 实际统计     | 0       | 实际统计    |
+| Top-K     | 10k    | 实际统计     | 0       | 实际统计    |
+| HGGS-US-P | 10k    | 实际统计     | 0       | 实际统计    |
+| HGGS完整    | 10k    | 实际统计     | 实际统计    | 实际统计    |
+| OGAS      | 10k    | 实际统计     | 实际统计    | 实际统计    |
+
+额外ODE次数为0只代表使用预计算轨迹，没有新增仿真，不代表生成原始20万数据没有成本。
+
+这张表对于解释有标签数据选择与主动生成的比较很重要。
+
+## **九、我建议的实际实施顺序**
+
+虽然你希望第一批全部实现，但为了避免一开始就把各种不同算法耦合到一起，建议按依赖关系推进。
+
+1. **建立统一数据底座和Random测试**
+
+   完成两个Pool的读取、seed划分、归一化、FNO训练和测试。
+2. **复现AL4PDE的五种算法**
+
+   MaxDist、LCMD、Top-K、SBAL、BAIT。优先复用原仓库的特征提取和 `bmdal_reg` 选择模块。
+3. **实现三种特征/敏感度数据选择**
+
+   Axiotis、Low-Rank、Lev。重点测试加权概率抽样、重复样本处理和Embedding。
+4. **实现物理残差和HGGS-US-P**
+
+   一种根据ODE方程一致性选样，一种根据真实轨迹误差选样，可以形成直接对照。
+5. **实现完整HGGS**
+
+   保留GF和MGS，加入合法mutation约束及ODE缓存。
+6. **实现OGAS-Mixed**
+
+   实现条件生成器与在线采样，单独进行原理验证，再加入完整Benchmark。
+7. **统一最终10k重训练和结果统计**
+
+   使用相同FNO、固定验证与测试基准、多个随机种子，生成结果表及误差曲线。
+
+## **十、最后还有三个需要提前写进实验规范的决定**
+
+**第一，原版与统一预算版要分别命名。** HGGS-US-P原版5k起步，AL4PDE可以2k起步，Lev原版没有初始FNO模型。这并不是错误；它们的机制确实不同。不要因为统一实验而静默改变原算法。
+
+**第二，带权重的数据选择必须保留权重。** Axiotis和Low-Rank的原版理论针对加权子集。主实验可以增加严格10k不同样本的适配，但不能删除权重后仍声称完全忠实于原论文。
+
+**第三，先确定池外ODE的合法预算。** HGGS完整方法和OGAS是否可以忠实完成，关键取决于你能否给新生成参数提供真实轨迹。若不能，先完成11种固定池方法，将生成式方法标为需要新增仿真的扩展轨道，而不是用最近邻样本冒充原版。
+
+**整体上，我支持你把这13种方法全部作为第一批。** 它们覆盖了随机、几何覆盖、不确定性、信息矩阵、敏感度、物理残差、真实误差以及生成式主动采样，结构足够完整。
+
+我会把主论文的核心对照定义为：**两个不同分布的已标注候选池，各方法按照原始选择机制获得最终10k训练数据，再在共同的FNO和独立测试集上比较其泛化质量；对于池外生成方法，另行报告增加的仿真成本。**
+
+这套Benchmark不仅适合与你自己的Pattern Support、Pattern Context和ODE Sensitivity方法比较，也能清晰回答：性能改善来自更好的数据分布、采样评分，还是来自主动生成新的动力学参数区域。

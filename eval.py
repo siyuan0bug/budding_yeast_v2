@@ -205,7 +205,7 @@ def evaluate_model_on_datamodule(model, dm, device=None, save_dir=None, seed=42,
     对给定的 model 和 dm 执行全量评测，生成 global_metrics_denorm.json, per_mutant_metrics.csv 等标准成果。
     """
     if save_dir is None:
-        save_dir = './eval_result'
+        save_dir = '/home/users/zsy/mydata/budding_yeast/experiments/standalone_eval'
     os.makedirs(save_dir, exist_ok=True)
     if device is None:
         device = next(model.parameters()).device
@@ -351,7 +351,7 @@ def main():
                         break
 
     if args.save_dir is None:
-        args.save_dir = f'./eval_result_graph_{args.graph_load_policy}'
+        args.save_dir = f'/home/users/zsy/mydata/budding_yeast/experiments/standalone_eval/graph_{args.graph_load_policy}'
 
     if not args.ckpt or not os.path.exists(args.ckpt):
         raise FileNotFoundError(f"未找到有效的 Checkpoint 文件: {args.ckpt}")

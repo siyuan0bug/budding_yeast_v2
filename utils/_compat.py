@@ -21,20 +21,20 @@ ALIASES = {'budding_yeast_v2.utils.active_learning': 'budding_yeast_v2.utils.sam
  'budding_yeast_v2.utils.active_learning.backends': 'budding_yeast_v2.utils.sampling.backends',
  'budding_yeast_v2.utils.active_learning.contracts': 'budding_yeast_v2.utils.sampling.contracts',
  'budding_yeast_v2.utils.active_learning.convergence': 'budding_yeast_v2.utils.training.convergence',
- 'budding_yeast_v2.utils.active_learning.dataset': 'budding_yeast_v2.utils.archive.online.dataset',
- 'budding_yeast_v2.utils.active_learning.engine': 'budding_yeast_v2.utils.archive.online.engine',
- 'budding_yeast_v2.utils.active_learning.features': 'budding_yeast_v2.utils.archive.online.features',
- 'budding_yeast_v2.utils.active_learning.fission': 'budding_yeast_v2.utils.archive.online.fission',
- 'budding_yeast_v2.utils.active_learning.io': 'budding_yeast_v2.utils.archive.online.io',
- 'budding_yeast_v2.utils.active_learning.logging': 'budding_yeast_v2.utils.archive.online.logging',
- 'budding_yeast_v2.utils.active_learning.oracle': 'budding_yeast_v2.utils.archive.online.oracle',
- 'budding_yeast_v2.utils.active_learning.pool': 'budding_yeast_v2.utils.archive.online.pool',
- 'budding_yeast_v2.utils.active_learning.prediction': 'budding_yeast_v2.utils.archive.online.prediction',
+ 'budding_yeast_v2.utils.active_learning.dataset': 'budding_yeast_v2.utils.sampling.online.dataset',
+ 'budding_yeast_v2.utils.active_learning.engine': 'budding_yeast_v2.utils.sampling.online.engine',
+ 'budding_yeast_v2.utils.active_learning.features': 'budding_yeast_v2.utils.sampling.online.features',
+ 'budding_yeast_v2.utils.active_learning.fission': 'budding_yeast_v2.utils.sampling.online.fission',
+ 'budding_yeast_v2.utils.active_learning.io': 'budding_yeast_v2.utils.sampling.online.io',
+ 'budding_yeast_v2.utils.active_learning.logging': 'budding_yeast_v2.utils.sampling.online.logging',
+ 'budding_yeast_v2.utils.active_learning.oracle': 'budding_yeast_v2.utils.sampling.online.oracle',
+ 'budding_yeast_v2.utils.active_learning.pool': 'budding_yeast_v2.utils.sampling.online.pool',
+ 'budding_yeast_v2.utils.active_learning.prediction': 'budding_yeast_v2.utils.sampling.online.prediction',
  'budding_yeast_v2.utils.active_learning.registry': 'budding_yeast_v2.utils.sampling.registry',
- 'budding_yeast_v2.utils.active_learning.reporting': 'budding_yeast_v2.utils.archive.online.reporting',
+ 'budding_yeast_v2.utils.active_learning.reporting': 'budding_yeast_v2.utils.sampling.online.reporting',
  'budding_yeast_v2.utils.active_learning.strategies': 'budding_yeast_v2.utils.sampling.ours',
  'budding_yeast_v2.utils.active_learning.strategies.biology': 'budding_yeast_v2.utils.sampling.ours.biology',
- 'budding_yeast_v2.utils.active_learning.strategies.diversity': 'budding_yeast_v2.utils.archive.online.legacy_diversity',
+ 'budding_yeast_v2.utils.active_learning.strategies.diversity': 'budding_yeast_v2.utils.sampling.online.legacy_diversity',
  'budding_yeast_v2.utils.active_learning.strategies.events': 'budding_yeast_v2.utils.sampling.ours.events',
  'budding_yeast_v2.utils.active_learning.strategies.experimental': 'budding_yeast_v2.utils.sampling.ours.experimental',
  'budding_yeast_v2.utils.active_learning.strategies.fisher': 'budding_yeast_v2.utils.sampling.ours.fisher',
@@ -49,7 +49,7 @@ ALIASES = {'budding_yeast_v2.utils.active_learning': 'budding_yeast_v2.utils.sam
  'budding_yeast_v2.utils.active_learning.strategies.response': 'budding_yeast_v2.utils.sampling.ours.response',
  'budding_yeast_v2.utils.active_learning.strategies.sensitivity': 'budding_yeast_v2.utils.sampling.ours.sensitivity',
  'budding_yeast_v2.utils.active_learning.strategies.uncertainty': 'budding_yeast_v2.utils.sampling.baseline.uncertainty',
- 'budding_yeast_v2.utils.al_callback': 'budding_yeast_v2.utils.archive.online.legacy',
+ 'budding_yeast_v2.utils.al_callback': 'budding_yeast_v2.utils.sampling.online.legacy',
  'budding_yeast_v2.utils.biological_guard': 'budding_yeast_v2.utils.physics.variable_groups',
  'budding_yeast_v2.utils.checkpoint_evaluation': 'budding_yeast_v2.utils.evaluation.checkpoints',
  'budding_yeast_v2.utils.curve_logger': 'budding_yeast_v2.utils.experiments.curves',
@@ -67,19 +67,19 @@ ALIASES = {'budding_yeast_v2.utils.active_learning': 'budding_yeast_v2.utils.sam
  'budding_yeast_v2.utils.sampling.benchmark.model': 'budding_yeast_v2.utils.evaluation.checkpoints',
  'budding_yeast_v2.utils.sampling.benchmark.storage': 'budding_yeast_v2.data.dataset_archive',
  'budding_yeast_v2.utils.sampling.convergence': 'budding_yeast_v2.utils.training.convergence',
- 'budding_yeast_v2.utils.sampling.dataset': 'budding_yeast_v2.utils.archive.online.dataset',
- 'budding_yeast_v2.utils.sampling.engine': 'budding_yeast_v2.utils.archive.online.engine',
- 'budding_yeast_v2.utils.sampling.features': 'budding_yeast_v2.utils.archive.online.features',
- 'budding_yeast_v2.utils.sampling.fission': 'budding_yeast_v2.utils.archive.online.fission',
- 'budding_yeast_v2.utils.sampling.io': 'budding_yeast_v2.utils.archive.online.io',
- 'budding_yeast_v2.utils.sampling.legacy': 'budding_yeast_v2.utils.archive.online.legacy',
- 'budding_yeast_v2.utils.sampling.legacy_diversity': 'budding_yeast_v2.utils.archive.online.legacy_diversity',
- 'budding_yeast_v2.utils.sampling.logging': 'budding_yeast_v2.utils.archive.online.logging',
- 'budding_yeast_v2.utils.sampling.oracle': 'budding_yeast_v2.utils.archive.online.oracle',
+ 'budding_yeast_v2.utils.sampling.dataset': 'budding_yeast_v2.utils.sampling.online.dataset',
+ 'budding_yeast_v2.utils.sampling.engine': 'budding_yeast_v2.utils.sampling.online.engine',
+ 'budding_yeast_v2.utils.sampling.features': 'budding_yeast_v2.utils.sampling.online.features',
+ 'budding_yeast_v2.utils.sampling.fission': 'budding_yeast_v2.utils.sampling.online.fission',
+ 'budding_yeast_v2.utils.sampling.io': 'budding_yeast_v2.utils.sampling.online.io',
+ 'budding_yeast_v2.utils.sampling.legacy': 'budding_yeast_v2.utils.sampling.online.legacy',
+ 'budding_yeast_v2.utils.sampling.legacy_diversity': 'budding_yeast_v2.utils.sampling.online.legacy_diversity',
+ 'budding_yeast_v2.utils.sampling.logging': 'budding_yeast_v2.utils.sampling.online.logging',
+ 'budding_yeast_v2.utils.sampling.oracle': 'budding_yeast_v2.utils.sampling.online.oracle',
  'budding_yeast_v2.utils.sampling.ours.auxiliary.canonical_rhs': 'budding_yeast_v2.utils.physics.canonical_rhs',
- 'budding_yeast_v2.utils.sampling.pool': 'budding_yeast_v2.utils.archive.online.pool',
- 'budding_yeast_v2.utils.sampling.prediction': 'budding_yeast_v2.utils.archive.online.prediction',
- 'budding_yeast_v2.utils.sampling.reporting': 'budding_yeast_v2.utils.archive.online.reporting'}
+ 'budding_yeast_v2.utils.sampling.pool': 'budding_yeast_v2.utils.sampling.online.pool',
+ 'budding_yeast_v2.utils.sampling.prediction': 'budding_yeast_v2.utils.sampling.online.prediction',
+ 'budding_yeast_v2.utils.sampling.reporting': 'budding_yeast_v2.utils.sampling.online.reporting'}
 
 
 class _AliasLoader(importlib.abc.Loader):
@@ -101,6 +101,8 @@ class _AliasLoader(importlib.abc.Loader):
 
 class _LegacyUtilsFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('budding_yeast_v2.utils.archive', 'utils.archive')):
+            raise ImportError('Retired archive code cannot be imported; use the in-service sampling.online API or a reviewed checkpoint adapter')
         canonical = ALIASES.get(fullname)
         if canonical is None and fullname.startswith('utils.'):
             # Historical scripts sometimes put budding_yeast_v2 itself on

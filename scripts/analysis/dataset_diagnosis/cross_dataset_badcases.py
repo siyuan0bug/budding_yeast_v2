@@ -21,7 +21,7 @@ from budding_yeast_v2.data.dataset_archive import open_dataset, resolve_dataset_
 from budding_yeast_v2.scripts.analysis.dataset_diagnosis.audit_pure_random_evidence import data_chunks,split_indices,VARIABLES
 from budding_yeast_v2.scripts.analysis.dataset_diagnosis.audit_six_patterns import features
 
-DEFAULT_OUT=Path('/home/users/zsy/mydata/budding_yeast/analysis/badcase_audit_2026-10-27')
+DEFAULT_OUT=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/badcase_audit_2026-10-27')
 
 
 def identity(path):

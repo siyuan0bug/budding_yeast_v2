@@ -370,7 +370,7 @@ def main():
 
     # 搜索与并发配置
     parser.add_argument("--n_trials", type=int, default=50, help="该 Worker 进程执行的 trial 数")
-    parser.add_argument("--save_dir", type=str, default="./tune_result")
+    parser.add_argument("--save_dir", type=str, default="/home/users/zsy/mydata/budding_yeast/experiments/tuning")
     parser.add_argument("--study_name", type=str, default="yeast_hpo")
     parser.add_argument("--storage", type=str, default=None, help="SQLite 存储 URL")
     parser.add_argument("--seed", type=int, default=42)

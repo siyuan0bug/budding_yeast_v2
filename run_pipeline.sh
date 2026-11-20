@@ -100,7 +100,7 @@ DATASET_FISSION_RANDOM_50000="${DATA_DIR}/fission_random_50000_seed20000_modular
 # 旧版 MASS v3 数据集 (已注释归档)
 #DATASET_MASS_V3="${DATA_DIR}/massv3_dataset_210min_500steps_dual_labels.npz"
 # mutant_aware 策略专用: atlas CSV (含 lhs_MAE_min, lhs_n_samples 列)
-ATLAS_CSV="./eval_result/old_hyper_fno_none_mse_only_210m_500s_modes32_seed42/mutant_atlas_merged.csv"
+ATLAS_CSV="/home/users/zsy/mydata/budding_yeast/experiments/archive/repository_outputs_20261121/eval_result/old_hyper_fno_none_mse_only_210m_500s_modes32_seed42/mutant_atlas_merged.csv"
 
 SEEDS=(42) #42,1024,3407          
 

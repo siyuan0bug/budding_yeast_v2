@@ -46,7 +46,7 @@ for p in [PROJECT_ROOT, V2_ROOT, DATA_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-OUTPUT_DIR = os.path.join(V2_ROOT, 'scripts', 'analysis', 'outputs', 'massv2_badcase_attribution')
+OUTPUT_DIR = os.path.join('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs', 'massv2_badcase_attribution')
 FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
 os.makedirs(FIG_DIR, exist_ok=True)
 

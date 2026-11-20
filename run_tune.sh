@@ -36,7 +36,7 @@ DATASET_TAG="${DATASET_TAG:-$(basename "${DATASET}" .npz)}"
 # 指定参与并行搜索的 GPU 编号列表 (例如 8 卡: 0 1 2 3 4 5 6 7; 或部分卡: 0 1 2 3)
 GPUS=(0 1 2 3)
 TOTAL_TRIALS=200                       # 总计划探索的 Trials 数 (由所有 GPU 共同分担)
-SAVE_DIR="./tune_results/${DATASET_TAG}_${MODEL}_${LOSS_TYPE}_${AL_STRATEGY}"
+SAVE_DIR="/home/users/zsy/mydata/budding_yeast/experiments/tuning/${DATASET_TAG}_${MODEL}_${LOSS_TYPE}_${AL_STRATEGY}"
 STUDY_NAME="tune_${DATASET_TAG}_${MODEL}_${LOSS_TYPE}"
 SEED=42
 

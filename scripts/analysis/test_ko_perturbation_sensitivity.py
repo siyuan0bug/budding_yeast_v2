@@ -260,7 +260,7 @@ def main():
     print(f"Successfully simulated and audited {len(eval_records)} KO mutants in {time.time() - t0:.2f}s.\n")
 
     # Step 3: Statistical Analysis & Aggregation
-    out_dir = os.path.join(PROJECT_ROOT, "scripts", "analysis", "outputs", "ko_sensitivity_analysis")
+    out_dir = os.path.join('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs', "ko_sensitivity_analysis")
     os.makedirs(out_dir, exist_ok=True)
 
     rows = []

@@ -78,7 +78,8 @@ def run_hggs(protocol,pool,output,*,device='cpu',workers=4,bank_size=512,query_b
         normalization='shared_initial_training_frozen',feedback_checkpoint='current_model',
         checkpoint_selection='per_stage_same_source_normalized_validation_best_for_reporting_only',
         main_model_resets=1,sources=source_inventory())
-    directory=Path(output)/f"{definition['protocol_id']}_hggs{fingerprint(settings)[:8]}"/pool/'hggs_projected'/f'seed_{cfg.seed}'
+    from ..layout import experiment_directory
+    directory=experiment_directory(output,cfg,pool,'hggs_projected','generate')
     with experiment_lock(directory),resource_slot('experiment','HGGS continuous experiment'),exclusive_gpu_slot(device),tee_experiment_log(directory/'train.log'):
         old=directory/'config.json'
         if old.exists() and json.loads(old.read_text())!=settings:raise ValueError('HGGS configuration/source changed')

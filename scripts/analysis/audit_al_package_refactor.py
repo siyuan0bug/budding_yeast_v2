@@ -26,7 +26,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT.parent))
 from budding_yeast_v2.utils.sampling import ActiveLearningEngine
 from budding_yeast_v2.utils.sampling.registry import SPECS
-from budding_yeast_v2.utils.archive.online.oracle import PARAM_KEYS, _MASS_DEFAULTS
+from budding_yeast_v2.utils.sampling.online.oracle import PARAM_KEYS, _MASS_DEFAULTS
 
 
 def load_baseline():

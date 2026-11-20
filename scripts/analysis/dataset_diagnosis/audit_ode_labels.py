@@ -150,7 +150,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--reference", type=Path, default=REFERENCE)
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "scripts/analysis/outputs/pure_random_current_audit/ode")
+    parser.add_argument("--output-dir", type=Path, default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs/pure_random_current_audit/ode'))
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--timeout", type=float, default=5.)
     parser.add_argument("--future-timeout", type=float, default=35., help="Parent-side deadline when retrieving a worker result")

@@ -1,3 +1,5 @@
+> 当前状态：本目录为退役源码原件，仅供阅读/追溯，不再被生产入口和兼容层执行。在役在线服务已迁到utils/sampling/online；归档命名空间的运行导入会明确拒绝。下方旧说明是历史记录。
+
 # Historical active learning
 
 `al_callback_legacy.py` is the complete, unchanged pre-archival callback snapshot

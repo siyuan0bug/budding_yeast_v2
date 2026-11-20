@@ -19,10 +19,10 @@ def __getattr__(name):
         from .benchmark.runner import run_experiment
         return run_experiment
     if name in ('ActiveLearningEngine', 'ActiveLearningCallback'):
-        from budding_yeast_v2.utils.archive.online.engine import ActiveLearningEngine
+        from budding_yeast_v2.utils.sampling.online.engine import ActiveLearningEngine
         return ActiveLearningEngine
     if name == 'train_acquisition_ensemble':
-        from budding_yeast_v2.utils.archive.online.prediction import train_acquisition_ensemble
+        from budding_yeast_v2.utils.sampling.online.prediction import train_acquisition_ensemble
         return train_acquisition_ensemble
     if name == 'build_strategy':
         from budding_yeast_v2.utils.sampling.registry import build_strategy

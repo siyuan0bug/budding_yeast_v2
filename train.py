@@ -473,7 +473,7 @@ def main():
     if args.al_strategy in AL4PDE_STRATEGIES:
         # ================= v2.3 al4pde 外层重训式 AL (方案 A) =================
         from budding_yeast_v2.utils.sampling import ActiveLearningEngine
-        from budding_yeast_v2.utils.archive.online.io import round_record, metric_text
+        from budding_yeast_v2.utils.sampling.online.io import round_record, metric_text
         NUM_AL_ROUNDS = args.num_al_rounds
         device_str = 'cuda' if args.device in ('cuda','gpu','auto') and torch.cuda.is_available() else 'cpu'
         print(f"🚀 [al4pde v2.3 外层重训] 策略={args.al_strategy.upper()} | "
@@ -568,7 +568,7 @@ def main():
                 json.dump(dict(policy=args.al_round_seed_policy, seed=round_seed), handle)
             model = build_fresh_model()  # 冷启动: 全新随机初始化 + 全新余弦周期
             curve_callback = TrainingCurveCallback(save_dir=round_dir, exp_name=f"{run_name}_round{r+1}", loss_type=args.loss_type, model_name=args.model,round_output=True)
-            from budding_yeast_v2.utils.archive.online.logging import make_round_logger, log_round_evaluation
+            from budding_yeast_v2.utils.sampling.online.logging import make_round_logger, log_round_evaluation
             from budding_yeast_v2.utils.training.convergence import LossChangeMonitor
             round_logger=make_round_logger(logger.experiment,actual_exp_dir,r)
             trainer = make_trainer(
@@ -627,7 +627,7 @@ def main():
                 train_loss_trend_pct_per_epoch=change.get('train_trend_pct'),
                 val_mse_trend_pct_per_epoch=change.get('val_trend_pct'))
             histories.append(curve_callback.curve_logger)
-            from budding_yeast_v2.utils.archive.online.reporting import save_summary
+            from budding_yeast_v2.utils.sampling.online.reporting import save_summary
             with log_stage('round summary and loss plots',round=r+1):
                 save_summary(actual_exp_dir,al_curve_records,histories,metrics)
 

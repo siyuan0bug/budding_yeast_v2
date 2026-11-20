@@ -9,7 +9,7 @@ def add_parser(subparsers):
     p.add_argument('--protocol',type=Path,required=True)
     p.add_argument('--pool',choices=('mutation','lhs'),required=True)
     p.add_argument('--method',choices=DYNAMIC_METHODS,required=True)
-    p.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_dynamic'))
+    p.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling'))
     p.add_argument('--device',default='cpu');p.add_argument('--config',type=Path)
     p.add_argument('--lhs-config',type=Path);p.add_argument('--plots',action='store_true')
     p.add_argument('--wandb',action='store_true');p.add_argument('--diagnostic-only',action='store_true')

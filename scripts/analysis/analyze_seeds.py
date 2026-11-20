@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 
-def analyze_seeds(eval_root="/home/users/zsy/budding_yeast_v2/eval_result"):
+def analyze_seeds(eval_root="/home/users/zsy/mydata/budding_yeast/experiments/archive/repository_outputs_20261121/eval_result"):
     # 按照前缀对目录进行分组 (例如: cross_fno_mse_only_210m_500s_modes32)
     groups = {}
     

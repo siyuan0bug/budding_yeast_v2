@@ -112,7 +112,7 @@ def main() -> None:
                         help="The one run used for the primary bad-case decision.")
     parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE,
                         help="Optional post-hoc table from this exact NPZ; no archived table is used by default.")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "scripts/analysis/outputs/pure_random_badcase_diagnosis")
+    parser.add_argument("--output-dir", type=Path, default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/historical_analysis_outputs/pure_random_badcase_diagnosis'))
     parser.add_argument("--mae", type=float, default=0.15)
     parser.add_argument("--mse", type=float, default=1.0)
     parser.add_argument("--rel-l2", type=float, default=0.25)

@@ -89,7 +89,7 @@ def _definition(pools, config):
 
 def protocol_location(pools, output, config=BenchmarkConfig()):
     _, _, identity = _definition(pools, config)
-    return Path(output) / f'seed{config.seed}_{fingerprint(identity)[:12]}'
+    return Path(output) / f'seed_{config.seed}'
 
 
 def prepare_protocol(pools, output, config=BenchmarkConfig()):
@@ -104,12 +104,14 @@ def prepare_protocol(pools, output, config=BenchmarkConfig()):
 def _prepare_protocol(pools, output, config):
     stores, definitions, identity = _definition(pools, config)
     protocol_id = f'seed{config.seed}_{fingerprint(identity)[:12]}'
-    root = Path(output) / protocol_id
+    root = protocol_location(pools, output, config)
     if (root / 'protocol.json').exists():
         import json
         existing = json.loads((root / 'protocol.json').read_text())
         if existing['fingerprint'] != fingerprint(identity):
-            raise ValueError('Protocol identity changed')
+            if existing['pools'] == definitions:
+                return derive_training_protocol(root,output,config)
+            raise ValueError('Data pool changed; choose a new readable shared dataset name')
         for path, digest in existing['artifacts'].items():
             from budding_yeast_v2.data.dataset_archive import file_sha256
             if file_sha256(root / path) != digest:
@@ -186,7 +188,8 @@ def derive_training_protocol(source,output,config):
     _,definitions,identity=_definition(pools,config)
     if definitions!=previous['pools']:raise ValueError('Frozen pool definitions changed')
     protocol_id=f'seed{config.seed}_{fingerprint(identity)[:12]}'
-    root=Path(output)/protocol_id;root.mkdir(parents=True,exist_ok=True)
+    from ..layout import profile
+    root=Path(output)/f'seed_{config.seed}'/'configurations'/profile(config);root.mkdir(parents=True,exist_ok=True)
     with (root/'.prepare.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         for name,digest in previous['artifacts'].items():
@@ -224,7 +227,7 @@ def derive_repaired_protocol(source, pools, output, *, real_reference):
             if any(a[item] != b[item] for item in ('sha256','shape','dtype')):
                 raise ValueError(f'Repair changed ordered input field: {name}/{key}')
     protocol_id = f'seed{config.seed}_{fingerprint(identity)[:12]}'
-    root = Path(output) / protocol_id
+    root = protocol_location(pools, output, config)
     root.mkdir(parents=True, exist_ok=True)
     with (root / '.prepare.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

@@ -105,7 +105,8 @@ def run_experiment(protocol_path, pool_name, method, output, *, device='cpu', re
         raise ValueError(f'{method} requires mutation metadata; not supported on {pool_name}')
     if real_reference is None and not diagnostic_only:
         raise ValueError('Formal benchmark requires an explicit frozen real reference')
-    directory = Path(output) / protocol['protocol_id'] / pool_name / method / f'seed_{config.seed}'
+    from ..layout import experiment_directory
+    directory = experiment_directory(output,config,pool_name,method)
     with experiment_lock(directory), resource_slot('experiment', 'experiment admission'), exclusive_gpu_slot(device):
         return _run(root, protocol, config, pool_name, spec, directory, device,
                     real_reference, plots, wandb_enabled, diagnostic_only)

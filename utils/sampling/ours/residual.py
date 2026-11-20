@@ -1,5 +1,5 @@
 """strategies residual services extracted from the pre-package implementation."""
-from budding_yeast_v2.utils.archive.online.oracle import PARAM_KEYS
+from budding_yeast_v2.utils.sampling.online.oracle import PARAM_KEYS
 import numpy as np
 from budding_yeast_v2.data.dataset_archive import open_dataset
 import os

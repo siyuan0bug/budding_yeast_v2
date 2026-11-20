@@ -2,7 +2,7 @@
 """Seed42 completion queue for independent fixed-pool/dynamic/generative baselines.
 
 No model or selection implementation lives here. Every child uses the public
-run_al_budding.sh CLI. Only Popen-owned isolated groups are monitored/signalled.
+run_sampling_budding.sh CLI. Only Popen-owned isolated groups are monitored/signalled.
 """
 import argparse
 import csv
@@ -27,10 +27,18 @@ from budding_yeast_v2.utils.experiments.memory_guard import BatchMemoryGuard
 from budding_yeast_v2.scripts.launch import queue_handover as handovers
 
 DATA=Path('/home/users/zsy/mydata/budding_yeast')
-PROTOCOL=DATA/'benchmarks/budding_sampling/seed42_a866aef5d988'
+PROTOCOL=DATA/'experiments/budding_sampling/shared/pool100k/seed_42'
 
 
 def tasks(suite='extensions'):
+    if suite=='all':
+        primary=[('run','random'),('run','power'),('run','lcmd_ll'),('run','physics_pre_power'),
+                 ('generate','hggs_projected'),('run','low_rank'),('dynamic','peaks_regression'),
+                 ('generate','ogas_async_projected')]
+        rows=[dict(kind=k,method=m,pool=p,task_id=f'{k}_{p}_{m}',status='pending')
+              for k,m in primary for p in ('mutation','lhs')]
+        ours=[r for r in tasks('ours') if r['method'] in ('ours_sensitivity','ours_dynamics_transport','ours_intervention_closure')]
+        return rows+ours
     if suite=='ours':
         from budding_yeast_v2.utils.sampling.registry import METHODS
         from budding_yeast_v2.utils.sampling.ours.mechanistic import METHOD_NAMES
@@ -95,7 +103,8 @@ def gpu_memory():
 
 def find_result(task,protocol_id,started=0.):
     root=Path(task['output'])
-    paths=list(root.glob(f"{protocol_id}*/{task['pool']}/{task['method']}/seed_42/config.json"))
+    from budding_yeast_v2.utils.sampling.layout import method_name
+    paths=list(root.glob(f"*/{task['pool']}/{method_name(task['method'],task['kind'])}/*/seed_{task.get('seed',42)}/config.json"))
     eligible=[p for p in paths if p.stat().st_mtime>=started-2]
     return str(max(eligible,key=lambda p:p.stat().st_mtime).parent) if eligible else task.get('result_directory')
 
@@ -137,10 +146,10 @@ def verified_spec_bundle(protocol,directory):
 
 
 def command(task,protocol,lhs_spec):
-    cmd=['bash',str(ROOT/'run_al_budding.sh'),task['kind'],'--protocol',str(protocol),
+    cmd=['bash',str(ROOT/'run_sampling_budding.sh'),task['kind'],'--protocol',str(protocol),
          '--pool',task['pool'],'--method',task['method'],'--output',task['output'],
          '--device','cuda:0','--plots','--wandb']
-    if task['kind']=='run':cmd+=['--seed','42']
+    if task['kind']=='run':cmd+=['--seed',str(task.get('seed',42))]
     elif task['kind']=='generate':
         cmd+=['--workers',str(task.get('workers',2)),'--bank-size',str(task.get('bank_size',512))]
         if 'query_batch_size' in task:cmd+=['--query-batch-size',str(task['query_batch_size'])]
@@ -150,7 +159,8 @@ def command(task,protocol,lhs_spec):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--protocol',type=Path,default=PROTOCOL)
+    parser.add_argument('--protocol',type=Path)
+    parser.add_argument('--seed',type=int,default=42)
     parser.add_argument('--directory',type=Path,required=True,help='Queue status/logs only; results retain public workflow roots')
     parser.add_argument('--gpus',nargs='+',default=['0','1','2','3'])
     parser.add_argument('--initial-jobs',type=int,default=4)
@@ -162,8 +172,8 @@ def main(argv=None):
     parser.add_argument('--cache-chunks',type=int,default=1024)
     parser.add_argument('--retry-failed-from',type=Path,help='Previous tasks.json; rerun failed identities in fresh results')
     parser.add_argument('--results-root',type=Path,help='Fresh parent for fixed_pool/generation/dynamic result roots')
-    parser.add_argument('--suite',choices=('extensions','ours'),default='extensions')
-    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours') for t in tasks(suite)}),
+    parser.add_argument('--suite',choices=('extensions','ours','all'),default='extensions')
+    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all') for t in tasks(suite)}),
                         help='Run only these methods, on both pools; completed runs may be rerun in a fresh root')
     parser.add_argument('--mechanism-workers',type=int,default=8)
     parser.add_argument('--mechanism-concurrency',type=int,default=2)
@@ -175,6 +185,7 @@ def main(argv=None):
     parser.add_argument('--added-resource-dir',type=Path,help='Reuse the verified previous added-job resource domain')
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args(argv)
+    args.protocol=args.protocol or PROTOCOL.parent/f'seed_{args.seed}'
     if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
             or not 1<=args.initial_jobs<=args.max_jobs<=16 or not 1<=args.jobs_per_gpu<=8
             or min(args.ramp_after,args.ramp_interval,args.gpu_free_gib)<=0
@@ -183,7 +194,7 @@ def main(argv=None):
             or not 1<=args.mechanism_concurrency<=16
             or not 1<=args.io_concurrency<=8 or not 1<=args.ramp_step<=4):raise ValueError('Invalid bounded shared-GPU queue settings')
     protocol=json.loads((args.protocol/'protocol.json').read_text());cfg=BenchmarkConfig(**protocol['config']).validate()
-    if cfg.seed!=42 or cfg.model!='fno':raise ValueError('This queue is explicitly FNO / seed42 only')
+    if cfg.seed!=args.seed:raise ValueError('Queue seed disagrees with shared protocol')
     rows=tasks(args.suite)
     retry_source=None
     if args.retry_failed_from is not None:
@@ -198,14 +209,14 @@ def main(argv=None):
     if args.methods is not None:
         rows=[row for row in rows if row['method'] in args.methods]
         if not rows:raise ValueError('No tasks match the requested methods')
-    outputs=dict(run=DATA/'experiments/budding_sampling',generate=DATA/'experiments/budding_generation',
-                 dynamic=DATA/'experiments/budding_dynamic')
+    outputs=dict(run=DATA/'experiments/budding_sampling',generate=DATA/'experiments/budding_sampling',
+                 dynamic=DATA/'experiments/budding_sampling')
     if args.results_root is not None:
-        outputs={kind:args.results_root/subdir for kind,subdir in
-                 [('run','fixed_pool'),('generate','generation'),('dynamic','dynamic')]}
-    for row in rows:row['output']=str(outputs[row['kind']])
+        outputs={kind:args.results_root for kind in ('run','generate','dynamic')}
+    for row in rows:
+        row['output']=str(outputs[row['kind']]);row['seed']=cfg.seed
     if args.dry_run:
-        print(json.dumps(dict(seed=42,protocol=protocol['protocol_id'],tasks=rows,count=len(rows),
+        print(json.dumps(dict(seed=cfg.seed,protocol=protocol['protocol_id'],tasks=rows,count=len(rows),
             initial_jobs=args.initial_jobs,maximum_jobs=args.max_jobs,gpus=args.gpus),ensure_ascii=False,indent=2));return
     if args.adopt_from is not None and args.directory.resolve()==args.adopt_from.resolve():
         raise ValueError('Live adoption requires a fresh supervisor directory')
@@ -233,7 +244,7 @@ def main(argv=None):
             if previous_root is None or args.added_resource_dir.resolve()!=Path(previous_root).resolve():
                 raise ValueError('Resource domain must match the verified previous supervisor')
             added_resource_root=args.added_resource_dir.resolve()
-        settings=dict(protocol=str(args.protocol.resolve()),protocol_fingerprint=protocol['fingerprint'],seed=42,
+        settings=dict(protocol=str(args.protocol.resolve()),protocol_fingerprint=protocol['fingerprint'],seed=cfg.seed,
             suite=args.suite,
             training=asdict(cfg),sources=sources,gpus=args.gpus,initial_jobs=args.initial_jobs,
             max_jobs=args.max_jobs,jobs_per_gpu=args.jobs_per_gpu,ramp_after=args.ramp_after,

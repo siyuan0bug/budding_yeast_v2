@@ -14,7 +14,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint',action='append',required=True,help='LABEL=PATH; repeat for multiple models')
     parser.add_argument('--dataset_name',required=True)
-    parser.add_argument('--output',type=Path,default=Path('eval_result/real_mutants_badcases.csv'))
+    parser.add_argument('--output',type=Path,default=Path('/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/real_mutants_badcases.csv'))
     parser.add_argument('--device',default='cpu')
     parser.add_argument('--batch_size',type=int,default=32)
     args=parser.parse_args()
