@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from .policies import METHODS
+from .policies import METHODS,ADAPTIVE_METHODS
 from .online import ONLINE_METHODS,OnlineConfig
 
 
@@ -29,6 +29,8 @@ def add_parser(subparsers):
 
 
 def execute(args):
+    if args.method in ADAPTIVE_METHODS and args.pool!='mutation':
+        raise ValueError('Adaptive legal intervention prototypes currently support mutation only')
     online=args.method in ONLINE_METHODS
     if online and args.query_batch_size is not None:
         raise ValueError('Online queue is bounded by --workers, not --query-batch-size')

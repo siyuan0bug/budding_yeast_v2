@@ -23,6 +23,9 @@ if [[ "$SAMPLING_MODE" == offline ]]; then
     export SAMPLING_IO_CONCURRENCY="${SAMPLING_IO_CONCURRENCY:-8}"
     export MAX_JOBS_PER_GPU="${MAX_JOBS_PER_GPU:-4}"
     export SAMPLING_MIN_AVAILABLE_GIB="${SAMPLING_MIN_AVAILABLE_GIB:-100}"
+    export SAMPLING_PRESSURE_GRACE_S="${SAMPLING_PRESSURE_GRACE_S:-90}"
+    export SAMPLING_DISK_PRESSURE_GRACE_S="${SAMPLING_DISK_PRESSURE_GRACE_S:-120}"
+    export SAMPLING_MAX_IO_PSI="${SAMPLING_MAX_IO_PSI:-30}"
     if (( $# == 0 )); then set -- batch; fi
     if [[ "$1" == extensions ]]; then
         shift

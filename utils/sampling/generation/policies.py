@@ -8,7 +8,9 @@ from ..baseline.oed import BayesianOED,OEDConfig,temporal_informativeness
 from ..baseline.ogas import ConditionalOGAS,OGASConfig
 from ..baseline.hggs import MultigridGenetic,HGGSConfig
 from .domain import feature_inputs,project_legal_targets
-from ..ours.mechanistic import METHOD_NAMES as OUR_METHODS
+from ..ours.mechanistic import METHOD_NAMES as MECHANISTIC_METHODS
+from ..ours.adaptive_generation import METHODS as ADAPTIVE_METHODS
+OUR_METHODS=MECHANISTIC_METHODS+ADAPTIVE_METHODS
 
 
 METHODS=('random_generate','oed_temporal','ogas_round_projected','hggs_projected') + OUR_METHODS
@@ -29,12 +31,17 @@ class GenerationPolicy:
         elif name=='hggs_projected':
             self.controller=MultigridGenetic(seed,hggs)
             self.mean=x.mean(0);self.scale=x.std(0);self.scale[self.scale<1e-8]=1.
+        elif name in ADAPTIVE_METHODS:
+            from ..ours.adaptive_generation.policy import AdaptiveGeneration
+            self.controller=AdaptiveGeneration(name,initial,trajectories,seed)
         elif name in OUR_METHODS:
             from ..ours.mechanistic.generation import MechanisticGeneration
             self.controller=MechanisticGeneration(name,initial,trajectories,seed)
         self.feedback_rows=0;self.refreshed_target=None
 
     def refresh(self,inputs,truth,predictor,target=None):
+        if self.name in ADAPTIVE_METHODS:
+            self.controller.refresh(inputs,truth,predictor,target);return
         if self.name in OUR_METHODS:
             self.controller.refresh(inputs,truth,predictor)
             return
@@ -65,6 +72,7 @@ class GenerationPolicy:
                         /torch.hypot(torch.linalg.vector_norm(observed,dim=-1),
                                      observed.new_tensor(.01))).mean(1).numpy()
             self.controller.observe(x,difficulty,is_reference=is_reference)
+        if self.name in ADAPTIVE_METHODS:self.controller.observe(inputs,truth)
         self.feedback_rows+=len(x)
 
     def select(self,bank,count):

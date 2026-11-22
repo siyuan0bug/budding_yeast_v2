@@ -148,7 +148,8 @@ def run_hggs(protocol,pool,output,*,device='cpu',workers=4,bank_size=512,query_b
                 rd=directory/f'rounds/round_{i:02d}';model,norm,_=load_sampling_checkpoint(rd/'model.ckpt',device)
                 predictor=Predictor([model],norm,store.initial['data'].shape[-1],device,cfg.prediction_batch_size)
                 context=dict(model=cfg.model,loss=cfg.loss,pool=pool,method='hggs_projected',training_rows=budget,seed=cfg.seed)
-                metrics=cohorts.evaluate(predictor,rd/'eval',i,budget,plots=plots,context={k:v for k,v in context.items() if k!='loss'})
+                metrics=cohorts.evaluate(predictor,rd/'eval',i,budget,
+                    plots=plots and (i == len(cfg.budgets) - 1),context={k:v for k,v in context.items() if k!='loss'})
                 records.append(dict(round=i,training_rows=budget,metrics=metrics));contexts[i]=context
                 history=read_history(rd/'history.csv');histories.append((i,history))
                 loss_figure(history,rd/'loss.png',title=f'HGGS stage {i}',context=context)

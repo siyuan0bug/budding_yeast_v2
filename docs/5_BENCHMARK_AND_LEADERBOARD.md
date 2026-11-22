@@ -24,3 +24,7 @@ HGGS历史成绩属于旧控制流程，修正版本没有被本次目录治理�
 迁移不改变模型/轨迹/评测值；路径元数据与校验更新需要审计。
 新实验完成后运行汇总工具，更新此处的当前结论和报告入口；详细表格、图、日志留在外部结果目录，不逐次向本文追加流水账。
 历史比较及旧版模型成绩保留在[整理前快照](history/GUIDE_SNAPSHOT_5_BENCHMARK_AND_LEADERBOARD.md)，不能自动视为当前协议成绩。
+
+当前FNO三seed终评分析入口：[多seed原始指标与汇总](/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/multiseed_20261122/report.md)、[Ours诊断与后续验证计划](/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/multiseed_20261122/ours_improvement.md)。仅七类baseline具备三个seed，现有ours仍为单seed；不得混为多seed优胜结论。
+
+三种Adaptive生成方法的42/123/1024终评：[全指标与目录](/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/adaptive_multiseed_20261122/report.md)、[机制诊断](/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/adaptive_multiseed_20261122/findings.md)。九项均完成，当前结果尚未稳定超过Power；无锚点固定分数及实际响应覆盖不足须先验证修正。

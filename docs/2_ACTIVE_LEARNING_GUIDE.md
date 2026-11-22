@@ -13,6 +13,13 @@ bash run_sampling_budding.sh extensions --suite all \
 统一路径由`utils/sampling/layout.py`生成：`experiments/budding_sampling/<model>/<pool>/<method>/<profile>/seed_<主seed>`。
 `batches`为队列与维护审计，`shared`为共同数据协议，`summary`为跨实验汇总；模型目录才保存权重、loss、预测图与eval。
 
+## 多seed与ensemble执行
+
+`scripts/launch/run_multiseed_sampling.py`使用既有pool为多个实验主seed建立共享协议，分seed调用同一有界队列；每个seed内部共享划分/初始集。
+显式启用`SAMPLING_ENSEMBLE_PARALLEL=1`时，普通固定池ensemble的主成员和辅助成员在独立spawn进程训练，复用同一训练快照和验证集，随机流独立；辅助日志在各成员目录。
+多seed调度器支持`--jobs 1..4`、`--io-concurrency 1..4`；当前默认4项、I/O并发2，仅使用GPU0，保留系统约100GiB可用内存准入与运行保护。`--adopt-first-queue`通过已校验的交接凭据保留首个seed的在跑任务；交接时旧/新任务各自保留资源锁域，首个seed两域各1个加载槽，总计最多2个，后续seed统一2个加载槽。
+GPU4～7禁止多进程ensemble。执行并行度不改变成员数量、训练epoch、损失或采样公式；正式启动后禁止热改sources范围内代码。
+
 ## 方法与运行库
 
 - 作者baseline独立实现在`utils/sampling/baseline/`，项目方法在`ours/`。
@@ -34,3 +41,5 @@ Sensitivity、Transport、Closure已有Budding初步实验，不代表稳定优�
 HGGS旧流程标为hggs_legacy；持续训练修正版本须单独正式运行，不可复用旧成绩。
 Low-Rank梯度能量、PEAKS回归评分、PRE事件屏蔽及OGAS合法投影均需披露任务适配。
 详见[现有原型与局限](history/OURS_IMPLEMENTATION_AND_PORTABILITY_2026-11-19.md)、[HGGS修正](history/HGGS_CONTINUOUS_FIX_2026-11-19.md)。
+
+三种非四角反馈生成原型使用显式`--suite adaptive`，不改变旧suite默认任务；方法、实际实现限制和命令见[反馈生成原型](reference/ADAPTIVE_MUTATION_GENERATION.md)。

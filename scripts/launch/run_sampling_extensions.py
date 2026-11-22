@@ -6,7 +6,7 @@ run_sampling_budding.sh CLI. Only Popen-owned isolated groups are monitored/sign
 """
 import argparse
 import csv
-from dataclasses import asdict
+from dataclasses import asdict,replace
 from datetime import datetime
 import json
 import os
@@ -20,17 +20,23 @@ from zoneinfo import ZoneInfo
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT.parent))
 from budding_yeast_v2.data.dataset_archive import atomic_json,file_sha256,fingerprint,TrajectoryStore
+from budding_yeast_v2.utils.sampling.layout import experiment_directory
 from budding_yeast_v2.utils.sampling.benchmark.runner import source_inventory,experiment_lock
 from budding_yeast_v2.utils.sampling.benchmark.protocol import BenchmarkConfig
 from budding_yeast_v2.utils.experiments.resources import resource_state,memory_status
 from budding_yeast_v2.utils.experiments.memory_guard import BatchMemoryGuard
 from budding_yeast_v2.scripts.launch import queue_handover as handovers
+from budding_yeast_v2.scripts.launch.queue_protocols import expand_seeds,verify_protocols,validate_adoption_tasks
 
 DATA=Path('/home/users/zsy/mydata/budding_yeast')
 PROTOCOL=DATA/'experiments/budding_sampling/shared/pool100k/seed_42'
 
 
 def tasks(suite='extensions'):
+    if suite=='adaptive':
+        from budding_yeast_v2.utils.sampling.ours.adaptive_generation import METHODS
+        return [dict(kind='generate',method=m,pool='mutation',bank_size=128,query_batch_size=16,workers=2,
+                     task_id=f'generate_mutation_{m}',status='pending') for m in METHODS]
     if suite=='all':
         primary=[('run','random'),('run','power'),('run','lcmd_ll'),('run','physics_pre_power'),
                  ('generate','hggs_projected'),('run','low_rank'),('dynamic','peaks_regression'),
@@ -161,6 +167,8 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--protocol',type=Path)
     parser.add_argument('--seed',type=int,default=42)
+    parser.add_argument('--seeds',nargs='+',type=int,help='Adaptive suite: jointly schedule multiple frozen experiment seeds')
+    parser.add_argument('--extend-adoption',action='store_true',help='Adaptive suite: retain handed-over tasks and append new seeds')
     parser.add_argument('--directory',type=Path,required=True,help='Queue status/logs only; results retain public workflow roots')
     parser.add_argument('--gpus',nargs='+',default=['0','1','2','3'])
     parser.add_argument('--initial-jobs',type=int,default=4)
@@ -172,8 +180,8 @@ def main(argv=None):
     parser.add_argument('--cache-chunks',type=int,default=1024)
     parser.add_argument('--retry-failed-from',type=Path,help='Previous tasks.json; rerun failed identities in fresh results')
     parser.add_argument('--results-root',type=Path,help='Fresh parent for fixed_pool/generation/dynamic result roots')
-    parser.add_argument('--suite',choices=('extensions','ours','all'),default='extensions')
-    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all') for t in tasks(suite)}),
+    parser.add_argument('--suite',choices=('extensions','ours','all','adaptive'),default='extensions')
+    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all','adaptive') for t in tasks(suite)}),
                         help='Run only these methods, on both pools; completed runs may be rerun in a fresh root')
     parser.add_argument('--mechanism-workers',type=int,default=8)
     parser.add_argument('--mechanism-concurrency',type=int,default=2)
@@ -186,6 +194,10 @@ def main(argv=None):
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args(argv)
     args.protocol=args.protocol or PROTOCOL.parent/f'seed_{args.seed}'
+    if args.seeds is not None and (args.suite!='adaptive' or args.retry_failed_from is not None):
+        raise ValueError('Joint multi-seed expansion currently requires adaptive suite without retry ledger')
+    if args.extend_adoption and (args.adopt_from is None or args.seeds is None or args.suite!='adaptive'):
+        raise ValueError('Extended adoption requires explicit adaptive multi-seed handover')
     if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
             or not 1<=args.initial_jobs<=args.max_jobs<=16 or not 1<=args.jobs_per_gpu<=8
             or min(args.ramp_after,args.ramp_interval,args.gpu_free_gib)<=0
@@ -208,6 +220,7 @@ def main(argv=None):
         rows=failed_tasks(rows,json.loads(args.retry_failed_from.read_text()))
     if args.methods is not None:
         rows=[row for row in rows if row['method'] in args.methods]
+        rows.sort(key=lambda row:args.methods.index(row['method']))
         if not rows:raise ValueError('No tasks match the requested methods')
     outputs=dict(run=DATA/'experiments/budding_sampling',generate=DATA/'experiments/budding_sampling',
                  dynamic=DATA/'experiments/budding_sampling')
@@ -215,6 +228,8 @@ def main(argv=None):
         outputs={kind:args.results_root for kind in ('run','generate','dynamic')}
     for row in rows:
         row['output']=str(outputs[row['kind']]);row['seed']=cfg.seed
+    protocol_receipts={}
+    if args.seeds is not None:rows,protocol_receipts=expand_seeds(rows,args.protocol,args.seeds)
     if args.dry_run:
         print(json.dumps(dict(seed=cfg.seed,protocol=protocol['protocol_id'],tasks=rows,count=len(rows),
             initial_jobs=args.initial_jobs,maximum_jobs=args.max_jobs,gpus=args.gpus),ensure_ascii=False,indent=2));return
@@ -228,12 +243,8 @@ def main(argv=None):
             if manifest.exists():raise ValueError('Adoption is one-time; use a new receipt for another transfer')
             if handover['protocol_fingerprint']!=protocol['fingerprint']:
                 raise ValueError('Live adoption protocol changed')
-            expected={t['task_id']:t for t in rows}
-            if set(expected)!={t['task_id'] for t in handover['tasks']}:
-                raise ValueError('Live adoption task set changed')
+            validate_adoption_tasks(rows,handover['tasks'],extend=args.extend_adoption)
             for old in handover['tasks']:
-                if any(old[k]!=expected[old['task_id']][k] for k in ('kind','method','pool','output')):
-                    raise ValueError('Live adoption task definition/output changed')
                 if old['status']=='running' and old['gpu'] not in args.gpus:
                     raise ValueError('Adopted GPU is not authorized for this supervisor')
         added_resource_root=(args.directory/'.resource_locks').resolve()
@@ -255,6 +266,7 @@ def main(argv=None):
                 mechanism_concurrency=args.mechanism_concurrency,ordinary_scoring_concurrency=2,
                 io_concurrency=args.io_concurrency,worker_threads=1),ramp_step=args.ramp_step,
             handover_helper_sha256=file_sha256(handovers.__file__),admit_all_pending=args.admit_all_pending)
+        if protocol_receipts:settings['seed_protocols']=protocol_receipts
         if handover is not None:
             settings['live_adoption']=dict(directory=str(args.adopt_from.resolve()),
                 receipt_sha256=file_sha256(args.adopt_from/'handover.json'),
@@ -267,7 +279,8 @@ def main(argv=None):
         if handover is not None:
             saved_rows={t['task_id']:t for t in handover['tasks']}
             for row in rows:
-                old=saved_rows[row['task_id']]
+                old=saved_rows.get(row['task_id'])
+                if old is None:continue
                 if old['status'] in ('complete','running','failed'):
                     row.update(old)
                     if old['status']=='running':row.update(adopted=True,exit_code_source='verified_completion_after_adoption')
@@ -278,6 +291,7 @@ def main(argv=None):
                     saved=old[row['task_id']]
                     if saved['status']=='complete':row.update(saved)
                     elif saved['status']=='running':row['previous_pid']=saved.get('pid')
+        verify_protocols(protocol_receipts)
         lhs_spec=verified_spec_bundle(protocol,args.directory)
         for relative,digest in protocol['artifacts'].items():
             if file_sha256(args.protocol/relative)!=digest:raise ValueError('Shared protocol changed')
@@ -339,17 +353,30 @@ def main(argv=None):
                 counts={g:sum(t['gpu']==g for _,t,_,_ in active.values()) for g in args.gpus}
                 usable=[g for g in args.gpus if counts[g]<args.jobs_per_gpu and free.get(g,0)>=args.gpu_free_gib]
                 if pending and len(active)<capacity and usable and not blocked and health['available_gib']>=124:
+                    verify_protocols(protocol_receipts)
                     if source_inventory()!=sources:raise RuntimeError('Source changed while queue is active; refuse mixed-version jobs')
                     if shutil.disk_usage(DATA).free<50*2**30:raise RuntimeError('Less than 50GiB available on data volume')
                     gpu=min(usable,key=lambda g:(counts[g],-free[g]))
-                    log=args.directory/'logs'/f"{pending['task_id']}.log";handle=log.open('a')
-                    cmd=command(pending,args.protocol,lhs_spec)
+                    task_config=replace(cfg,seed=pending['seed'])
+                    dest=experiment_directory(pending['output'],task_config,pending['pool'],pending['method'],pending['kind'])
+                    dest.mkdir(parents=True,exist_ok=True)
+                    queue_log=args.directory/'logs'/f"{pending['task_id']}.log"
+                    # Native generation/dynamic runners tee to their train.log.
+                    # Redirecting stdout to that same inode duplicates every line.
+                    if pending['kind']=='run':
+                        log=dest/'train.log'
+                        if not queue_log.exists():
+                            try:queue_log.symlink_to(log)
+                            except OSError:pass
+                    else:log=queue_log
+                    handle=log.open('a')
+                    cmd=command(pending,Path(pending.get('protocol',args.protocol)),lhs_spec)
                     if shutil.which('ionice'):cmd=['ionice','-c','2','-n','7',*cmd]
                     if shutil.which('nice'):cmd=['nice','-n','10',*cmd]
                     child=subprocess.Popen(cmd,cwd=ROOT,env=dict(env,CUDA_VISIBLE_DEVICES=gpu),stdout=handle,stderr=subprocess.STDOUT,start_new_session=True)
                     tracking=guard.track(child);tracking.__enter__()
                     pending.update(status='running',pid=child.pid,gpu=gpu,started_wall_time=time.time(),
-                        started_at=datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),launcher_log=str(log),command=cmd)
+                        started_at=datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(),launcher_log=str(log),result_directory=str(dest),command=cmd)
                     active[child.pid]=(child,pending,handle,tracking)
                     print(f"START {pending['task_id']} GPU={gpu} pid={child.pid}",flush=True)
                 atomic_json(status_path,rows)

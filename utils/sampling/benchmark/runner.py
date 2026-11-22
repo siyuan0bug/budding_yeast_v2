@@ -1,5 +1,5 @@
 """Configured cold-start rounds over a complete pool, with auditable truth revelation."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict
 import csv
 import fcntl
@@ -133,6 +133,8 @@ def _run(root, protocol, config, pool_name, spec, directory, device, real_refere
         real_reference=None if real_reference is None else dict(path=str(Path(real_reference).resolve()),
                                                                sha256=file_sha256(real_reference)))
     identity.update(output_schema='sampling_report_v5_physical_sc_smooth_eps001',training=asdict(config),sources=source_inventory())
+    if spec.ensemble and os.environ.get('SAMPLING_ENSEMBLE_PARALLEL','0')=='1':
+        identity['ensemble_execution']='independent_spawn_parallel_when_acquiring'
     path=directory/'config.json'
     if path.exists() and json.loads(path.read_text())!=identity:
         raise ValueError(f'Experiment source/config changed: {path}; use a new result directory')
@@ -261,14 +263,23 @@ def _run(root, protocol, config, pool_name, spec, directory, device, real_refere
                 plot_contexts[round_index]=dict(model=config.model,loss=config.loss,pool=pool_name,
                     method=spec.name,training_rows=len(selected),seed=config.seed,warmup=config.warmup[round_index])
                 seed = child_seed(config.seed, 'model', round_index, 0)
-                with log_stage('primary cold-start training', round=round_index, seed=seed):
-                    model, normalization, history = fit_round(config, round_index, training,
-                        [(view, truth) for _, view, truth in validation], round_dir, seed,
-                        device=device, identity=dict(rows_sha256=rows_fingerprint, weights_sha256=weights_fingerprint,
-                                                     protocol=protocol['fingerprint']),
-                        wandb_run=wandb_run, weights=current_weights,dataset_path=round_dir/'dataset.json',
-                        state_dir=directory/'_state'/f'round_{round_index:02d}'/'primary',
-                        plot_context=plot_contexts[round_index],monitoring=monitoring)
+                parallel_paths=[]
+                joint=(spec.ensemble and round_index<len(config.budgets)-1 and
+                       os.environ.get('SAMPLING_ENSEMBLE_PARALLEL','0')=='1' and
+                       not (round_dir/'selection.json').exists())
+                from .ensemble import parallel_members
+                context=(parallel_members(config,round_index,root,pool_name,round_dir/'dataset.json',directory,
+                         dict(rows_sha256=rows_fingerprint,protocol=protocol['fingerprint']),device)
+                         if joint else nullcontext(parallel_paths))
+                with context as parallel_paths:
+                    with log_stage('primary cold-start training', round=round_index, seed=seed):
+                        model, normalization, history = fit_round(config, round_index, training,
+                            [(view, truth) for _, view, truth in validation], round_dir, seed,
+                            device=device, identity=dict(rows_sha256=rows_fingerprint, weights_sha256=weights_fingerprint,
+                                                         protocol=protocol['fingerprint']),
+                            wandb_run=wandb_run, weights=current_weights,dataset_path=round_dir/'dataset.json',
+                            state_dir=directory/'_state'/f'round_{round_index:02d}'/'primary',
+                            plot_context=plot_contexts[round_index],monitoring=monitoring)
                 histories.append((round_index, history))
                 members = [model]
                 predictor = Predictor([model], normalization, data.shape[-1], device,
@@ -288,7 +299,8 @@ def _run(root, protocol, config, pool_name, spec, directory, device, real_refere
                         view = PoolInputs(np.arange(len(reference['data'])), reference['params'], reference['y_init'])
                         predictions = predictor.physical(view)
                         metrics['real_mutants'] = save_real_evaluation(predictions, reference['data'],
-                            reference['mutant_names'],round_dir/'eval',plots=plots,write_summary=False,
+                            reference['mutant_names'],round_dir/'eval',
+                            plots=plots and (round_index == len(config.budgets) - 1),write_summary=False,
                             plot_workers=int(os.environ.get('SAMPLING_PLOT_WORKERS','2')),
                             context={k:v for k,v in plot_contexts[round_index].items() if k not in ('warmup','loss')})
                     save_global_metrics(round_dir/'eval',metrics,pool_name=pool_name,
@@ -317,7 +329,11 @@ def _run(root, protocol, config, pool_name, spec, directory, device, real_refere
                     if len(new_ids) != addition or len(set(new_ids)) != addition or not set(new_ids) <= set(remaining):
                         raise ValueError('Saved acquisition violates the input/unique budget')
                 else:
-                    if spec.ensemble:
+                    if spec.ensemble and parallel_paths:
+                        from budding_yeast_v2.utils.evaluation.checkpoints import load_sampling_checkpoint
+                        for path in parallel_paths:
+                            auxiliary,_,_=load_sampling_checkpoint(path,device);members.append(auxiliary)
+                    elif spec.ensemble:
                         for member in range(1, config.ensemble_members):
                             member_seed = child_seed(config.seed, 'model', round_index, member)
                             with log_stage('independent ensemble training', member=member, round=round_index):

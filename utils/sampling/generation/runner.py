@@ -32,6 +32,7 @@ from .cohorts import FrozenCohorts
 from .domain import FrozenBuddingDomain
 from .policies import GenerationPolicy,METHODS,OUR_METHODS
 from .storage import GeneratedTrainingStore
+from ..ours.adaptive_generation import METHODS as ADAPTIVE_METHODS
 
 
 def worker_lifecycle(parent):
@@ -90,7 +91,10 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
         count=min(query_batch_size,target-store.count-len(pending),needed*max_attempts_mult-attempts)
         scoring_resource='cpu_scoring' if policy.name in OUR_METHODS else 'scoring'
         with resource_slot(scoring_resource,'legal proposal generation and scoring'):
-            if policy.name=='ours_intervention_closure':
+            if policy.name in ADAPTIVE_METHODS:
+                from .interventions import intervention_bank
+                candidates,signatures,bank=intervention_bank(domain,policy.controller,max(bank_size,count))
+            elif policy.name=='ours_intervention_closure':
                 from .controlled import controlled_bank
                 candidates,signatures,bank=controlled_bank(domain,max(bank_size,count))
             else:
@@ -122,6 +126,11 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
                 log.write(json.dumps(_json_safe(record),allow_nan=False)+'\n')
                 if result.status=='success':successful.append(result)
             log.flush();os.fsync(log.fileno())
+        if policy.name in ADAPTIVE_METHODS:
+            failed=[r for r in results if r.status!='success']
+            if failed:
+                policy.controller.discard(PoolInputs(np.arange(len(failed)),np.asarray([r.params for r in failed]),
+                                                     np.asarray([r.y_init for r in failed])))
         if successful:
             view=PoolInputs(np.arange(len(successful)),np.asarray([r.params for r in successful]),
                             np.asarray([r.y_init for r in successful]))
@@ -155,6 +164,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
     root=Path(protocol).resolve();root=root if root.is_dir() else root.parent
     definition=json.loads((root/'protocol.json').read_text());cfg=BenchmarkConfig(**definition['config']).validate()
     if pool not in definition['pools']:raise ValueError('Unknown source pool')
+    if pool!='mutation' and method in ADAPTIVE_METHODS:
+        raise ValueError('Adaptive intervention prototypes currently support mutation generation only')
     if pool=='lhs' and lhs_config is None:raise ValueError('Provide the frozen LHS specification')
     if pool=='lhs' and method=='ours_intervention_closure':
         raise ValueError('Intervention closure requires legal mutation controls, not an unlabelled LHS design')
@@ -240,7 +251,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
                     predictor=Predictor([model],norm,training.trajectories.shape[-1],device,cfg.prediction_batch_size)
                     histories.append((i,history))
                     with log_stage('generation independent evaluation',round=i):
-                        metrics=cohorts.evaluate(predictor,rd/'eval',i,budget,plots=plots,
+                        metrics=cohorts.evaluate(predictor,rd/'eval',i,budget,
+                            plots=plots and (i == len(cfg.budgets) - 1),
                             context={k:v for k,v in context.items() if k not in ('warmup','loss')})
                     records.append(dict(round=i,training_rows=budget,metrics=metrics))
                     save_progress_reports(directory,records,histories,contexts,rd)
