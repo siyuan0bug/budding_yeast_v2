@@ -36,6 +36,42 @@ def relative_l2_loss(pred, target, eps=PHYSICAL_RELATIVE_L2_EPS):
     return sample_channel_relative_errors(pred, target, eps).mean()
 
 
+def relative_error_decomposition(pred, target, *, variable_names=None, eps=PHYSICAL_RELATIVE_L2_EPS):
+    """Read-only decomposition at the existing denominator-protection scale.
+
+    Group sample/channel trajectories by target time-L2 energy: exactly zero,
+    positive but <=eps, and >eps. No output clipping or metric reweighting.
+    """
+    original_p, original_y = torch.as_tensor(pred).detach().cpu(), torch.as_tensor(target).detach().cpu()
+    p, y = original_p.double(), original_y.double()
+    if p.ndim != 3 or p.shape != y.shape or min(p.shape) < 1:
+        raise ValueError('Decomposition requires aligned nonempty N,V,T trajectories')
+    relative = sample_channel_relative_errors(original_p, original_y, eps)
+    energy = torch.linalg.vector_norm(y, dim=-1)
+    mae, mse = (p-y).abs().mean(-1), (p-y).square().mean(-1)
+    names = list(variable_names) if variable_names is not None else [str(i) for i in range(y.shape[1])]
+    if len(names) != y.shape[1]:
+        raise ValueError('Variable names must match the physical trajectory channels')
+    total = float(relative.sum())
+    def record(mask):
+        count = int(mask.sum())
+        return dict(sample_channel_count=count, fraction=count/relative.numel(),
+            relative_mean=float(relative[mask].mean()) if count else None,
+            MAE=float(mae[mask].mean()) if count else None,
+            MSE=float(mse[mask].mean()) if count else None,
+            share_of_total_relative_pct=100*float(relative[mask].sum())/total if total else 0.)
+    exact = energy == 0
+    near = energy <= eps
+    return dict(eps=float(eps), definition='target time-L2 norm, physical; unchanged canonical Relative',
+        groups=dict(exact_zero=record(exact), positive_near_zero=record(near & ~exact),
+                    above_eps=record(~near)), near_zero_including_exact=record(near),
+        per_variable=[dict(variable=name, exact_zero_count=int(exact[:, i].sum()),
+            near_zero_count=int(near[:, i].sum()), sample_count=len(y),
+            relative_mean=float(relative[:, i].mean()), MAE=float(mae[:, i].mean()), MSE=float(mse[:, i].mean()),
+            share_of_total_relative_pct=100*float(relative[:, i].sum())/total if total else 0.)
+            for i, name in enumerate(names)])
+
+
 def calculate_metrics(pred, target, eps=PHYSICAL_RELATIVE_L2_EPS):
     # 动态适应维度：正常传入的 pred 和 target 形状是 (Batch, Vars, Time)
     if pred.dim() == 3:

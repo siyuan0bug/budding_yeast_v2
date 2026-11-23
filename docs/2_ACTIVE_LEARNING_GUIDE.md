@@ -1,5 +1,9 @@
 # 采样实验运行指南
 
+R19突变对照试训：`scripts/launch/run_contrast_coldstart.py --directory <外部批次目录> --dry-run`预览准备、四组真实冷启动和汇总。它是2256条/100epoch的单轮研究试训，不在正式suite注册、不与完整五轮结果混排；复用公共训练loss、逐训练集归一化及合成验证best。新探针在全部选择锁定后评测，不读real/test或旧保留审计。设计见[研究记录](research/journal.md)。默认只用已授权0—3卡、每卡一项、全局最多两项、加载I/O并发1。
+
+响应缺失生成原型：`scripts/analysis/probe_background_transfer.py --score-kind response_omission`仅为学习收益诊断，未加入正式suite。使用三个已人工核对的独立标量机制、合法模块替换和同生成器/同机制预算随机对照；公共训练loss不变，诊断冻结统计、固定400步。主收益检查排除三个打分通道，避免将解析通道自身收益冒充耦合变量泛化。设计和停止条件见[研究记录R16](research/journal.md)；默认`integral_defect`保留原探针行为，不能混用或覆盖旧结果。
+
 ## 当前入口和输出
 
 ```bash
@@ -45,3 +49,13 @@ Low-Rank梯度能量、PEAKS回归评分、PRE事件屏蔽及OGAS合法投影均
 三种非四角反馈生成原型使用显式`--suite adaptive`，不改变旧suite默认任务；方法、实际实现限制和命令见[反馈生成原型](reference/ADAPTIVE_MUTATION_GENERATION.md)。
 
 Response V2与同路径随机对照使用`--suite response_v2`，与旧`adaptive`三方法分开。未知误差不再赋固定高分，即时使用已查询支撑，并记录共享训练Relative诊断。见[Response路径V2](reference/RESPONSE_PATHS_V2.md)。
+
+跨背景干预迁移暂只提供独立的实际学习收益探针，不加入正式suite。使用训练侧保留探针、同checkpoint及同更新预算比较评分/随机生成，见[跨背景学习收益验证](reference/BACKGROUND_TRANSFER_PROBE.md)。
+
+“随机／真实高误差／反馈试训选批”机制诊断只访问训练侧已仿真数据，区分找准错误与实际训练收益；反馈和最终检查背景独立。另提供随机1万/3万数据量参考、近似等更新次数控制及近零通道分解，见[采样机制诊断协议](reference/SAMPLING_UTILITY_DIAGNOSTIC.md)。这些不是生产采样算法或同预算AL成绩。
+
+条件机制覆盖、组合迁移及生成式缺口补充的三seed研究协议见[条件动力学选择对照](reference/CONDITIONAL_DYNAMICS_STUDY.md)。七组都使用最终1万条、近似47k次更新，池选择与生成的信息访问/额外pilot和ODE成本分别记录；一次性选择协议不与历史五轮榜单混排。
+
+后续[干预阶数分布校准检验](reference/INTERVENTION_ORDER_CALIBRATION.md)只比较三个固定quota控制，先用seed42反馈筛选，有阳性信号才确认123/1024并开放独立审计；最多7个最终模型。阴性即停止，不用real调比例，不把改变L配额本身称为新算法。
+
+配额筛选之后的统计来源控制只补跑seed42随机/低阶优先两项，沿用原有训练ID和47005步预算，公共初始2000条拟合统计；不开放独立审计/test/real，也不新增采样算法。入口`python scripts/launch/run_normalization_control.py --directory <外部批次目录>`，支持`--dry-run`。设计及归因边界见[干预阶数控制](reference/INTERVENTION_ORDER_CALIBRATION.md)。

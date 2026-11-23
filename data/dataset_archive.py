@@ -535,6 +535,7 @@ class TrajectoryStore:
                 continue
             result = np.empty((len(rows), *spec['shape'][1:]), dtype=spec['dtype'])
             offset = 0
+            grouped = {}
             for item in spec['pieces']:
                 piece = self.manifest['segments'][item] if isinstance(item, int) else item
                 if 'count' in piece:
@@ -553,10 +554,17 @@ class TrajectoryStore:
                     local = rows[hits] - offset
                     if piece.get('rows') is not None:
                         local = np.asarray(piece['rows'], dtype=np.int64)[local]
-                    result[hits] = self._array(piece['source'], piece.get('key', key))[local]
+                    grouped.setdefault((piece['source'], piece.get('key', key)), []).append((hits, local))
                 offset += n
             if offset != self.count:
                 raise ValueError('Pool manifest row count mismatch')
+            # A generated view may reference shuffled original rows through
+            # thousands of tiny pieces. Decode each source/field once rather
+            # than cycling those pieces through the small block LRU.
+            for (sid, field), selections in grouped.items():
+                value = self._array(sid, field)
+                for hits, local in selections:
+                    result[hits] = value[local]
             output[key] = result
         return output
 

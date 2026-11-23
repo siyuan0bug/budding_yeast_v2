@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-11-24T01:00:49.490889+08:00",
+  "last_updated_by": "Codex",
+  "canonical_journal": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/research/journal.md",
+  "latest_completed": "R18",
+  "latest_status": "complete_virtual_probe_no_transfer_gain",
+  "latest_result": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/conditioning_gradient_probe_v1/report.json",
+  "latest_analysis": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/conditioning_gradient_probe_v1/report.md",
+  "tracked_batch": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/contrast_coldstart_v1_20261124_gpu_pool",
+  "tracked_batch_active": true,
+  "pending_confirmation": false,
+  "new_training_started": true,
+  "next_proposal": {
+    "status": "actual_coldstart_pilot_running",
+    "action": "mutation-contrast learning design targeting input dependence and full-trajectory response tasks",
+    "document": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/research/NEXT_SAMPLING_PROPOSAL.md",
+    "scope": "four 2256-input real cold starts,100epoch; fixed scoring rule, fresh synthetic probe; not full5round benchmark",
+    "blocking_questions": [
+      "why response-feedback update direction fails on other backgrounds",
+      "which task formulation differs substantively from R08/GLISTER and can transfer"
+    ],
+    "probe": "R19",
+    "probe_output": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/contrast_coldstart_v1"
+  },
+  "constraints": {
+    "generation_seed": 42,
+    "experiment_seeds": [
+      42,
+      123,
+      1024
+    ],
+    "formal_budgets": [
+      2000,
+      4000,
+      6000,
+      8000,
+      10000
+    ],
+    "formal_epochs": [
+      100,
+      100,
+      100,
+      100,
+      200
+    ],
+    "batch": 128,
+    "lr": 0.0005,
+    "min_lr": 1e-05,
+    "normalization": "per-round cumulative synthetic training only",
+    "checkpoint_choice": "source synthetic normalized validation loss best",
+    "relative_loss": "sample/channel, smooth eps=.01, no ratio clipping",
+    "wandb": "offline",
+    "minimum_available_host_gib": 100
+  },
+  "retired_for_expansion": [
+    "fixed L quota search",
+    "Response V2 majority local densification",
+    "R14 implementation",
+    "R16 response_omission prototype"
+  ],
+  "integrity": "Old real data have informed development; no claim of a fresh blind test. Verify active processes before any source edits. No automatic authorization for new long runs is conveyed by this file.",
+  "accepted_research_objective": {
+    "task": "Develop sampling algorithms for the fixed mutation-domain task that reproducibly outperform Random, Power and LCMD under declared fair budgets",
+    "allowed_actions": [
+      "select from fixed mutation pool",
+      "query synthesis outside pool through existing legal mutation and ODE rules"
+    ],
+    "fixed_data_foundation": true,
+    "lhs_role": "comparison only; not current development focus",
+    "background_domain_ablation": "deferred by user; not prerequisite to algorithm research"
+  }
+}

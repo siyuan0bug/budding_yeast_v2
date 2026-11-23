@@ -351,3 +351,26 @@ def test_response_probes_preserve_final_effective_initial_override():
     assert len(points)==1
     np.testing.assert_array_equal(points[0]['center_y'],y)
     assert points[0]['y_minus'][2]==points[0]['y_plus'][2]==9.
+
+
+def test_round_fixed_statistics_restore_same_dataset_and_checkpoint(tmp_path):
+    from dataclasses import replace
+    from budding_yeast_v2.data.normalization import NormalizationStats
+    from budding_yeast_v2.utils.sampling.benchmark.rounds import fit_round
+    from budding_yeast_v2.utils.evaluation.checkpoints import load_sampling_checkpoint
+    path, arrays=make_pool(tmp_path/'reference_pool',count=16,steps=12)
+    source=TrajectoryStore(path);rows=np.arange(8);snapshot=tmp_path/'training.json'
+    source.snapshot(snapshot,rows)
+    ref=NormalizationStats.fit(arrays['params'][:2],arrays['data'][:2])
+    train=QueriedTraining(PoolInputs(rows,arrays['params'][:8],arrays['y_init'][:8]),arrays['data'][:8])
+    validation=[(PoolInputs(np.arange(8,16),arrays['params'][8:],arrays['y_init'][8:]),arrays['data'][8:])]
+    model,norm,history=fit_round(config(),0,train,validation,tmp_path/'out',42,
+        dataset_path=snapshot,normalization_reference=ref,normalization_reference_rows=np.arange(2))
+    restored,saved,_=load_sampling_checkpoint(tmp_path/'out/model.ckpt')
+    for key in ('mean_y','std_y','p_mean','p_std'):
+        torch.testing.assert_close(getattr(norm,key),getattr(ref,key),rtol=0,atol=0)
+        torch.testing.assert_close(getattr(saved,key),getattr(ref,key),rtol=0,atol=0)
+    assert history[-1]['optimizer_steps']==2
+    with pytest.raises(ValueError,match='subset'):
+        fit_round(config(),0,train,validation,tmp_path/'invalid',42,dataset_path=snapshot,
+                  normalization_reference=ref,normalization_reference_rows=[11])

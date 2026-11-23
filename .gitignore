@@ -48,7 +48,9 @@ htmlcov/
 
 # 5. Toolchains & test suites policy
 /tests/outputs/
+/tests/
 /scripts/analysis/outputs/
+/scripts/
 # Note: scripts/launch/ and scripts/eval/ are retained and tracked
 
 /analysis/

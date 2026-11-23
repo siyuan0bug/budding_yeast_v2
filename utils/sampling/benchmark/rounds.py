@@ -18,7 +18,8 @@ from budding_yeast_v2.utils.experiments.resources import resource_slot
 
 def fit_round(config,round_index,training,validation,output,model_seed,*,device='cpu',
               member=0,weights=None,identity=None,wandb_run=None,dataset_path=None,state_dir=None,plot_context=None,monitoring=None,
-              extra_callbacks=(),data_adapter=None,after_epoch_callbacks=(),reload_dataloaders_every_n_epochs=0):
+              extra_callbacks=(),data_adapter=None,after_epoch_callbacks=(),reload_dataloaders_every_n_epochs=0,
+              normalization_reference=None,normalization_reference_rows=None):
     if dataset_path is None:raise ValueError('Complete-pool rounds require an ordered training snapshot')
     dataset_path=Path(dataset_path).resolve()
     with resource_slot('data', 'training preprocessing'):
@@ -30,10 +31,27 @@ def fit_round(config,round_index,training,validation,output,model_seed,*,device=
             stored=archive.get('sample_weights')
             if fingerprint(None if stored is None else np.asarray(stored).tolist())!=fingerprint(None if weights is None else np.asarray(weights).tolist()):
                 raise ValueError('Snapshot weights disagree with the selected estimator')
-        dm=YeastDataModule(dataset_path=str(dataset_path),batch_size_synth=config.batch_size,
+        dm_kwargs=dict(dataset_path=str(dataset_path),batch_size_synth=config.batch_size,
             val_batch_size=config.prediction_batch_size,num_workers=0,seed=config.seed,
             use_adj_matrix=False,norm_type='log1p',fit_scope=TRAIN_FIT_SCOPE)
+        dm=YeastDataModule(**dm_kwargs)
         dm.setup('fit')
+        if normalization_reference is not None:
+            # Explicit diagnostic: keep THIS dataset/split contract, replace
+            # only statistics using a declared subset of its training inputs.
+            refs=np.asarray(normalization_reference_rows,dtype=np.int64)
+            if (refs.ndim!=1 or not len(refs) or len(set(refs))!=len(refs)
+                    or not set(refs)<=set(training.inputs.ids) or normalization_reference.norm_type!=dm.norm_type):
+                raise ValueError('Normalization reference must be a unique subset of current training rows')
+            state=dm.preprocessing_state()
+            state.update(normalization_reference.state())
+            dm=YeastDataModule(**dm_kwargs,preprocessing_state=state)
+            dm.setup('fit')
+            identity=dict(identity or {},normalization_reference=dict(rows=refs.tolist(),
+                stats_sha256=fingerprint({k:None if v is None else v.tolist()
+                    for k,v in normalization_reference.state().items()}),fit_scope='declared_training_subset'))
+        elif normalization_reference_rows is not None:
+            raise ValueError('Reference rows without normalization statistics')
         if len(dm.train_dataset_synth)!=len(training.inputs.ids) or len(dm.test_dataset_real):
             raise ValueError('Data adapter changed the authorized training cohort')
         dm.drop_last_train=False

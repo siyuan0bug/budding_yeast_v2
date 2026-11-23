@@ -1,5 +1,7 @@
 # 损失、模型选择与评测
 
+中心化Z-score下的Relative不是物理Relative的等价缩放。记`l=log1p`，在逆变换未触发截断且变量非负时，训练通道比值可写为`||l(pred)-l(y)|| / sqrt(||l(y)-mean_l||²+(std_l*eps)²)`。分母以训练均值为参考，而物理Relative以物理零点为参考；物理零目标通常不会映射成归一化零目标。减小eps不能消除这个均值项。此说明不改变当前训练规则，也不是换损失能保证改善的结论；实际影响须以独立对照检验。
+
 ## 当前Relative L2
 
 当前损失位于`utils/training/losses.py`，评测位于`utils/evaluation/metrics.py`。
@@ -20,6 +22,8 @@ L=\operatorname{mean}_{i,v}\frac{\|\hat y_{iv}-y_{iv}\|_2}{\sqrt{\|y_{iv}\|_2^2+
 39变量和核心9变量MAE/MSE/Relative/Correlation均保留。
 完整轨迹Frobenius误差及其Median/P90/P95/Worst10%属于另一组诊断，不替代主Relative。
 分裂误差、六类混淆矩阵是附加动力学评测，标签定义和系统支持须核对。
+
+`relative_error_decomposition`只做诊断：按物理目标整条轨迹的时间L2范数分为精确0、(0,0.01]及>0.01，报告组内MAE/MSE/Relative和对总Relative的贡献。保护尺度沿用当前eps；分组不删样本、不改变主指标或加权方式。各变量的量纲不同，不能把该分组阈值解释为统一生物学浓度阈值。
 
 ## 数值与物理残差
 
