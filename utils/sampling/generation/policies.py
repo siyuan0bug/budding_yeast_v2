@@ -10,6 +10,7 @@ from ..baseline.hggs import MultigridGenetic,HGGSConfig
 from .domain import feature_inputs,project_legal_targets
 from ..ours.mechanistic import METHOD_NAMES as MECHANISTIC_METHODS
 from ..ours.adaptive_generation import METHODS as ADAPTIVE_METHODS
+from ..ours.response_v2 import METHODS as RESPONSE_V2_METHODS
 OUR_METHODS=MECHANISTIC_METHODS+ADAPTIVE_METHODS
 
 
@@ -31,6 +32,9 @@ class GenerationPolicy:
         elif name=='hggs_projected':
             self.controller=MultigridGenetic(seed,hggs)
             self.mean=x.mean(0);self.scale=x.std(0);self.scale[self.scale<1e-8]=1.
+        elif name in RESPONSE_V2_METHODS:
+            from ..ours.response_v2.policy import ResponseGeneration
+            self.controller=ResponseGeneration(name,initial,trajectories,seed)
         elif name in ADAPTIVE_METHODS:
             from ..ours.adaptive_generation.policy import AdaptiveGeneration
             self.controller=AdaptiveGeneration(name,initial,trajectories,seed)

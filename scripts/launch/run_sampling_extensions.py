@@ -33,8 +33,11 @@ PROTOCOL=DATA/'experiments/budding_sampling/shared/pool100k/seed_42'
 
 
 def tasks(suite='extensions'):
-    if suite=='adaptive':
-        from budding_yeast_v2.utils.sampling.ours.adaptive_generation import METHODS
+    if suite in ('adaptive','response_v2'):
+        if suite=='adaptive':
+            from budding_yeast_v2.utils.sampling.ours.adaptive_generation import LEGACY_METHODS as METHODS
+        else:
+            from budding_yeast_v2.utils.sampling.ours.response_v2 import METHODS
         return [dict(kind='generate',method=m,pool='mutation',bank_size=128,query_batch_size=16,workers=2,
                      task_id=f'generate_mutation_{m}',status='pending') for m in METHODS]
     if suite=='all':
@@ -180,8 +183,8 @@ def main(argv=None):
     parser.add_argument('--cache-chunks',type=int,default=1024)
     parser.add_argument('--retry-failed-from',type=Path,help='Previous tasks.json; rerun failed identities in fresh results')
     parser.add_argument('--results-root',type=Path,help='Fresh parent for fixed_pool/generation/dynamic result roots')
-    parser.add_argument('--suite',choices=('extensions','ours','all','adaptive'),default='extensions')
-    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all','adaptive') for t in tasks(suite)}),
+    parser.add_argument('--suite',choices=('extensions','ours','all','adaptive','response_v2'),default='extensions')
+    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all','adaptive','response_v2') for t in tasks(suite)}),
                         help='Run only these methods, on both pools; completed runs may be rerun in a fresh root')
     parser.add_argument('--mechanism-workers',type=int,default=8)
     parser.add_argument('--mechanism-concurrency',type=int,default=2)
@@ -194,9 +197,9 @@ def main(argv=None):
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args(argv)
     args.protocol=args.protocol or PROTOCOL.parent/f'seed_{args.seed}'
-    if args.seeds is not None and (args.suite!='adaptive' or args.retry_failed_from is not None):
+    if args.seeds is not None and (args.suite not in ('adaptive','response_v2') or args.retry_failed_from is not None):
         raise ValueError('Joint multi-seed expansion currently requires adaptive suite without retry ledger')
-    if args.extend_adoption and (args.adopt_from is None or args.seeds is None or args.suite!='adaptive'):
+    if args.extend_adoption and (args.adopt_from is None or args.seeds is None or args.suite not in ('adaptive','response_v2')):
         raise ValueError('Extended adoption requires explicit adaptive multi-seed handover')
     if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
             or not 1<=args.initial_jobs<=args.max_jobs<=16 or not 1<=args.jobs_per_gpu<=8

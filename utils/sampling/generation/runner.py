@@ -33,6 +33,7 @@ from .domain import FrozenBuddingDomain
 from .policies import GenerationPolicy,METHODS,OUR_METHODS
 from .storage import GeneratedTrainingStore
 from ..ours.adaptive_generation import METHODS as ADAPTIVE_METHODS
+from ..ours.response_v2 import METHODS as RESPONSE_V2_METHODS
 
 
 def worker_lifecycle(parent):
@@ -91,7 +92,10 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
         count=min(query_batch_size,target-store.count-len(pending),needed*max_attempts_mult-attempts)
         scoring_resource='cpu_scoring' if policy.name in OUR_METHODS else 'scoring'
         with resource_slot(scoring_resource,'legal proposal generation and scoring'):
-            if policy.name in ADAPTIVE_METHODS:
+            if policy.name in RESPONSE_V2_METHODS:
+                from .path_bank import path_bank
+                candidates,signatures,bank=path_bank(domain,policy.controller,max(bank_size,count))
+            elif policy.name in ADAPTIVE_METHODS:
                 from .interventions import intervention_bank
                 candidates,signatures,bank=intervention_bank(domain,policy.controller,max(bank_size,count))
             elif policy.name=='ours_intervention_closure':
@@ -152,7 +156,7 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
 def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_size=512,
                    query_batch_size=None,lhs_config=None,oed_config=None,ogas_config=None,hggs_config=None,
                    max_attempts_mult=30,plots=False,wandb_enabled=False,diagnostic_only=False):
-    if query_batch_size is None:query_batch_size=1 if method=='oed_temporal' else 32
+    if query_batch_size is None:query_batch_size=16 if method in RESPONSE_V2_METHODS else 1 if method=='oed_temporal' else 32
     if method not in METHODS or min(workers,bank_size,query_batch_size,max_attempts_mult)<1:
         raise ValueError('Invalid generation method or positive resource limits')
     if query_batch_size>bank_size:raise ValueError('Query batch cannot exceed legal proposal bank')
@@ -164,6 +168,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
     root=Path(protocol).resolve();root=root if root.is_dir() else root.parent
     definition=json.loads((root/'protocol.json').read_text());cfg=BenchmarkConfig(**definition['config']).validate()
     if pool not in definition['pools']:raise ValueError('Unknown source pool')
+    if method in RESPONSE_V2_METHODS and (cfg.loss!='rel_l2' or cfg.relative_l2_eps!=.01):
+        raise ValueError('Response-v2 task diagnostics require the shared rel_l2/eps0.01 protocol')
     if pool!='mutation' and method in ADAPTIVE_METHODS:
         raise ValueError('Adaptive intervention prototypes currently support mutation generation only')
     if pool=='lhs' and lhs_config is None:raise ValueError('Provide the frozen LHS specification')

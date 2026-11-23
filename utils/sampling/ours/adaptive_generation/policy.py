@@ -6,7 +6,7 @@ bound. Prequential progress is deliberately distinct from held-out gain.
 from collections import defaultdict
 import numpy as np
 
-from . import METHODS
+from . import LEGACY_METHODS as METHODS
 from .features import trajectory_features,event_features,context_key
 from .feedback import Feedback
 from ..mechanistic.systems import BiologicalODE

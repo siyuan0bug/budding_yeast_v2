@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from .policies import METHODS,ADAPTIVE_METHODS
+from .policies import METHODS,ADAPTIVE_METHODS,RESPONSE_V2_METHODS
 from .online import ONLINE_METHODS,OnlineConfig
 
 
@@ -39,7 +39,7 @@ def execute(args):
     if online and args.oed_config is not None:raise ValueError('OED settings do not apply to online OGAS/random')
     if args.hggs_config is not None and args.method!='hggs_projected':raise ValueError('HGGS settings require hggs_projected')
     batch=args.query_batch_size
-    if batch is None:batch=args.workers if online else 1 if args.method=='oed_temporal' else 32
+    if batch is None:batch=args.workers if online else 16 if args.method in RESPONSE_V2_METHODS else 1 if args.method=='oed_temporal' else 32
     if min(args.workers,args.bank_size,batch,args.max_attempts_mult)<1 or batch>args.bank_size:
         raise ValueError('Invalid positive generation limits or bank smaller than query batch')
     if args.dry_run:

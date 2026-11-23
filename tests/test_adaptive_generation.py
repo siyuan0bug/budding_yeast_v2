@@ -11,7 +11,8 @@ import torch
 from budding_yeast_v2.utils.sampling.contracts import PoolInputs
 from budding_yeast_v2.utils.sampling.generation.domain import FrozenBuddingDomain
 from budding_yeast_v2.utils.sampling.generation.interventions import intervention_bank
-from budding_yeast_v2.utils.sampling.generation.policies import GenerationPolicy,ADAPTIVE_METHODS
+from budding_yeast_v2.utils.sampling.generation.policies import GenerationPolicy
+from budding_yeast_v2.utils.sampling.ours.adaptive_generation import LEGACY_METHODS as ADAPTIVE_METHODS
 from budding_yeast_v2.utils.sampling.ours.adaptive_generation.policy import AdaptiveGeneration
 from budding_yeast_v2.utils.sampling.ours.adaptive_generation.features import event_features
 from budding_yeast_v2.utils.sampling.ours.adaptive_generation.feedback import Feedback
@@ -158,7 +159,8 @@ def test_real_fno_ode_two_round_cpu_workflow(tmp_path,monkeypatch,name):
     assert (directory/'eval/global_metrics_denorm.json').exists()
     states=sorted((directory/'_state').glob('policy_*.pt'))
     state=torch.load(states[-1],map_location='cpu',weights_only=False)
-    assert len(state['controller']['feedback']['rows'])==1
+    if 'journal' in state['controller']:assert len(state['controller']['journal'])==1
+    else:assert len(state['controller']['feedback']['rows'])==1
     assert not state['controller']['pending']
     assert run_generation(root,'mutation',name,tmp_path/'results',device='cpu',workers=1,
         bank_size=4,query_batch_size=1,diagnostic_only=True)==directory

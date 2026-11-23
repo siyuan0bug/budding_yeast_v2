@@ -10,7 +10,7 @@ from budding_yeast_v2.data.systems.sampling_policy import valid_candidate
 from ..contracts import PoolInputs
 
 
-def intervention_bank(domain,controller,count):
+def intervention_bank(domain,controller,count,*,path_plan=None):
     if domain.kind!='mutation':raise ValueError('Adaptive intervention generation currently requires mutation proposals')
     domain.verify();backend=domain.proposals.backend;defaults=domain.proposals.defaults
     out=[];signatures=[];vectors=[];local=set();rng=controller.rng
@@ -19,11 +19,15 @@ def intervention_bank(domain,controller,count):
     path_quota=count-exploration
     for _ in range(max(100,count*30)):
         if len(out)==path_quota:break
-        j=int(rng.choice(len(train.ids),p=probability));meta=train.metadata[j]
+        if path_plan is not None:
+            if not path_plan:break
+            j,planned_gene=path_plan[int(rng.integers(len(path_plan)))]
+        else:j=int(rng.choice(len(train.ids),p=probability))
+        meta=train.metadata[j]
         tokens=meta.get('pairs',meta.get('genes',()))
         modules=sorted({g for g,_ in tokens});rng.shuffle(modules)
         if not modules:continue
-        gene=modules[0];controls=[(g,m) for g,m in tokens if g==gene]
+        gene=planned_gene if path_plan is not None else modules[0];controls=[(g,m) for g,m in tokens if g==gene]
         touched=set().union(*(touch_set(g,m) for g,m in controls))
         # Overlapping controls cannot be independently redrawn.
         if any(touched & touch_set(g,m) for g,m in tokens if g!=gene):continue
@@ -54,6 +58,9 @@ def intervention_bank(domain,controller,count):
             adaptive_anchor_id=int(train.ids[j]),adaptive_axis=gene,
             sampling_paradigm='single_axis_canonical_mutation_redraw',
             proposal_strength_draws=[r for r in meta.get('proposal_strength_draws',[]) if r['gene']!=gene]+draws)
+        if path_plan is not None:
+            from ..ours.response_v2.paths import path_id
+            metadata['adaptive_path_id']=path_id(p=train.params[j],meta=meta,gene=gene,param_names=backend.PARAM_KEYS)
         metadata.pop('_effective_overrides',None)
         metadata['mutation_parameters']=[dict(gene=g,mode=m,overrides={k:overrides[k]
             for k in sorted(touch_set(g,m)) if k in overrides}) for g,m in tokens]

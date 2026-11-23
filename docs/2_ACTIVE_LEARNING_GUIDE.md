@@ -43,3 +43,5 @@ Low-Rank梯度能量、PEAKS回归评分、PRE事件屏蔽及OGAS合法投影均
 详见[现有原型与局限](history/OURS_IMPLEMENTATION_AND_PORTABILITY_2026-11-19.md)、[HGGS修正](history/HGGS_CONTINUOUS_FIX_2026-11-19.md)。
 
 三种非四角反馈生成原型使用显式`--suite adaptive`，不改变旧suite默认任务；方法、实际实现限制和命令见[反馈生成原型](reference/ADAPTIVE_MUTATION_GENERATION.md)。
+
+Response V2与同路径随机对照使用`--suite response_v2`，与旧`adaptive`三方法分开。未知误差不再赋固定高分，即时使用已查询支撑，并记录共享训练Relative诊断。见[Response路径V2](reference/RESPONSE_PATHS_V2.md)。
