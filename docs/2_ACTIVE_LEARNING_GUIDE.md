@@ -59,3 +59,9 @@ Response V2与同路径随机对照使用`--suite response_v2`，与旧`adaptive
 后续[干预阶数分布校准检验](reference/INTERVENTION_ORDER_CALIBRATION.md)只比较三个固定quota控制，先用seed42反馈筛选，有阳性信号才确认123/1024并开放独立审计；最多7个最终模型。阴性即停止，不用real调比例，不把改变L配额本身称为新算法。
 
 配额筛选之后的统计来源控制只补跑seed42随机/低阶优先两项，沿用原有训练ID和47005步预算，公共初始2000条拟合统计；不开放独立审计/test/real，也不新增采样算法。入口`python scripts/launch/run_normalization_control.py --directory <外部批次目录>`，支持`--dry-run`。设计及归因边界见[干预阶数控制](reference/INTERVENTION_ORDER_CALIBRATION.md)。
+
+DMCED统一采样与合法查询合成（R21）：实现在`utils/sampling/ours/dmced/`，使用`bash run_sampling_budding.sh extensions --suite dmced --seeds 42 123 1024`调度三方法（Track A 固定池`ours_dmced_pool`、支柱1消融`ours_dmced_power`、Track C 池外合法合成`ours_dmced_synth`）×三seed，沿用冻结五轮协议（2k→10k、100/100/100/100/200 epoch、2成员集成，评测仅用主成员0）。`ours_dmced_synth`仅使用原生1,159合法模块组合、原生强度/初值/碰撞救援与ODE求解器，全程计费ODE尝试与失败。设计、假设与结果状态见[研究记录R20–R21](research/journal.md)。
+
+Switch-D2（R22）：实现在`utils/sampling/ours/switch_d2/`，使用`--suite switch_d2`调度`ours_switch_d2_pool`（未截顶逐通道平方相对方差+随机加权$D^2$采样）、`ours_switch_power`（支柱1消融）及`ours_switch_d2_synth`（层级边际守恒合法查询合成），先在`seed_42`正式五轮验证，通过门槛后再扩展多seed。见[研究记录R22](research/journal.md)。
+
+Epistemic-D2（R23）：实现在`utils/sampling/ours/epistemic_d2/`，使用`--suite epistemic_d2`调度`ours_epistemic_d2_pool`（精确Z-score MSE能量+联合球面随机加权$D^2$采样）、`ours_epistemic_d1_pool`（温和$D^1$变体）及`ours_epistemic_d2_synth`（无偏原生24k池外合法候选库+$e_{\text{mse}}$随机加权$D^2$合成），先在`seed_42`正式五轮验证。见[研究记录R23](research/journal.md)。

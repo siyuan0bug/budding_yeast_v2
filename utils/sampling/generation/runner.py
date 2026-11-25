@@ -34,6 +34,12 @@ from .policies import GenerationPolicy,METHODS,OUR_METHODS
 from .storage import GeneratedTrainingStore
 from ..ours.adaptive_generation import METHODS as ADAPTIVE_METHODS
 from ..ours.response_v2 import METHODS as RESPONSE_V2_METHODS
+from ..ours.dmced import DMCED_GEN_METHODS
+from ..ours.switch_d2 import SWITCH_D2_GEN_METHODS
+from ..ours.epistemic_d2 import EPISTEMIC_D2_GEN_METHODS
+from ..ours.cebs import CEBS_GEN_METHODS
+from ..ours.bif_synth import BIF_SYNTH_GEN_METHODS
+ENSEMBLE_GEN_METHODS = DMCED_GEN_METHODS + SWITCH_D2_GEN_METHODS + EPISTEMIC_D2_GEN_METHODS + CEBS_GEN_METHODS + BIF_SYNTH_GEN_METHODS
 
 
 def worker_lifecycle(parent):
@@ -90,9 +96,11 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
                 store.append(pending);_commit(directory,domain,store,policy)
             raise RuntimeError('Generation query cap reached; no partial completion')
         count=min(query_batch_size,target-store.count-len(pending),needed*max_attempts_mult-attempts)
-        scoring_resource='cpu_scoring' if policy.name in OUR_METHODS else 'scoring'
+        scoring_resource='cpu_scoring' if (policy.name in OUR_METHODS and policy.name not in ENSEMBLE_GEN_METHODS) else 'scoring'
         with resource_slot(scoring_resource,'legal proposal generation and scoring'):
-            if policy.name in RESPONSE_V2_METHODS:
+            if policy.name in ENSEMBLE_GEN_METHODS:
+                candidates,signatures,bank=policy.controller.propose_batch(domain,count)
+            elif policy.name in RESPONSE_V2_METHODS:
                 from .path_bank import path_bank
                 candidates,signatures,bank=path_bank(domain,policy.controller,max(bank_size,count))
             elif policy.name in ADAPTIVE_METHODS:
@@ -103,7 +111,7 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
                 candidates,signatures,bank=controlled_bank(domain,max(bank_size,count))
             else:
                 candidates,signatures,bank=domain.bank(max(bank_size,count))
-            if policy.name in OUR_METHODS:
+            if policy.name in OUR_METHODS and policy.name not in ENSEMBLE_GEN_METHODS:
                 bank=PoolInputs(bank.ids,bank.params,bank.initial,tuple(dict(c.metadata,
                     _effective_overrides=dict(c.overrides)) for c in candidates))
             ids,diagnostics=policy.select(bank,count)
@@ -156,7 +164,7 @@ def _acquire(target,domain,store,policy,predictor,executor,directory,*,bank_size
 def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_size=512,
                    query_batch_size=None,lhs_config=None,oed_config=None,ogas_config=None,hggs_config=None,
                    max_attempts_mult=30,plots=False,wandb_enabled=False,diagnostic_only=False):
-    if query_batch_size is None:query_batch_size=16 if method in RESPONSE_V2_METHODS else 1 if method=='oed_temporal' else 32
+    if query_batch_size is None:query_batch_size=64 if method in ENSEMBLE_GEN_METHODS else 16 if method in RESPONSE_V2_METHODS else 1 if method=='oed_temporal' else 32
     if method not in METHODS or min(workers,bank_size,query_batch_size,max_attempts_mult)<1:
         raise ValueError('Invalid generation method or positive resource limits')
     if query_batch_size>bank_size:raise ValueError('Query batch cannot exceed legal proposal bank')
@@ -170,8 +178,8 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
     if pool not in definition['pools']:raise ValueError('Unknown source pool')
     if method in RESPONSE_V2_METHODS and (cfg.loss!='rel_l2' or cfg.relative_l2_eps!=.01):
         raise ValueError('Response-v2 task diagnostics require the shared rel_l2/eps0.01 protocol')
-    if pool!='mutation' and method in ADAPTIVE_METHODS:
-        raise ValueError('Adaptive intervention prototypes currently support mutation generation only')
+    if pool!='mutation' and (method in ADAPTIVE_METHODS or method in ENSEMBLE_GEN_METHODS):
+        raise ValueError('Adaptive/DMCED/Switch-D2 legal mutation synthesis currently supports mutation generation only')
     if pool=='lhs' and lhs_config is None:raise ValueError('Provide the frozen LHS specification')
     if pool=='lhs' and method=='ours_intervention_closure':
         raise ValueError('Intervention closure requires legal mutation controls, not an unlabelled LHS design')
@@ -223,6 +231,9 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
             domain.counts.update(domain_state['counts'])
         policy=GenerationPolicy(method,initial,store.initial['data'],child_seed(cfg.seed,'generation_policy'),
                                 oed=oed,ogas=ogas,hggs=hggs,device=device)
+        if policy.controller is not None and hasattr(policy.controller,'set_pool_anchors'):
+            with resource_slot('data','unlabelled pool anchor inputs'):
+                policy.controller.set_pool_anchors(cohorts.load_unlabelled_pool_anchors())
         if state is not None:
             if file_sha256(state['policy_path'])!=state['policy_sha256']:raise ValueError('Generation policy changed')
             policy.load_state_dict(torch.load(state['policy_path'],map_location=device,weights_only=False))
@@ -270,8 +281,24 @@ def run_generation(protocol,pool,method,output,*,device='cpu',workers=4,bank_siz
                         policy.observe(initial,store.initial['data'],predictor,
                                        is_reference=np.ones(len(initial.ids),dtype=bool))
                     if store.count<cfg.budgets[i+1]:
-                        _acquire(cfg.budgets[i+1],domain,store,policy,predictor,executor,directory,
+                        aux_members=[]
+                        if method in ENSEMBLE_GEN_METHODS:
+                            for member in range(1,cfg.ensemble_members):
+                                member_seed=child_seed(cfg.seed,'model',i,member)
+                                with log_stage('independent ensemble training',member=member,round=i):
+                                    aux,_,_=fit_round(cfg,i,training,cohorts.validation,
+                                        directory/f'_state/round_{i:02d}/ensemble_member_{member}',
+                                        member_seed,device=device,member=member,dataset_path=snapshot,
+                                        identity=dict(workflow=settings['workflow'],configuration=fingerprint(settings),
+                                                      rows_sha256=fingerprint(training.inputs.ids.tolist())),
+                                        wandb_run=wandb_run)
+                                aux_members.append(aux)
+                        acq_predictor=Predictor([model,*aux_members],norm,training.trajectories.shape[-1],device,
+                            cfg.prediction_batch_size,child_seed(cfg.seed,'feature_sketch'))
+                        _acquire(cfg.budgets[i+1],domain,store,policy,acq_predictor,executor,directory,
                             bank_size=bank_size,query_batch_size=query_batch_size,max_attempts_mult=max_attempts_mult)
+                        for aux in aux_members:aux.cpu()
+                        aux_members.clear()
                     model.cpu()
                     if str(device).startswith('cuda'):torch.cuda.empty_cache()
             domain.verify()

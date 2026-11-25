@@ -33,6 +33,71 @@ PROTOCOL=DATA/'experiments/budding_sampling/shared/pool100k/seed_42'
 
 
 def tasks(suite='extensions'):
+    if suite=='bif_r27_gpu0':
+        return [
+            dict(kind='generate',method='ours_pool_bif_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_pool_bif_synth',status='pending'),
+            dict(kind='generate',method='ours_pool_mode_bif_v2_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_pool_mode_bif_v2_synth',only_seeds=(42,),status='pending'),
+        ]
+    if suite=='bif_r27_gpu4':
+        return [
+            dict(kind='generate',method='ours_bif_power_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_bif_power_synth',only_seeds=(42,),status='pending'),
+            dict(kind='generate',method='ours_pool_mode_bif_v2_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_pool_mode_bif_v2_synth',only_seeds=(123,),status='pending'),
+        ]
+    if suite=='bif_r27_gpu7':
+        return [
+            dict(kind='generate',method='ours_pool_mode_bif_v2_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_pool_mode_bif_v2_synth',only_seeds=(1024,),status='pending'),
+            dict(kind='generate',method='ours_grad_bif_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_grad_bif_synth',only_seeds=(42,),status='pending'),
+        ]
+    if suite=='bif_r26':
+        return [
+            dict(kind='generate',method='ours_pool_mode_bif_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_pool_mode_bif_synth',status='pending'),
+            dict(kind='generate',method='ours_grad_bif_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_grad_bif_synth',status='pending'),
+            dict(kind='generate',method='ours_bif_power_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_bif_power_synth',status='pending'),
+        ]
+    if suite=='cebs_r25':
+        return [
+            dict(kind='run',method='ours_order_power_pool',pool='mutation',task_id='run_mutation_ours_order_power_pool',status='pending'),
+            dict(kind='run',method='ours_epistasis_pool',pool='mutation',task_id='run_mutation_ours_epistasis_pool',status='pending'),
+            dict(kind='generate',method='ours_epibif_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_epibif_synth',status='pending'),
+        ]
+    if suite=='epistemic_r24':
+        return [
+            dict(kind='run',method='ours_epistemic_d1_pool',pool='mutation',task_id='run_mutation_ours_epistemic_d1_pool',only_seeds=(123,1024),status='pending'),
+            dict(kind='run',method='ours_epistemic_d05_pool',pool='mutation',task_id='run_mutation_ours_epistemic_d05_pool',status='pending'),
+            dict(kind='generate',method='ours_epistemic_d1_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_epistemic_d1_synth',status='pending'),
+        ]
+    if suite=='epistemic_d2':
+        return [
+            dict(kind='run',method='ours_epistemic_d2_pool',pool='mutation',task_id='run_mutation_ours_epistemic_d2_pool',status='pending'),
+            dict(kind='run',method='ours_epistemic_d1_pool',pool='mutation',task_id='run_mutation_ours_epistemic_d1_pool',status='pending'),
+            dict(kind='generate',method='ours_epistemic_d2_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_epistemic_d2_synth',status='pending'),
+        ]
+    if suite=='switch_d2':
+        return [
+            dict(kind='run',method='ours_switch_d2_pool',pool='mutation',task_id='run_mutation_ours_switch_d2_pool',status='pending'),
+            dict(kind='run',method='ours_switch_power',pool='mutation',task_id='run_mutation_ours_switch_power',status='pending'),
+            dict(kind='generate',method='ours_switch_d2_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_switch_d2_synth',status='pending'),
+        ]
+    if suite=='dmced':
+        return [
+            dict(kind='run',method='ours_dmced_pool',pool='mutation',task_id='run_mutation_ours_dmced_pool',status='pending'),
+            dict(kind='run',method='ours_dmced_power',pool='mutation',task_id='run_mutation_ours_dmced_power',status='pending'),
+            dict(kind='generate',method='ours_dmced_synth',pool='mutation',bank_size=512,query_batch_size=64,workers=4,
+                 task_id='generate_mutation_ours_dmced_synth',status='pending'),
+        ]
     if suite in ('adaptive','response_v2'):
         if suite=='adaptive':
             from budding_yeast_v2.utils.sampling.ours.adaptive_generation import LEGACY_METHODS as METHODS
@@ -183,8 +248,8 @@ def main(argv=None):
     parser.add_argument('--cache-chunks',type=int,default=1024)
     parser.add_argument('--retry-failed-from',type=Path,help='Previous tasks.json; rerun failed identities in fresh results')
     parser.add_argument('--results-root',type=Path,help='Fresh parent for fixed_pool/generation/dynamic result roots')
-    parser.add_argument('--suite',choices=('extensions','ours','all','adaptive','response_v2'),default='extensions')
-    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all','adaptive','response_v2') for t in tasks(suite)}),
+    parser.add_argument('--suite',choices=('extensions','ours','all','adaptive','response_v2','dmced','switch_d2','epistemic_d2','epistemic_r24','cebs_r25','bif_r26','bif_r27_gpu0','bif_r27_gpu4','bif_r27_gpu7'),default='extensions')
+    parser.add_argument('--methods',nargs='+',choices=sorted({t['method'] for suite in ('extensions','ours','all','adaptive','response_v2','dmced','switch_d2','epistemic_d2','epistemic_r24','cebs_r25','bif_r26','bif_r27_gpu0','bif_r27_gpu4','bif_r27_gpu7') for t in tasks(suite)}),
                         help='Run only these methods, on both pools; completed runs may be rerun in a fresh root')
     parser.add_argument('--mechanism-workers',type=int,default=8)
     parser.add_argument('--mechanism-concurrency',type=int,default=2)
@@ -197,17 +262,19 @@ def main(argv=None):
     parser.add_argument('--dry-run',action='store_true')
     args=parser.parse_args(argv)
     args.protocol=args.protocol or PROTOCOL.parent/f'seed_{args.seed}'
-    if args.seeds is not None and (args.suite not in ('adaptive','response_v2') or args.retry_failed_from is not None):
-        raise ValueError('Joint multi-seed expansion currently requires adaptive suite without retry ledger')
-    if args.extend_adoption and (args.adopt_from is None or args.seeds is None or args.suite not in ('adaptive','response_v2')):
+    if args.seeds is not None and (args.suite not in ('adaptive','response_v2','dmced','switch_d2','epistemic_d2','epistemic_r24','cebs_r25','bif_r26','bif_r27_gpu0','bif_r27_gpu4','bif_r27_gpu7') or args.retry_failed_from is not None):
+        raise ValueError('Joint multi-seed expansion currently requires adaptive/response_v2/dmced/switch_d2/epistemic_d2/epistemic_r24/cebs_r25/bif_r26/bif_r27 suite without retry ledger')
+    if args.extend_adoption and (args.adopt_from is None or args.seeds is None or args.suite not in ('adaptive','response_v2','dmced','switch_d2','epistemic_d2','epistemic_r24','cebs_r25','bif_r26','bif_r27_gpu0','bif_r27_gpu4','bif_r27_gpu7')):
         raise ValueError('Extended adoption requires explicit adaptive multi-seed handover')
-    if (set(args.gpus)-{'0','1','2','3'} or len(set(args.gpus))!=len(args.gpus)
+    has_exclusive=bool(set(args.gpus)&{'4','5','6','7'})
+    if (set(args.gpus)-{'0','1','2','3','4','5','6','7'} or len(set(args.gpus))!=len(args.gpus)
+            or (has_exclusive and args.jobs_per_gpu!=1)
             or not 1<=args.initial_jobs<=args.max_jobs<=16 or not 1<=args.jobs_per_gpu<=8
             or min(args.ramp_after,args.ramp_interval,args.gpu_free_gib)<=0
             or not 1<=args.cache_chunks<=4096
             or not 1<=args.mechanism_workers<=min(16,len(os.sched_getaffinity(0)))
             or not 1<=args.mechanism_concurrency<=16
-            or not 1<=args.io_concurrency<=8 or not 1<=args.ramp_step<=4):raise ValueError('Invalid bounded shared-GPU queue settings')
+            or not 1<=args.io_concurrency<=8 or not 1<=args.ramp_step<=4):raise ValueError('Invalid bounded GPU queue settings')
     protocol=json.loads((args.protocol/'protocol.json').read_text());cfg=BenchmarkConfig(**protocol['config']).validate()
     if cfg.seed!=args.seed:raise ValueError('Queue seed disagrees with shared protocol')
     rows=tasks(args.suite)

@@ -1,27 +1,24 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-11-24T01:00:49.490889+08:00",
-  "last_updated_by": "Codex",
+  "updated_at": "2026-11-25T11:42:00+08:00",
+  "last_updated_by": "Antigravity",
   "canonical_journal": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/research/journal.md",
-  "latest_completed": "R18",
-  "latest_status": "complete_virtual_probe_no_transfer_gain",
-  "latest_result": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/conditioning_gradient_probe_v1/report.json",
-  "latest_analysis": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/conditioning_gradient_probe_v1/report.md",
-  "tracked_batch": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/contrast_coldstart_v1_20261124_gpu_pool",
+  "latest_completed": "R26_partial_5of9",
+  "latest_status": "r27_plan_b_3seed_running_across_gpu0_gpu4_gpu7",
+  "latest_result": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/bif_r26_multiseed_20261125_v2/tasks.json",
+  "latest_analysis": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/bif_r26_multiseed_20261125_v2/report.md",
+  "tracked_batch": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/bif_r27_gpu0_20261125",
   "tracked_batch_active": true,
   "pending_confirmation": false,
   "new_training_started": true,
   "next_proposal": {
-    "status": "actual_coldstart_pilot_running",
-    "action": "mutation-contrast learning design targeting input dependence and full-trajectory response tasks",
-    "document": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/research/NEXT_SAMPLING_PROPOSAL.md",
-    "scope": "four 2256-input real cold starts,100epoch; fixed scoring rule, fresh synthetic probe; not full5round benchmark",
-    "blocking_questions": [
-      "why response-feedback update direction fails on other backgrounds",
-      "which task formulation differs substantively from R08/GLISTER and can transfer"
-    ],
-    "probe": "R19",
-    "probe_output": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/contrast_coldstart_v1"
+    "status": "r27_plan_b_launched_in_tmux_gpu0_gpu4_gpu7",
+    "action": "Monitor R27 Plan B 3-queue batch across GPU 0 (4 concurrent: ours_pool_bif_synth x3 + ours_pool_mode_bif_v2_synth seed_42), exclusive GPU 4 (serial: ours_bif_power_synth seed_42 -> ours_pool_mode_bif_v2_synth seed_123), and exclusive GPU 7 (serial: ours_pool_mode_bif_v2_synth seed_1024 -> ours_grad_bif_synth seed_42), then compute full 3-seed leaderboard vs Power/LCMD/Random",
+    "document": "/home/users/zsy/projects/budding_yeast_cell_cycle/budding_yeast_v2/docs/research/journal.md",
+    "scope": "8 formal Track C runs in 3 dedicated tmux sessions (r27_gpu0 4-way, r27_gpu4 1-way exclusive, r27_gpu7 1-way exclusive; shared --max-jobs 6 --io-concurrency 2, minimum_available_gib=100)",
+    "blocking_questions": [],
+    "probe": "R27_running",
+    "probe_output": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/bif_r27_gpu0_20261125"
   },
   "constraints": {
     "generation_seed": 42,
@@ -57,11 +54,15 @@
     "fixed L quota search",
     "Response V2 majority local densification",
     "R14 implementation",
-    "R16 response_omission prototype"
+    "R16 response_omission prototype",
+    "R19 sparse-pair greedy input-gradient matching",
+    "R21 deterministic argmax Voronoi and unstratified Gibbs synthesis",
+    "R23/R24 flat Power x dist^p (starves L1/L2 low-order mutants and hurts real mean MAE)",
+    "R25 Track A forced order stratification and raw epi_mag amplification (under-samples CDC20/MAD2/ESP1)"
   ],
   "integrity": "Old real data have informed development; no claim of a fresh blind test. Verify active processes before any source edits. No automatic authorization for new long runs is conveyed by this file.",
   "accepted_research_objective": {
-    "task": "Develop sampling algorithms for the fixed mutation-domain task that reproducibly outperform Random, Power and LCMD under declared fair budgets",
+    "task": "Develop sampling algorithms (pool selection and/or legal query synthesis) for the fixed mutation-domain task with AAAI-level novelty that reproducibly outperform Random, Power and LCMD on the 126 real mutants under declared fair budgets",
     "allowed_actions": [
       "select from fixed mutation pool",
       "query synthesis outside pool through existing legal mutation and ODE rules"

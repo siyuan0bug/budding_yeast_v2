@@ -1,6 +1,6 @@
 {
   "record": "mutant_aware_sampling_research_journal",
-  "verified_at": "2026-11-24T00:58:21.323618+08:00",
+  "verified_at": "2026-11-25T11:16:00+08:00",
   "scope": "Cited evidence document snapshots; SHA256 records file identity, not scientific validity. Training/simulation activity is recorded per experiment.",
   "evidence": [
     {
@@ -227,6 +227,111 @@
       "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/shared/pool100k/seed_42/studies/contrast_coldstart_v1/selection.json",
       "sha256": "a9b9b2492c303a4256f384a24d02408e75cb496172202850fc383faf8dd81d5a",
       "bytes": 192024
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/contrast_coldstart_v1/report.md",
+      "sha256": "7c6fd36a4eb35006a4c06eda9728f50ab057af2ab277123cea81f946c5d930af",
+      "bytes": 762
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/contrast_coldstart_v1/report.json",
+      "sha256": "c07fac743e6d6d5c3b81d04b4cc7f394e141eb1249e783cd26a88ec870e880ff",
+      "bytes": 275511
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/contrast_coldstart_v1_20261124_gpu_pool/completion.json",
+      "sha256": "b8211358111834a47071c8ff3146049cccf7b7070ee063cec4af21937d8bed3f",
+      "bytes": 117
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/dmced_r21_multiseed_20261124/report.md",
+      "sha256": "2c8cfdcef54f3fe6fd171302eefb7b0dfd1e0f0484588ad7744ae710039b352f",
+      "bytes": 6137
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/dmced_multiseed_20261124/status.json",
+      "sha256": "3edb197e4d59fd7c31ffbff663b28f9502f43d7929e704d2f0f3234417612351",
+      "bytes": 234
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/dmced_multiseed_20261124/tasks.json",
+      "sha256": "b54ff71bb585bba8da20bcdd1fb2c177c5d66f7cb56a92332552c1beb9efa29c",
+      "bytes": 16012
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/switch_d2_r22_seed42_20261124/report.md",
+      "sha256": "bc5324116600cc706645890f455af0c5b293f997db989c8e89e9201cfd8d3bd9",
+      "bytes": 4446
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/switch_d2_r22_seed42_20261124/status.json",
+      "sha256": "7200cbe91e82a37e10d33e70d301495acd271a9392cd2a6945181f9a9a0d13ca",
+      "bytes": 232
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/switch_d2_r22_seed42_20261124/tasks.json",
+      "sha256": "5d16b433d8603dd40a4cd8a2655d66f89641cfef0ffd799c5809c738ecc554a9",
+      "bytes": 5099
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/epistemic_d2_r23_seed42_20261124/report.md",
+      "sha256": "d6c6b14492ae989bb23e6bea7baf10c3d595a1086a9f61e09804d23e0ba28979",
+      "bytes": 4964
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/epistemic_d2_r23_seed42_20261124/status.json",
+      "sha256": "17a682ff69d8a0ac00f75d5b5954fc3a1fddf799e872b8df3b07f805c96656f4",
+      "bytes": 234
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/epistemic_d2_r23_seed42_20261124/tasks.json",
+      "sha256": "93735e30b374e79b5dcf3aec1e58b22f63aad12ad92da287156fa1ca384569e5",
+      "bytes": 5158
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/epistemic_r24_multiseed_20261124/report.md",
+      "sha256": "d6cd0fd46572451d3548594d0ed79e165979386437151e1e877e6b2e1255bc18",
+      "bytes": 5307
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/epistemic_r24_multiseed_20261124/status.json",
+      "sha256": "3bcc084391cf942357c5a5faf392c1b1106f435a36e80d5c1b0dd8edffa7517c",
+      "bytes": 233
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/epistemic_r24_multiseed_20261124/tasks.json",
+      "sha256": "6c16b80f123e247ea758ba075ba8118891883cd48ca9d1b918c79868f8f4a650",
+      "bytes": 14602
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/cebs_r25_seed42_20261124/report.md",
+      "sha256": "d4349c6e486ed8c6327011d5fdb708ddb16642a7872120125f35563ba8ceaf2d",
+      "bytes": 6847
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/cebs_r25_seed42_20261124/status.json",
+      "sha256": "a06f59d91d55f4da80faae4ef6553cc020c99738273e4ffdcd313b994183fffc",
+      "bytes": 231
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/cebs_r25_seed42_20261124/tasks.json",
+      "sha256": "94d43f62f032a082bb0dcaa3568e19b734fe67e454a837e1ed6721a56f309334",
+      "bytes": 5092
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/summary/bif_r26_multiseed_20261125_v2/report.md",
+      "sha256": "762cb7825605a80f29b630d60a3ec97faf3eac6aa609224d37bd1d0079fbbebe",
+      "bytes": 6927
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/bif_r26_multiseed_20261125_v2/status.json",
+      "sha256": "fb236f853b643365cc08d92e4edc0b4cf0ceba82016970eecbeeffc733b6f830",
+      "bytes": 231
+    },
+    {
+      "path": "/home/users/zsy/mydata/budding_yeast/experiments/budding_sampling/batches/bif_r26_multiseed_20261125_v2/tasks.json",
+      "sha256": "8116b514038c4fbbb2edd775845cd45d724a2f4ea5e4a4e06501db7f10a5ecd6",
+      "bytes": 16620
     }
   ]
 }

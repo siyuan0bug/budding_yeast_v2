@@ -57,6 +57,9 @@ class FrozenCohorts:
                 if not diagnostic_only and not required<=source.fields.keys():
                     raise ValueError(f'Formal generation needs complete canonical metadata: {required-source.fields.keys()}')
                 self.initial_rows=split['initial'];self.initial_inputs=input_view(inputs,self.initial_rows)
+                self.pool_anchor_rows=np.setdiff1d(split['candidates'],split['initial'])
+                self._pool_anchor_params=inputs['params'][self.pool_anchor_rows]
+                self._pool_anchor_y0=inputs['y_init'][self.pool_anchor_rows]
                 self.source=source
         if self.source is None:raise ValueError('Unknown source pool')
         self.reference=None;self.monitoring={}
@@ -82,3 +85,13 @@ class FrozenCohorts:
                 directory,plots=plots,write_summary=False,plot_workers=2,context=context)
         save_global_metrics(directory,metrics,pool_name=self.pool,round_index=round_index,training_rows=count)
         return metrics
+
+    def load_unlabelled_pool_anchors(self):
+        """Read ONLY input metadata/overrides (NEVER trajectories/labels) for pool-anchored synthesis."""
+        keys=('candidate_metadata_json','overrides_json') if 'overrides_json' in self.source.fields else ('candidate_metadata_json',)
+        raw=self.source.read(self.pool_anchor_rows,keys)
+        metadata=[json.loads(str(row)) for row in raw['candidate_metadata_json']]
+        if 'overrides_json' in raw:
+            for row,ovr in zip(metadata,raw['overrides_json']):
+                row['_effective_overrides']=json.loads(str(ovr))
+        return PoolInputs(self.pool_anchor_rows,self._pool_anchor_params,self._pool_anchor_y0,tuple(metadata))

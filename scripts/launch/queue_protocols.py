@@ -22,7 +22,11 @@ def expand_seeds(rows,primary_root,seeds):
             raise ValueError('Multi-seed pool/reference identity mismatch')
         receipts[str(root.resolve())]=dict(sha256=file_sha256(p),fingerprint=value['fingerprint'])
         for row in rows:
-            task=dict(row,seed=seed,protocol=str(root.resolve()))
+            allowed=row.get('only_seeds')
+            if allowed is not None and seed not in allowed:
+                continue
+            task={k:v for k,v in row.items() if k!='only_seeds'}
+            task.update(seed=seed,protocol=str(root.resolve()))
             if seed!=seeds[0]:task['task_id']+=f'_seed_{seed}'
             output.append(task)
     return output,receipts

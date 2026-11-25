@@ -11,7 +11,12 @@ from .domain import feature_inputs,project_legal_targets
 from ..ours.mechanistic import METHOD_NAMES as MECHANISTIC_METHODS
 from ..ours.adaptive_generation import METHODS as ADAPTIVE_METHODS
 from ..ours.response_v2 import METHODS as RESPONSE_V2_METHODS
-OUR_METHODS=MECHANISTIC_METHODS+ADAPTIVE_METHODS
+from ..ours.dmced import DMCED_GEN_METHODS
+from ..ours.switch_d2 import SWITCH_D2_GEN_METHODS
+from ..ours.epistemic_d2 import EPISTEMIC_D2_GEN_METHODS
+from ..ours.cebs import CEBS_GEN_METHODS
+from ..ours.bif_synth import BIF_SYNTH_GEN_METHODS
+OUR_METHODS=MECHANISTIC_METHODS+ADAPTIVE_METHODS+DMCED_GEN_METHODS+SWITCH_D2_GEN_METHODS+EPISTEMIC_D2_GEN_METHODS+CEBS_GEN_METHODS+BIF_SYNTH_GEN_METHODS
 
 
 METHODS=('random_generate','oed_temporal','ogas_round_projected','hggs_projected') + OUR_METHODS
@@ -32,6 +37,24 @@ class GenerationPolicy:
         elif name=='hggs_projected':
             self.controller=MultigridGenetic(seed,hggs)
             self.mean=x.mean(0);self.scale=x.std(0);self.scale[self.scale<1e-8]=1.
+        elif name in BIF_SYNTH_GEN_METHODS:
+            from ..ours.bif_synth import BifurcationSynthesis, PoolModeBifSynthesis, POOL_MODE_GEN_METHODS
+            if name in POOL_MODE_GEN_METHODS:
+                self.controller=PoolModeBifSynthesis(name,initial,trajectories,seed)
+            else:
+                self.controller=BifurcationSynthesis(name,initial,trajectories,seed)
+        elif name in CEBS_GEN_METHODS:
+            from ..ours.cebs import CEBSSynthesis
+            self.controller=CEBSSynthesis(name,initial,trajectories,seed)
+        elif name in EPISTEMIC_D2_GEN_METHODS:
+            from ..ours.epistemic_d2 import EpistemicD2Synthesis
+            self.controller=EpistemicD2Synthesis(name,initial,trajectories,seed)
+        elif name in SWITCH_D2_GEN_METHODS:
+            from ..ours.switch_d2 import SwitchD2Synthesis
+            self.controller=SwitchD2Synthesis(name,initial,trajectories,seed)
+        elif name in DMCED_GEN_METHODS:
+            from ..ours.dmced import DMCEDSynthesis
+            self.controller=DMCEDSynthesis(name,initial,trajectories,seed)
         elif name in RESPONSE_V2_METHODS:
             from ..ours.response_v2.policy import ResponseGeneration
             self.controller=ResponseGeneration(name,initial,trajectories,seed)
@@ -44,7 +67,7 @@ class GenerationPolicy:
         self.feedback_rows=0;self.refreshed_target=None
 
     def refresh(self,inputs,truth,predictor,target=None):
-        if self.name in ADAPTIVE_METHODS:
+        if self.name in ADAPTIVE_METHODS or self.name in DMCED_GEN_METHODS or self.name in SWITCH_D2_GEN_METHODS or self.name in EPISTEMIC_D2_GEN_METHODS or self.name in CEBS_GEN_METHODS or self.name in BIF_SYNTH_GEN_METHODS:
             self.controller.refresh(inputs,truth,predictor,target);return
         if self.name in OUR_METHODS:
             self.controller.refresh(inputs,truth,predictor)

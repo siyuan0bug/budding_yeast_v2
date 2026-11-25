@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from .policies import METHODS,ADAPTIVE_METHODS,RESPONSE_V2_METHODS
+from .policies import METHODS,ADAPTIVE_METHODS,RESPONSE_V2_METHODS,DMCED_GEN_METHODS,SWITCH_D2_GEN_METHODS,EPISTEMIC_D2_GEN_METHODS,CEBS_GEN_METHODS,BIF_SYNTH_GEN_METHODS
 from .online import ONLINE_METHODS,OnlineConfig
 
 
@@ -29,8 +29,8 @@ def add_parser(subparsers):
 
 
 def execute(args):
-    if args.method in ADAPTIVE_METHODS and args.pool!='mutation':
-        raise ValueError('Adaptive legal intervention prototypes currently support mutation only')
+    if (args.method in ADAPTIVE_METHODS or args.method in DMCED_GEN_METHODS or args.method in SWITCH_D2_GEN_METHODS or args.method in EPISTEMIC_D2_GEN_METHODS or args.method in CEBS_GEN_METHODS or args.method in BIF_SYNTH_GEN_METHODS) and args.pool!='mutation':
+        raise ValueError('Adaptive/DMCED/Switch-D2/Epistemic-D2/CEBS/BifSynth legal mutation synthesis currently supports mutation only')
     online=args.method in ONLINE_METHODS
     if online and args.query_batch_size is not None:
         raise ValueError('Online queue is bounded by --workers, not --query-batch-size')
@@ -39,7 +39,7 @@ def execute(args):
     if online and args.oed_config is not None:raise ValueError('OED settings do not apply to online OGAS/random')
     if args.hggs_config is not None and args.method!='hggs_projected':raise ValueError('HGGS settings require hggs_projected')
     batch=args.query_batch_size
-    if batch is None:batch=args.workers if online else 16 if args.method in RESPONSE_V2_METHODS else 1 if args.method=='oed_temporal' else 32
+    if batch is None:batch=args.workers if online else 64 if (args.method in DMCED_GEN_METHODS or args.method in SWITCH_D2_GEN_METHODS or args.method in EPISTEMIC_D2_GEN_METHODS or args.method in CEBS_GEN_METHODS or args.method in BIF_SYNTH_GEN_METHODS) else 16 if args.method in RESPONSE_V2_METHODS else 1 if args.method=='oed_temporal' else 32
     if min(args.workers,args.bank_size,batch,args.max_attempts_mult)<1 or batch>args.bank_size:
         raise ValueError('Invalid positive generation limits or bank smaller than query batch')
     if args.dry_run:
