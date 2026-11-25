@@ -64,4 +64,8 @@ DMCED统一采样与合法查询合成（R21）：实现在`utils/sampling/ours/
 
 Switch-D2（R22）：实现在`utils/sampling/ours/switch_d2/`，使用`--suite switch_d2`调度`ours_switch_d2_pool`（未截顶逐通道平方相对方差+随机加权$D^2$采样）、`ours_switch_power`（支柱1消融）及`ours_switch_d2_synth`（层级边际守恒合法查询合成），先在`seed_42`正式五轮验证，通过门槛后再扩展多seed。见[研究记录R22](research/journal.md)。
 
-Epistemic-D2（R23）：实现在`utils/sampling/ours/epistemic_d2/`，使用`--suite epistemic_d2`调度`ours_epistemic_d2_pool`（精确Z-score MSE能量+联合球面随机加权$D^2$采样）、`ours_epistemic_d1_pool`（温和$D^1$变体）及`ours_epistemic_d2_synth`（无偏原生24k池外合法候选库+$e_{\text{mse}}$随机加权$D^2$合成），先在`seed_42`正式五轮验证。见[研究记录R23](research/journal.md)。
+Epistemic-D2（R23–R24）：实现在`utils/sampling/ours/epistemic_d2/`，使用`--suite epistemic_d2` / `epistemic_r24`调度`ours_epistemic_d2_pool`、`ours_epistemic_d1_pool`、`ours_epistemic_d05_pool`与`ours_epistemic_d1_synth` / `ours_epistemic_d2_synth`。R24三seed终评证实距离项`d^p`隐式饿死低阶L1/L2，该分支已终止扩大。见[研究记录R23–R24](research/journal.md)。
+
+CEBS（R25）：实现在`utils/sampling/ours/cebs/`，使用`--suite cebs_r25`调度`ours_order_power_pool`、`ours_epistasis_pool`及`ours_epibif_synth`。`seed_42`消融证实仅模块三（0-ODE连续分岔强度合成）具强正收益，模块一/二已淘汰。见[研究记录R25](research/journal.md)。
+
+分岔与池锚定混合查询合成（R26–R27）：实现在`utils/sampling/ours/bif_synth/`（池外分岔`synthesis.py`、纯无标签池锚定分岔与跨模式合成`pool_mode_synthesis.py`），无标签池锚点加载接口在`utils/sampling/generation/cohorts.py`（仅读输入参数与元数据，严禁读取轨迹标签），严格复用原生`catalog`/`ranges`/`apply_gene_mutation`/`valid_candidate`生物规则。队列入口：`--suite bif_r26`、`bif_r27_gpu0`、`bif_r27_gpu4`、`bif_r27_gpu7`；`run_sampling_extensions.py`对独占卡GPU 4–7强制约束`--jobs-per-gpu 1`并配合`exclusive_gpu_{4,7}.lock`。详见[研究记录R26–R27](research/journal.md)。

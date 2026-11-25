@@ -29,6 +29,7 @@
 | 正式单元/集成/回归测试代码 | `tests/` |
 | 一次性探针、临时调试及其临时输出 | `scratch/`或`scratch/probes/` |
 | 当前有效说明及规范 | `docs/`、`docs/reference/` |
+| 采样与算法核心 idea 科研思路、假设、负结果归因、决策与证据链 | `docs/research/`（`journal.md`、`current_state.json`、`evidence_manifest.json`） |
 | 有必要保留的历史决策 | `docs/history/` |
 
 - `scripts/`中的正式工具也是需要维护和验证的代码，不是随意存放脚本的垃圾箱。

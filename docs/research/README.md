@@ -11,7 +11,7 @@
 
 本目录记录是单一事实来源，禁止在平台各自的memory中维护互相冲突的“最新状态”。本目录的研究记录、状态与证据索引可以随仓库纳入版本管理；机械盘原始实验结果不自动随Git同步。当前未自动提交任何更改。
 
-- [下一采样方案草案](NEXT_SAMPLING_PROPOSAL.md)：历史MCLD草案经R18/R19试训均呈阴性已停止扩大；当前正式推进的DMCED统一框架（R20–R21）完整记录见[journal.md](journal.md)。
+- [历史MCLD草案](NEXT_SAMPLING_PROPOSAL.md)：经R18/R19试训呈阴性已停止扩大；最新主线与当前运行状态统一以[journal.md](journal.md)及[current_state.json](current_state.json)为准。
 
 ## 每次接手的最低阅读顺序
 
